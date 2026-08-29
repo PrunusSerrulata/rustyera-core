@@ -162,13 +162,23 @@ impl RuntimeFormContinuation {
     pub(super) fn schedule_planned_call(
         &mut self,
         vm: &Vm,
+        fiber: &crate::state::Fiber,
         span: erabasic_ast::Span,
         args: &[Option<Expr>],
     ) -> Result<(), StepError> {
         let site = self.current_call_site(span)?;
         match self.lookup_bound_call(site).cloned() {
+            Some(RuntimeBoundCall::Native(bound))
+                if erabasic_bytecode::MapCallKind::from_name(&bound.import.name).is_some() =>
+            {
+                self.schedule_map(vm, &bound, args.to_vec(), site)
+            }
             Some(RuntimeBoundCall::Native(bound)) => {
                 self.schedule_native_arguments(vm, &bound, args, site)
+            }
+            Some(RuntimeBoundCall::Bit(spec)) => self.schedule_bit(vm, spec, args.to_vec(), site),
+            Some(RuntimeBoundCall::Match(spec)) => {
+                self.schedule_match(vm, fiber, spec, args.to_vec(), site)
             }
             Some(RuntimeBoundCall::Host(bound)) => {
                 self.schedule_host_arguments(vm, &bound, args, site)
@@ -186,7 +196,8 @@ impl RuntimeFormContinuation {
         bound: &BoundRuntimeNative,
         source: &[Option<Expr>],
     ) -> bool {
-        self.lookup_bound_call(site) == Some(&RuntimeBoundCall::Native(bound.clone()))
+        erabasic_bytecode::MapCallKind::from_name(&bound.import.name).is_none()
+            && self.lookup_bound_call(site) == Some(&RuntimeBoundCall::Native(bound.clone()))
             && self.validate_call_arguments(program, site, source)
     }
 }

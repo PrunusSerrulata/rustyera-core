@@ -243,12 +243,18 @@ impl Vm {
                 .ok_or_else(|| {
                     VmError::InvalidArguments("local variable frame is missing".into())
                 })?;
-            frame
-                .locals
-                .get(&definition.key)
-                .ok_or_else(|| VmError::InvalidArguments("local variable is unavailable".into()))?
-                .read(&target.target.indices)
-                .map_err(VmError::InvalidArguments)?
+            if generation.is_reference_variable(definition.key) {
+                self.read_place(fiber, &target.target)?
+            } else {
+                frame
+                    .locals
+                    .get(&definition.key)
+                    .ok_or_else(|| {
+                        VmError::InvalidArguments("local variable is unavailable".into())
+                    })?
+                    .read(&target.target.indices)
+                    .map_err(VmError::InvalidArguments)?
+            }
         } else {
             let character = usize::try_from(target.target.character.unwrap_or(0))
                 .map_err(|_| VmError::InvalidArguments("character index is too large".into()))?;
@@ -283,6 +289,24 @@ impl Vm {
             return Err(VmError::InvalidArguments(
                 "debug variable is read-only or has a different type".into(),
             ));
+        }
+        if generation.is_reference_variable(definition.key) {
+            if write.target.target.backing.is_some() {
+                return Err(VmError::InvalidArguments(
+                    "debugger cannot inject an array backing identity".into(),
+                ));
+            }
+            let id =
+                write.target.target.fiber.ok_or_else(|| {
+                    VmError::InvalidArguments("REF debug fiber is missing".into())
+                })?;
+            let mut fiber = self
+                .fibers
+                .remove(&id)
+                .ok_or_else(|| VmError::InvalidArguments("REF debug fiber is stale".into()))?;
+            let result = self.write_place(&mut fiber, &write.target.target, write.value.clone());
+            self.fibers.insert(id, fiber);
+            return result;
         }
         if definition.storage == BytecodeStorage::FunctionLocal {
             let fiber = write
@@ -539,6 +563,7 @@ impl VmDebugInspect for Vm {
                         for character in 0..self.memory.characters.len() {
                             references.push(VmDebugVariableRef {
                                 target: PlaceDescriptor {
+                                    backing: None,
                                     variable: definition.key,
                                     indices: indices.clone(),
                                     character: Some(character as u64),
@@ -557,6 +582,7 @@ impl VmDebugInspect for Vm {
                                 {
                                     references.push(VmDebugVariableRef {
                                         target: PlaceDescriptor {
+                                            backing: None,
                                             variable: definition.key,
                                             indices: indices.clone(),
                                             character: None,
@@ -571,6 +597,7 @@ impl VmDebugInspect for Vm {
                     }
                     _ => references.push(VmDebugVariableRef {
                         target: PlaceDescriptor {
+                            backing: None,
                             variable: definition.key,
                             indices,
                             character: None,

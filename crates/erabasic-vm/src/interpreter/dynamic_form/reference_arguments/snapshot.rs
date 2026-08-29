@@ -77,6 +77,10 @@ impl RuntimeFormContinuation {
                 arguments,
             } => valid_dynamic_host(artifact, &globals, graph, node, *key, name, arguments),
             ReferenceTermKind::Call {
+                target: ReferenceTermCall::Staged { key, name },
+                arguments,
+            } => valid_staged(artifact, &globals, graph, node, *key, name, arguments),
+            ReferenceTermKind::Call {
                 target: ReferenceTermCall::Intrinsic { name },
                 arguments,
             } => valid_intrinsic(artifact, node, name, arguments),
@@ -279,5 +283,51 @@ fn valid_dynamic_host(
                                 BytecodeType::IntegerPlace | BytecodeType::StringPlace
                             )
                     })
+        })
+}
+
+fn valid_staged(
+    artifact: &BytecodeArtifact,
+    globals: &BTreeMap<SymbolKey, &BytecodeGlobal>,
+    graph: &ReferenceTermGraph,
+    node: &ReferenceTermNode,
+    key: SymbolKey,
+    name: &str,
+    arguments: &[ReferenceTermArgument],
+) -> bool {
+    let Some(family) = artifact
+        .runtime_staged_authorizations
+        .iter()
+        .find(|family| family.key == key && family.name.eq_ignore_ascii_case(name))
+    else {
+        return false;
+    };
+    let shapes = arguments
+        .iter()
+        .map(|argument| {
+            argument.node.map(|id| {
+                let node = &graph.nodes[id as usize];
+                let variable = if let ReferenceTermKind::Variable { key, .. } = &node.kind {
+                    globals.get(key).copied()
+                } else {
+                    None
+                };
+                erabasic_bytecode::RuntimeExpressionShape {
+                    value_type: node.value_type,
+                    variable: variable.is_some(),
+                    mutable: variable.is_some_and(|variable| variable.mutable),
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    family.result == node.value_type
+        && family.accepts(&shapes)
+        && arguments.iter().enumerate().all(|(index, argument)| {
+            let token = match family.kind {
+                erabasic_bytecode::RuntimeStagedKind::Bit(_) => index == 0,
+                erabasic_bytecode::RuntimeStagedKind::MatchAll => index == 0 || index == 4,
+                erabasic_bytecode::RuntimeStagedKind::MatchAllEx => index == 4,
+            };
+            argument.place == token
         })
 }

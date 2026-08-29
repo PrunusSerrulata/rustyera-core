@@ -186,6 +186,7 @@ impl PreparedReferenceArguments {
                             ReferenceTermCall::Native { name, .. }
                             | ReferenceTermCall::DynamicNative { name, .. }
                             | ReferenceTermCall::Host { name, .. }
+                            | ReferenceTermCall::Staged { name, .. }
                             | ReferenceTermCall::Intrinsic { name } => name.clone(),
                             ReferenceTermCall::User { key } => program
                                 .function(*key)

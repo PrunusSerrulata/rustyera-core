@@ -253,6 +253,7 @@ impl<'a> TypeAnalysis<'a> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)] // Ordered callable resolution is intentionally one dispatch chain.
     fn call(
         &mut self,
         name: &str,
@@ -299,6 +300,78 @@ impl<'a> TypeAnalysis<'a> {
             )
             .map_err(map_vm_error)?;
             return Ok(result);
+        }
+        if let Some(operation) = erabasic_bytecode::BitOperation::from_name(name) {
+            if !self.probe {
+                super::staged_binding::authorize(
+                    self.program,
+                    name,
+                    erabasic_bytecode::RuntimeStagedKind::Bit(operation),
+                    shapes,
+                )?;
+            }
+            let definition = args
+                .first()
+                .and_then(Option::as_ref)
+                .and_then(|expression| variable(self.program, self.function, expression));
+            let spec = super::bit_calls::validate_shapes(operation, definition, shapes)?;
+            if !self.probe {
+                self.bound_calls
+                    .push((span, super::call_plan::RuntimeBoundCall::Bit(spec)));
+                return Ok(BytecodeType::Integer);
+            }
+        }
+        if super::matching::is_match(name) {
+            if !self.probe {
+                super::staged_binding::authorize(
+                    self.program,
+                    name,
+                    erabasic_bytecode::RuntimeStagedKind::from_name(name)
+                        .expect("recognized MATCH"),
+                    shapes,
+                )?;
+            }
+            let types = shapes
+                .iter()
+                .map(|shape| shape.as_ref().map(|shape| shape.value_type))
+                .collect::<Vec<_>>();
+            let spec =
+                super::matching::match_spec(self.program, self.function, name, args, &types)?;
+            if !self.probe {
+                self.bound_calls
+                    .push((span, super::call_plan::RuntimeBoundCall::Match(spec)));
+                return Ok(BytecodeType::Integer);
+            }
+        }
+        if let Some(kind) = erabasic_bytecode::MapCallKind::from_name(name) {
+            let output = args
+                .get(1)
+                .and_then(Option::as_ref)
+                .and_then(|expression| variable(self.program, self.function, expression));
+            super::map_calls::validate_map_output_definition(kind, args.len(), output)?;
+            if !self.probe {
+                if !self
+                    .program
+                    .artifact
+                    .manifest
+                    .compatibility
+                    .supports_map_extensions()
+                {
+                    return Err(support::permission_denied(
+                        "MAP extensions are unavailable in this identity",
+                    ));
+                }
+                let bound = super::native_binding::bind(self.program, name, shapes, self.natives)?;
+                if !bound.omitted_arguments.is_empty()
+                    || args.iter().any(Option::is_none)
+                    || !kind.valid_parameters(&bound.import.parameters)
+                {
+                    return Err(bad_type("MAP extension source overload differs"));
+                }
+                self.bound_calls
+                    .push((span, super::call_plan::RuntimeBoundCall::Native(bound)));
+                return Ok(kind.result_type());
+            }
         }
         if self.probe {
             let symbol = self

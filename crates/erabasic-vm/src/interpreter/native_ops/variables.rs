@@ -147,6 +147,11 @@ pub(in super::super) fn validate_native_ready(
         ));
     }
     for write in &ready.writes {
+        if write.target.backing.is_some() {
+            return Err(VmError::InvalidState(
+                "Native cannot inject an array backing identity".into(),
+            ));
+        }
         if write.target.fiber.is_some_and(|owner| owner != fiber.id) {
             return Err(VmError::InvalidState(
                 "native write belongs to another fiber".into(),
@@ -550,6 +555,7 @@ fn resolve_dynamic_variable_target(
         None
     };
     let target = PlaceDescriptor {
+        backing: None,
         variable: definition.key,
         indices,
         character,

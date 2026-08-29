@@ -7,6 +7,7 @@ use erabasic_bytecode::{MethodResult, UserArgumentSpec, UserCallMode, UserCallSp
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(super) struct RuntimeUserCall {
+    pub reference_scope: u64,
     pub reference_bindings: bool,
     pub plan: u64,
     pub call: ResolvedUserCall,
@@ -168,10 +169,18 @@ impl RuntimeFormContinuation {
         specs: Vec<UserArgumentSpec>,
         arguments: Vec<Option<Expr>>,
     ) -> Result<(), StepError> {
+        let reference_scope = self.next_reference_scope;
+        self.next_reference_scope = reference_scope.checked_add(1).ok_or_else(|| {
+            StepError::new(
+                VmFaultCode::ResourceLimit,
+                "form REF scope identity exhausted",
+            )
+        })?;
         vm.queue_user_call_diagnostic(&call, specs.len());
         let retained = specs.len().min(call.bindings.len());
         self.work
             .push(RuntimeFormTask::MethodArgument(RuntimeUserCall {
+                reference_scope,
                 reference_bindings: self.reference_bindings,
                 plan: self
                     .current_call_plan
@@ -208,6 +217,24 @@ impl RuntimeFormContinuation {
                 let UserArgumentSpec::Variable(variable) = call.specs[slot] else {
                     return Err(bad_type("REF argument has no variable identity"));
                 };
+                let program = vm
+                    .generations
+                    .get(&self.generation)
+                    .ok_or_else(|| invalid_state("form generation is missing"))?;
+                let definition = program
+                    .global(variable)
+                    .ok_or_else(|| invalid_state("REF source is missing"))?;
+                let expression = call.arguments[slot]
+                    .take()
+                    .ok_or_else(|| invalid_state("REF source syntax is missing"))?;
+                if definition.storage == erabasic_bytecode::BytecodeStorage::Character
+                    && let Some(selector) =
+                        reference_character_selector(&expression, definition.dimensions.len())
+                {
+                    self.work.push(RuntimeFormTask::CaptureMethodArgument(call));
+                    self.work.push(RuntimeFormTask::Evaluate(selector));
+                    return Ok(());
+                }
                 let place = vm
                     .user_call_variable_place(fiber, self.generation, self.frame, variable)
                     .map_err(map_vm_error)?;
@@ -219,6 +246,11 @@ impl RuntimeFormContinuation {
                         &call.specs,
                         slot,
                         place,
+                        crate::state::array_leases::ArrayLeaseOrigin::UserForm {
+                            instruction: self.instruction,
+                            call: call.reference_scope,
+                            slot,
+                        },
                     )
                     .map_err(map_vm_error)?,
                 );
@@ -340,7 +372,9 @@ impl RuntimeFormContinuation {
             },
         )
         .map_err(|_| invalid_state("stored form user signature cannot resolve"))?;
-        if call.call.generation != self.generation
+        if call.reference_scope == 0
+            || call.reference_scope >= self.next_reference_scope
+            || call.call.generation != self.generation
             || call.specs.len() != call.arguments.len()
             || call.captured.len() != retained
             || call.next_slot > call.specs.len()
@@ -416,6 +450,7 @@ impl RuntimeFormContinuation {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)] // Snapshot validation keeps all continuation invariants adjacent.
     pub(crate) fn valid_method_state(&self, vm: &Vm, fiber: &Fiber) -> bool {
         let Some(program) = vm.generations.get(&self.generation) else {
             return false;
@@ -423,7 +458,8 @@ impl RuntimeFormContinuation {
         let Some(owner) = fiber.frames.iter().position(|frame| frame.id == self.frame) else {
             return false;
         };
-        if !self.valid_call_plans(vm)
+        if self.next_reference_scope == 0
+            || !self.valid_call_plans(vm)
             || !self.checkpoints_valid()
             || self.checkpoints.iter().any(|checkpoint| {
                 checkpoint.owner_stack_depth > fiber.frames[owner].stack.len()
@@ -458,7 +494,37 @@ impl RuntimeFormContinuation {
                 }
             }
         }
+        if self.next_map_call == 0 {
+            return false;
+        }
+        let leases = self.map_leases().collect::<Vec<_>>();
+        if leases
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != leases.len()
+        {
+            return false;
+        }
+        if self.next_bit_call == 0 {
+            return false;
+        }
         self.work.iter().all(|task| match task {
+            RuntimeFormTask::MapCapture {
+                bound,
+                site,
+                arguments,
+            } => self.valid_map_binding(program, bound, *site, arguments),
+            RuntimeFormTask::MapFinish(call) => self.valid_map_task(vm, fiber, call),
+            RuntimeFormTask::MapValuesEnabled { call, output } => {
+                self.valid_map_task(vm, fiber, call)
+                    && Self::valid_map_output_source(call, output.as_ref())
+            }
+            RuntimeFormTask::BitCapture { spec, site, source } => {
+                self.valid_bit_capture(vm, *spec, *site, source)
+            }
+            RuntimeFormTask::BitFinish(call) => self.valid_bit_task(vm, call),
             RuntimeFormTask::FinishNative {
                 site,
                 bound,
@@ -528,12 +594,69 @@ impl RuntimeFormContinuation {
             .all(|expression| self.validate_planned_expression(program, call.plan, expression))
     }
 
+    #[allow(clippy::too_many_lines)] // Resource accounting mirrors every serialized task variant.
     pub(super) fn method_resources(&self) -> Option<(usize, usize)> {
         let mut slots = 0usize;
         let mut bytes = 0usize;
         let mut expressions = Vec::new();
         for task in &self.work {
             match task {
+                RuntimeFormTask::MapCapture {
+                    bound, arguments, ..
+                } => {
+                    slots = slots
+                        .checked_add(bound.import.parameters.len())?
+                        .checked_add(bound.omitted_arguments.len())?;
+                    bytes = bytes
+                        .checked_add(bound.import.name.len())?
+                        .checked_add(bound.import.namespace.len())?;
+                    slots = slots.checked_add(arguments.len())?;
+                    expressions.extend(arguments.iter().flatten());
+                }
+                RuntimeFormTask::MapValuesEnabled { call, output } => {
+                    slots = slots
+                        .checked_add(1)?
+                        .checked_add(call.source.len())?
+                        .checked_add(call.bound.import.parameters.len())?;
+                    bytes = bytes
+                        .checked_add(call.name.len())?
+                        .checked_add(call.bound.import.name.len())?
+                        .checked_add(call.bound.import.namespace.len())?;
+                    expressions.extend(call.source.iter().flatten());
+                    expressions.extend(output.iter());
+                }
+                RuntimeFormTask::MapFinish(call) => {
+                    slots = slots
+                        .checked_add(1)?
+                        .checked_add(call.source.len())?
+                        .checked_add(call.bound.import.parameters.len())?;
+                    bytes = bytes
+                        .checked_add(call.name.len())?
+                        .checked_add(call.bound.import.name.len())?
+                        .checked_add(call.bound.import.namespace.len())?;
+                    expressions.extend(call.source.iter().flatten());
+                }
+                RuntimeFormTask::BitCapture { source, .. } => {
+                    slots = slots.checked_add(source.len())?;
+                    expressions.extend(source.iter().flatten());
+                }
+                RuntimeFormTask::BitFinish(call) => {
+                    slots = slots.checked_add(1)?.checked_add(call.source.len())?;
+                    expressions.extend(call.source.iter().flatten());
+                }
+                RuntimeFormTask::MatchBegin(call)
+                | RuntimeFormTask::MatchEnd(call)
+                | RuntimeFormTask::MatchNeedle(call)
+                | RuntimeFormTask::MatchScan(call) => {
+                    slots = slots.checked_add(12)?.checked_add(call.arguments.len())?;
+                    expressions.extend(call.arguments.iter().flatten());
+                    if let erabasic_bytecode::MatchInput::Name(name) = &call.spec.input {
+                        bytes = bytes.checked_add(name.len())?;
+                    }
+                    if let Some(VmValue::String(value)) = &call.state.needle {
+                        bytes = bytes.checked_add(value.len())?;
+                    }
+                }
                 RuntimeFormTask::FinishNative { bound, source, .. } => {
                     slots = slots
                         .checked_add(source.len())?
@@ -696,4 +819,63 @@ pub(super) fn retained_expression_resources(expressions: Vec<&Expr>) -> Option<(
         }
     }
     Some((nodes, bytes))
+}
+
+/// Parser/type analysis already consumed all syntax. Only the explicit character
+/// selector is scheduled; ordinary element expressions never enter work.
+fn reference_character_selector(expression: &Expr, rank: usize) -> Option<Expr> {
+    match &expression.kind {
+        ExprKind::Variable { indices, .. } if indices.len() > rank => indices.first().cloned(),
+        ExprKind::Group(inner) => reference_character_selector(inner, rank),
+        _ => None,
+    }
+}
+
+impl RuntimeFormContinuation {
+    pub(crate) fn reference_captures(
+        &self,
+    ) -> Vec<(
+        crate::ArrayBackingId,
+        crate::state::array_leases::ArrayLeaseOwner,
+        erabasic_bytecode::SymbolKey,
+    )> {
+        let calls = self
+            .work
+            .iter()
+            .filter_map(|task| match task {
+                RuntimeFormTask::MethodArgument(call)
+                | RuntimeFormTask::CaptureMethodArgument(call) => Some(call),
+                _ => None,
+            })
+            .chain(self.awaiting_user_call.iter().map(|wait| &wait.call));
+        let mut captures = Vec::new();
+        for call in calls {
+            for (slot, value) in call.captured.iter().enumerate() {
+                if let Some(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) = value
+                    && let (Some(id), Some(fiber), Some(UserArgumentSpec::Variable(input))) =
+                        (place.backing, place.fiber, call.specs.get(slot))
+                {
+                    captures.push((
+                        id,
+                        crate::state::array_leases::ArrayLeaseOwner {
+                            fiber,
+                            frame: self.frame,
+                            generation: self.generation,
+                            function: self.function,
+                            origin: crate::state::array_leases::ArrayLeaseOrigin::UserForm {
+                                instruction: self.instruction,
+                                call: call.reference_scope,
+                                slot,
+                            },
+                        },
+                        *input,
+                    ));
+                }
+            }
+        }
+        captures
+    }
+    pub(crate) fn reference_leases(&self) -> impl Iterator<Item = crate::ArrayBackingId> + '_ {
+        self.reference_captures().into_iter().map(|(id, _, _)| id)
+    }
 }

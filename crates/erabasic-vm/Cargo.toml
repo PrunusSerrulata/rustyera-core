@@ -22,8 +22,11 @@ serde_json = "1.0.112"
 zstd.workspace = true
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
+icu_collections = { version = "=2.2.0", default-features = false }
+zerovec = { version = "=0.11.6", default-features = false }
 
 [dev-dependencies]
+zerovec = { version = "=0.11.6", default-features = false, features = ["alloc"] }
 erabasic-analyzer = { path = "../erabasic-analyzer" }
 erabasic-compiler = { path = "../erabasic-compiler" }
 erabasic-csv = { path = "../erabasic-csv" }

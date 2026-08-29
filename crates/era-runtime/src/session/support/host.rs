@@ -83,6 +83,7 @@ pub(in super::super) fn commit_host_result_write(
 
 pub(in super::super) fn global_place(vm: &RuntimeVm, name: &str) -> Option<PlaceDescriptor> {
     vm.vm().global_by_name(name).map(|global| PlaceDescriptor {
+        backing: None,
         variable: global.key,
         indices: vec![0; global.dimensions.len()],
         character: None,

@@ -183,6 +183,7 @@ fn encode_native_section(index: usize, plan: &NativeSectionPlan<'_>) -> Result<V
                 runtime_variables: &plan.bytecode.runtime_variables,
                 runtime_native_authorizations: &plan.bytecode.runtime_native_authorizations,
                 runtime_host_authorizations: &plan.bytecode.runtime_host_authorizations,
+                runtime_staged_authorizations: &plan.bytecode.runtime_staged_authorizations,
                 native_imports: &plan.bytecode.native_imports,
                 host_imports: &plan.bytecode.host_imports,
                 event_groups: &plan.bytecode.event_groups,

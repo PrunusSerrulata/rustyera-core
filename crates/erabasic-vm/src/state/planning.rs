@@ -505,7 +505,10 @@ fn analyze_function_memo(
             Opcode::ForStart | Opcode::ForNext | Opcode::ForBreak if !scratch.is_empty() => {
                 return None;
             }
-            Opcode::StorePlace
+            Opcode::BeginMatchCall
+            | Opcode::MatchCallRange
+            | Opcode::FinishMatchCall
+            | Opcode::StorePlace
             | Opcode::Call
             | Opcode::ResolveUserCall
             | Opcode::SelectUserArgument
@@ -516,8 +519,13 @@ fn analyze_function_memo(
             | Opcode::AbandonUserCall
             | Opcode::InvokeCallText
             | Opcode::ProbeVariableName
+            | Opcode::BeginBitCall
+            | Opcode::FinishBitCall
             | Opcode::BeginExistVarProbe
             | Opcode::FinishExistVarProbe
+            | Opcode::BeginMapCall
+            | Opcode::FinishMapCall
+            | Opcode::AbandonMapCall
             | Opcode::JumpDynamicLabel
             | Opcode::InvokeEvent
             | Opcode::Yield

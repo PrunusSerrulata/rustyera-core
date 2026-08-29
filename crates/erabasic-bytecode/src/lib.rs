@@ -48,8 +48,9 @@ pub use reference_terms::*;
 
 mod runtime_symbols;
 pub use runtime_symbols::{
-    RuntimeArgumentConstraint, RuntimeBuiltinSymbol, RuntimeCallableShape, RuntimeExpressionShape,
-    RuntimeReferenceSemantics, RuntimeVariableSymbol,
+    CharacterArrayDisposal, MatchNameRejectionKind, RuntimeArgumentConstraint,
+    RuntimeBuiltinSymbol, RuntimeCallableShape, RuntimeExpressionShape, RuntimeReferenceSemantics,
+    RuntimeVariableSymbol,
 };
 
 mod native_authorization;
@@ -69,3 +70,18 @@ pub use host_authorization::{
     runtime_host_import,
 };
 pub use host_source_shapes::{canonical_host_source_shapes, host_source_place_ranks};
+
+mod staged_authorization;
+pub use staged_authorization::{RuntimeStagedAuthorization, RuntimeStagedKind};
+
+mod bit_call;
+
+pub use bit_call::{BitCallSpec, BitOperation};
+
+mod match_call;
+
+pub use match_call::{MatchCallSpec, MatchInput};
+
+mod map_call;
+
+pub use map_call::MapCallKind;

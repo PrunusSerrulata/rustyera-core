@@ -44,6 +44,11 @@ pub(super) fn create_incremental_patch(
             .or_else(|| compact_metadata.map(|metadata| &metadata.runtime_host_authorizations))
             .is_none_or(|base| base != &target.runtime_host_authorizations)
             .then(|| target.runtime_host_authorizations.clone()),
+        runtime_staged_authorizations: exact_base
+            .map(|artifact| &artifact.runtime_staged_authorizations)
+            .or_else(|| compact_metadata.map(|metadata| &metadata.runtime_staged_authorizations))
+            .is_none_or(|base| base != &target.runtime_staged_authorizations)
+            .then(|| target.runtime_staged_authorizations.clone()),
         call_compatibility: exact_base
             .map(|artifact| artifact.call_compatibility)
             .or_else(|| compact_metadata.map(|metadata| metadata.call_compatibility))

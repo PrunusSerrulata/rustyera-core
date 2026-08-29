@@ -4,6 +4,8 @@
 //! services and the single [`VmHost`] boundary, while an application frontend owns
 //! files, clocks, rendering and input delivery.
 
+mod compat_collation;
+mod compat_text;
 mod config;
 mod debug;
 mod debug_port;
@@ -65,7 +67,7 @@ pub use snapshot::{
 };
 pub use state::{Vm, VmPreparationProgress, VmPreparationStage};
 pub use structured::{StructuredExtension, StructuredScope};
-pub use value::{HostWrite, PlaceDescriptor, VmValue};
+pub use value::{ArrayBackingId, HostWrite, PlaceDescriptor, VmValue};
 
 pub(crate) use memory::{
     Memory, VariableCell, VariableMap, character_definition, shared_definition,

@@ -11,8 +11,8 @@ use fallbacks::{INTEGER_FALLBACKS, STRING_FALLBACKS};
 #[allow(clippy::items_after_statements, clippy::too_many_lines)]
 pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     use ArgumentConstraint::{
-        Any, Integer, IntegerOrMutableString, IntegerOrReference, MutableString, ReferenceAny,
-        ReferenceOrString, String,
+        Any, Integer, IntegerOrMutableString, IntegerOrReference, MutableInteger, MutableString,
+        ReferenceAny, ReferenceOrString, String,
     };
     use SemanticType::{Integer as IntType, String as StrType};
 
@@ -97,6 +97,20 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     add("GETMETH", IntType, &[String, Integer, Any], 1, true);
     add("GETMETHS", StrType, &[String, String, Any], 1, true);
     add("EXISTVAR", IntType, &[String], 1, false);
+    add(
+        "MATCHALL",
+        IntType,
+        &[ReferenceAny, Any, Any, Any, ReferenceAny],
+        2,
+        false,
+    );
+    add(
+        "MATCHALLEX",
+        IntType,
+        &[String, Any, Any, Any, ReferenceAny],
+        2,
+        false,
+    );
     add("STRFORMCHECK", IntType, &[String], 1, false);
     add("GETVAR", IntType, &[String], 1, false);
     add("GETVARS", StrType, &[String], 1, false);
@@ -161,6 +175,14 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         add(name, IntType, &[Integer, Integer], 1, false);
     }
     add("GETSPCHARA", IntType, &[Integer], 1, false);
+    for name in [
+        "GETCSVNOBYNAME",
+        "GETCSVNOBYCALLNAME",
+        "GETCSVNOBYNICKNAME",
+        "GETCSVNOBYMASTERNAME",
+    ] {
+        add(name, IntType, &[String], 1, false);
+    }
     for name in [
         "CSVBASE",
         "CSVABL",
@@ -314,6 +336,25 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     add("MAP_SET", IntType, &[String, String, String], 3, false);
     add("MAP_GET", StrType, &[String, String], 2, false);
     add("MAP_TOXML", StrType, &[String], 1, false);
+    // Availability is restricted by the selected snake compatibility identity.
+    add(
+        "MAP_VALUES",
+        StrType,
+        &[String, MutableString, Integer],
+        1,
+        false,
+    );
+    add("MAP_MERGE", IntType, &[String, String], 2, false);
+    add("MAP_REMOVEIF", IntType, &[String, String, String], 3, false);
+    add("MAP_FINDKEY", StrType, &[String, String, String], 3, false);
+    add("MAP_TOSTRING", StrType, &[String, String, String], 1, false);
+    add(
+        "MAP_FROMSTRING",
+        IntType,
+        &[String, String, String, String],
+        2,
+        false,
+    );
     add(
         "MAP_GETKEYS",
         StrType,
@@ -568,6 +609,22 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     add("MOVETEXTBOX", IntType, &[Integer; 3], 3, false);
     add("RESUMETEXTBOX", IntType, &[Integer; 3], 3, false);
     add("BITMAP_CACHE_ENABLE", IntType, &[Integer], 1, false);
+    add(
+        "BITSET",
+        IntType,
+        &[MutableInteger, Integer, Integer, Integer],
+        2,
+        false,
+    );
+    for name in ["BITGET", "BITTOGGLE", "BITINDEXOFFIRST"] {
+        add(name, IntType, &[MutableInteger, Integer], 1, false);
+    }
+    for name in ["BITSET", "BITGET", "BITTOGGLE", "BITINDEXOFFIRST"] {
+        result
+            .get_mut(name)
+            .expect("BIT signature inserted")
+            .allow_omitted = true;
+    }
     result
         .get_mut("STRJOIN")
         .expect("STRJOIN signature was inserted")
@@ -576,7 +633,14 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         .get_mut("RAND")
         .expect("RAND signature was inserted")
         .allow_omitted = true;
-    for name in ["GETMETH", "GETMETHS", "FINDELEMENT", "FINDLASTELEMENT"] {
+    for name in [
+        "GETMETH",
+        "GETMETHS",
+        "FINDELEMENT",
+        "FINDLASTELEMENT",
+        "MATCHALL",
+        "MATCHALLEX",
+    ] {
         result
             .get_mut(name)
             .expect("find-element signature was inserted")

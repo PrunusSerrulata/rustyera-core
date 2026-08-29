@@ -38,12 +38,20 @@ pub(crate) struct Frame {
     pub user_calls: Vec<super::user_calls::PendingUserCall>,
     /// Catch boundaries for the second EXISTVAR source evaluation.
     pub existvar_checks: Vec<crate::interpreter::existvar::ExistVarCheckpoint>,
+    pub map_calls: Vec<crate::interpreter::map_calls::PendingMapCall>,
+    pub bit_calls: Vec<super::bit_calls::PendingBitCall>,
+    pub match_calls: Vec<crate::interpreter::matching::PendingMatchCall>,
 }
 
 impl Frame {
     pub(crate) fn operand_slots(&self) -> Option<usize> {
         self.user_calls.iter().try_fold(
-            self.stack.len().checked_add(self.existvar_checks.len())?,
+            self.stack
+                .len()
+                .checked_add(self.existvar_checks.len())?
+                .checked_add(self.map_calls.len())?
+                .checked_add(self.bit_calls.len())?
+                .checked_add(self.match_calls.len().checked_mul(12)?)?,
             |slots, call| slots.checked_add(1)?.checked_add(call.call.bindings.len()),
         )
     }
@@ -138,6 +146,9 @@ impl Fiber {
             frame.runtime_form = None;
             frame.user_calls.clear();
             frame.existvar_checks.clear();
+            frame.map_calls.clear();
+            frame.bit_calls.clear();
+            frame.match_calls.clear();
         }
     }
 }

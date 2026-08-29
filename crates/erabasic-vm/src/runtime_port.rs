@@ -66,6 +66,8 @@ pub struct PreparedRuntimeState {
     pub(crate) reset_execution: bool,
     pub(crate) structured_state: Option<Vec<u8>>,
     pub(crate) base_column_stamp: Option<crate::structured::ColumnIdentityStamp>,
+    pub(crate) base_map_stamp: Option<crate::structured::MapLeaseStamp>,
+    pub(crate) base_array_stamp: crate::state::array_leases::ArrayLeaseStamp,
 }
 
 /// Transactional state access used by the runtime's built-in system controller.

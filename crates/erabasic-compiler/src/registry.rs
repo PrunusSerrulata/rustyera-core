@@ -49,9 +49,16 @@ pub struct HostBinding {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ExecutionBinding {
     Native(OperationContract),
-    ExpressionMethod { result: MethodResult },
+    BitArray,
+    ExpressionMethod {
+        result: MethodResult,
+    },
+    /// VM token capture/range/scan; no eager Native service exists.
+    ArrayMatch,
     Host(HostBinding),
-    Unsupported { reason: String },
+    Unsupported {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -95,6 +102,8 @@ impl HostRegistry {
             Some(ExecutionBinding::Host(binding)) => Some(binding.clone()),
             Some(
                 ExecutionBinding::Native(_)
+                | ExecutionBinding::BitArray
+                | ExecutionBinding::ArrayMatch
                 | ExecutionBinding::ExpressionMethod { .. }
                 | ExecutionBinding::Unsupported { .. },
             )
@@ -110,7 +119,9 @@ pub fn default_host_registry() -> HostRegistry {
         .into_iter()
         .chain(builtin_function_names())
     {
-        let binding = if matches!(name.as_str(), "GETMETH" | "GETMETHS") {
+        let binding = if matches!(name.as_str(), "MATCHALL" | "MATCHALLEX") {
+            ExecutionBinding::ArrayMatch
+        } else if matches!(name.as_str(), "GETMETH" | "GETMETHS") {
             ExecutionBinding::ExpressionMethod {
                 result: if name == "GETMETHS" {
                     MethodResult::String
@@ -118,6 +129,8 @@ pub fn default_host_registry() -> HostRegistry {
                     MethodResult::Integer
                 },
             }
+        } else if erabasic_bytecode::BitOperation::from_name(&name).is_some() {
+            ExecutionBinding::BitArray
         } else if native_is_implemented(&name) {
             ExecutionBinding::Native(native_contract(&name))
         } else {
@@ -303,6 +316,10 @@ const IMPLEMENTED_NATIVE_NAMES: &[&str] = &[
     "getchara",
     "getspchara",
     "existcsv",
+    "getcsvnobyname",
+    "getcsvnobycallname",
+    "getcsvnobynickname",
+    "getcsvnobymastername",
     "csvname",
     "csvcallname",
     "csvnickname",

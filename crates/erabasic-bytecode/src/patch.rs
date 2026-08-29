@@ -18,6 +18,7 @@ pub struct BytecodePatch {
     pub runtime_variables: Option<Vec<crate::RuntimeVariableSymbol>>,
     pub runtime_native_authorizations: Option<Vec<crate::RuntimeNativeAuthorization>>,
     pub runtime_host_authorizations: Option<Vec<crate::RuntimeHostAuthorization>>,
+    pub runtime_staged_authorizations: Option<Vec<crate::RuntimeStagedAuthorization>>,
     pub project_data: Option<ProjectData>,
     pub globals: Option<Vec<BytecodeGlobal>>,
     pub native_imports: Option<Vec<NativeImport>>,
@@ -69,6 +70,9 @@ pub fn create_patch(base: &BytecodeArtifact, target: &BytecodeArtifact) -> Bytec
         runtime_native_authorizations: (base.runtime_native_authorizations
             != target.runtime_native_authorizations)
             .then(|| target.runtime_native_authorizations.clone()),
+        runtime_staged_authorizations: (base.runtime_staged_authorizations
+            != target.runtime_staged_authorizations)
+            .then(|| target.runtime_staged_authorizations.clone()),
         runtime_host_authorizations: (base.runtime_host_authorizations
             != target.runtime_host_authorizations)
             .then(|| target.runtime_host_authorizations.clone()),
@@ -145,6 +149,10 @@ pub fn apply_patch(
             .runtime_native_authorizations
             .clone()
             .unwrap_or_else(|| base.runtime_native_authorizations.clone()),
+        runtime_staged_authorizations: patch
+            .runtime_staged_authorizations
+            .clone()
+            .unwrap_or_else(|| base.runtime_staged_authorizations.clone()),
         runtime_host_authorizations: patch
             .runtime_host_authorizations
             .clone()

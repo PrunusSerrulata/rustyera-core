@@ -29,6 +29,7 @@ pub enum ReferenceTermCall {
     Native { key: SymbolKey, name: String },
     DynamicNative { key: SymbolKey, name: String },
     Host { key: SymbolKey, name: String },
+    Staged { key: SymbolKey, name: String },
     User { key: SymbolKey },
     Intrinsic { name: String },
 }

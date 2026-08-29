@@ -5,6 +5,10 @@ use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ValidatedStackToken {
+    BitCall {
+        stack_index: usize,
+        begin: u32,
+    },
     UserCall {
         stack_index: usize,
         resolve: u32,
@@ -13,6 +17,15 @@ pub enum ValidatedStackToken {
     ExistVarProbe {
         stack_index: usize,
         begin: u32,
+    },
+    MapCall {
+        stack_index: usize,
+        begin: u32,
+    },
+    MatchCall {
+        stack_index: usize,
+        begin: u32,
+        phase: u8,
     },
 }
 
@@ -30,6 +43,21 @@ impl ValidatedStackState {
             .enumerate()
             .filter_map(|(stack_index, value)| match value {
                 StackValue::Value(_) => None,
+                StackValue::MatchCallToken { begin, phase } => {
+                    Some(ValidatedStackToken::MatchCall {
+                        stack_index,
+                        begin: *begin,
+                        phase: *phase,
+                    })
+                }
+                StackValue::MapCallToken { begin } => Some(ValidatedStackToken::MapCall {
+                    stack_index,
+                    begin: *begin,
+                }),
+                StackValue::BitCallToken { begin } => Some(ValidatedStackToken::BitCall {
+                    stack_index,
+                    begin: *begin,
+                }),
                 StackValue::UserCallToken { resolve, next_slot } => {
                     Some(ValidatedStackToken::UserCall {
                         stack_index,

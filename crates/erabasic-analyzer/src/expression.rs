@@ -384,13 +384,7 @@ impl ExpressionAnalyzer<'_> {
             signature.allow_omitted || existvar_mode,
             location,
         );
-        if existvar_mode && values.first().is_some_and(Option::is_none) {
-            self.diagnostic(
-                AnalyzerDiagnosticCode::InvalidArgument,
-                location,
-                "EXISTVAR source may not be omitted",
-            );
-        }
+        self.check_special_builtin_call(&key, args, &values, existvar_mode, location);
         let dynamic_method = matches!(key.as_str(), "GETMETH" | "GETMETHS")
             && !self.catalog.extension_functions.contains(&key);
         if dynamic_method {
@@ -417,6 +411,109 @@ impl ExpressionAnalyzer<'_> {
             value_type: signature.return_type,
             constant: None,
             location,
+        }
+    }
+
+    fn check_special_builtin_call(
+        &mut self,
+        key: &str,
+        args: &[Option<Expr>],
+        values: &[Option<HirExpr>],
+        existvar_mode: bool,
+        location: SourceLocation,
+    ) {
+        if matches!(key, "MATCHALL" | "MATCHALLEX") {
+            self.check_match_source(
+                key,
+                &args.iter().map(Option::as_ref).collect::<Vec<_>>(),
+                location,
+            );
+        }
+        self.check_map_output(key, values, location);
+        if existvar_mode && values.first().is_some_and(Option::is_none) {
+            self.diagnostic(
+                AnalyzerDiagnosticCode::InvalidArgument,
+                location,
+                "EXISTVAR source may not be omitted",
+            );
+        }
+        self.check_bit_call(key, values, location);
+    }
+
+    pub(crate) fn check_bit_call(
+        &mut self,
+        name: &str,
+        values: &[Option<HirExpr>],
+        location: SourceLocation,
+    ) {
+        if !matches!(name, "BITSET" | "BITGET" | "BITTOGGLE" | "BITINDEXOFFIRST") {
+            return;
+        }
+        let valid = values
+            .first()
+            .and_then(Option::as_ref)
+            .is_some_and(|expression| {
+                let HirExprKind::Variable { place } = &expression.kind else {
+                    return false;
+                };
+                self.symbols
+                    .variables
+                    .get(place.variable.0 as usize)
+                    .is_some_and(|variable| {
+                        variable.dimensions.len() == 1
+                            && variable.mutable
+                            && variable.value_type == SemanticType::Integer
+                    })
+            });
+        if !valid {
+            self.diagnostic(
+                AnalyzerDiagnosticCode::InvalidArgument,
+                location,
+                "BIT input must be a mutable Integer array of rank one",
+            );
+        }
+        if name == "BITSET" && values.get(1).is_none_or(Option::is_none) {
+            self.diagnostic(
+                AnalyzerDiagnosticCode::InvalidArgument,
+                location,
+                "BITSET index may not be omitted",
+            );
+        }
+    }
+
+    pub(crate) fn check_match_source(
+        &mut self,
+        name: &str,
+        args: &[Option<&Expr>],
+        location: SourceLocation,
+    ) {
+        fn atom(mut expr: &Expr) -> &Expr {
+            while let ExprKind::Group(inner) = &expr.kind {
+                expr = inner;
+            }
+            expr
+        }
+        let token = |expr: &Expr| {
+            matches!(
+                atom(expr).kind,
+                ExprKind::Identifier(_) | ExprKind::Variable { .. }
+            )
+        };
+        let first_valid = args.first().copied().flatten().is_some_and(|expr| {
+            if name == "MATCHALLEX" {
+                matches!(atom(expr).kind, ExprKind::String(_))
+            } else {
+                token(expr)
+            }
+        });
+        if !first_valid
+            || args.get(1).is_none_or(Option::is_none)
+            || args
+                .get(4)
+                .is_some_and(|arg| arg.is_none_or(|expr| !token(expr)))
+        {
+            self.diagnostic(AnalyzerDiagnosticCode::InvalidArgument, location,
+                "MATCH requires its source token (MATCHALLEX: literal string), needle and any supplied output token");
         }
     }
 
@@ -955,4 +1052,35 @@ fn builtin_call_arguments(
             Some(expression) => HirCallArgument::Value(expression),
         })
         .collect()
+}
+
+impl ExpressionAnalyzer<'_> {
+    pub(crate) fn check_map_output(
+        &mut self,
+        name: &str,
+        values: &[Option<HirExpr>],
+        location: SourceLocation,
+    ) {
+        if name != "MAP_VALUES" || values.len() != 3 {
+            return;
+        }
+        let valid = values
+            .get(1)
+            .and_then(Option::as_ref)
+            .is_some_and(|value| match &value.kind {
+                HirExprKind::Variable { place } => self
+                    .symbols
+                    .variables
+                    .get(place.variable.0 as usize)
+                    .is_some_and(|variable| variable.dimensions.len() == 1),
+                _ => false,
+            });
+        if !valid {
+            self.diagnostic(
+                AnalyzerDiagnosticCode::InvalidArgument,
+                location,
+                "MAP_VALUES output must be a one-dimensional String array token",
+            );
+        }
+    }
 }

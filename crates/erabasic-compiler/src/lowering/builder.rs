@@ -7,6 +7,7 @@ use super::{
     HostImport, LineId, LoweringContext, NativeImport, Opcode, SourceLocation, SymbolKey, opcode,
 };
 
+mod bit_arrays;
 mod calls;
 mod column_options;
 mod data_blocks;
@@ -15,6 +16,8 @@ mod expressions;
 mod formatted;
 mod html_queries;
 mod imports;
+mod map_calls;
+mod matching;
 mod methods;
 mod statements;
 

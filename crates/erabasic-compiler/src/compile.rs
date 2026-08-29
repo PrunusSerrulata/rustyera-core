@@ -222,6 +222,7 @@ struct IncrementalMetadata {
     runtime_variables: Vec<erabasic_bytecode::RuntimeVariableSymbol>,
     runtime_native_authorizations: Vec<erabasic_bytecode::RuntimeNativeAuthorization>,
     runtime_host_authorizations: Vec<erabasic_bytecode::RuntimeHostAuthorization>,
+    runtime_staged_authorizations: Vec<erabasic_bytecode::RuntimeStagedAuthorization>,
     project_data: erabasic_data::ProjectData,
     globals: Vec<BytecodeGlobal>,
     native_imports: Vec<NativeImport>,
@@ -240,6 +241,7 @@ impl IncrementalBase {
                     runtime_variables: artifact.runtime_variables.clone(),
                     runtime_native_authorizations: artifact.runtime_native_authorizations.clone(),
                     runtime_host_authorizations: artifact.runtime_host_authorizations.clone(),
+                    runtime_staged_authorizations: artifact.runtime_staged_authorizations.clone(),
                     project_data: artifact.project_data.clone(),
                     globals: artifact.globals.clone(),
                     native_imports: artifact.native_imports.clone(),
@@ -502,6 +504,11 @@ pub fn runtime_native_validation_context(
             .values()
             .map(|family| family.prototype.capability),
     );
+    context.runtime_staged_authorizations =
+        runtime_symbols::runtime_staged_authorizations(&symbols, registry)
+            .into_iter()
+            .map(|family| (family.key, family))
+            .collect();
     context
 }
 

@@ -562,6 +562,7 @@ fn compile_project_inner(
         ignore_triple_symbols: project_ref.program.call_compatibility.ignore_triple_symbols,
         compatible_rand: project_ref.program.call_compatibility.compatible_rand,
         system_no_target: project_ref.program.call_compatibility.system_no_target,
+        ignore_case: project_ref.program.call_compatibility.ignore_case,
     };
     let runtime_variables = super::runtime_symbols::runtime_variable_symbols(
         &project_ref.program.variables,
@@ -722,6 +723,8 @@ fn compile_project_inner(
     let runtime_builtins = super::runtime_symbols::runtime_builtin_symbols(expression_signatures);
     let runtime_native_authorizations =
         super::runtime_symbols::runtime_native_authorizations(&runtime_builtins, host_registry);
+    let runtime_staged_authorizations =
+        super::runtime_symbols::runtime_staged_authorizations(&runtime_builtins, host_registry);
     let runtime_host_authorizations = super::runtime_symbols::runtime_host_authorizations(
         &runtime_builtins,
         host_registry,
@@ -737,6 +740,7 @@ fn compile_project_inner(
         runtime_variables,
         runtime_native_authorizations,
         runtime_host_authorizations,
+        runtime_staged_authorizations,
         project_data,
         globals: artifact_globals,
         native_imports,

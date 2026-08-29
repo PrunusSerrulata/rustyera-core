@@ -20,8 +20,13 @@ use crate::debug::DebugState;
 pub struct RuntimeVm {
     vm: Vm,
     natives: NativeServiceRegistry,
-    pending_natives: Option<(NativeServiceRegistry, Option<ColumnIdentityStamp>)>,
+    pending_natives: Option<(
+        NativeServiceRegistry,
+        Option<ColumnIdentityStamp>,
+        Option<crate::structured::MapLeaseStamp>,
+    )>,
     candidate_base_column_stamp: CandidateColumnBase,
+    candidate_base_array_stamp: Option<crate::state::array_leases::ArrayLeaseStamp>,
     line_columns: u32,
     pending_completion_events: Vec<VmPortEvent>,
 }
@@ -30,7 +35,10 @@ pub struct RuntimeVm {
 #[derive(Clone, Copy)]
 enum CandidateColumnBase {
     Unforked,
-    Forked(Option<ColumnIdentityStamp>),
+    Forked(
+        Option<ColumnIdentityStamp>,
+        Option<crate::structured::MapLeaseStamp>,
+    ),
 }
 
 /// The immutable program index retained while a runtime obtains title entropy.
@@ -58,6 +66,7 @@ pub const DEFAULT_LINE_COLUMNS: u32 = 75;
 pub struct PreparedCandidateState {
     artifact_id: Digest,
     base_column_stamp: CandidateColumnBase,
+    base_array_stamp: Option<crate::state::array_leases::ArrayLeaseStamp>,
     memory: crate::Memory,
     natives: NativeServiceRegistry,
 }
@@ -71,6 +80,7 @@ impl RuntimeVm {
             natives,
             pending_natives,
             candidate_base_column_stamp: _,
+            candidate_base_array_stamp: _,
             line_columns: _,
             pending_completion_events: _,
         } = self;
@@ -110,7 +120,13 @@ impl RuntimeVm {
                 "pending Host completion events must be delivered before forking".into(),
             ));
         }
+        let base_array_stamp = self.vm.array_lease_stamp()?;
         let mut vm = self.vm.clone();
+        let mut array_roots =
+            crate::interpreter::bit_calls::live_bit_leases(self.vm.fibers.values());
+        array_roots.extend(self.vm.memory.array_leases.protected.iter().copied());
+        vm.memory.array_leases.retain(&array_roots);
+        vm.memory.array_leases.protected = array_roots;
         vm.fibers.clear();
         vm.runnable.clear();
         vm.primary_fiber = None;
@@ -120,18 +136,31 @@ impl RuntimeVm {
         vm.clear_path_memo_cache();
         vm.active_path_memo_fiber.set(None);
         vm.active_path_memo.borrow_mut().take();
-        let natives = self
+        let roots =
+            self.natives
+                .candidate_map_roots(&crate::interpreter::map_calls::live_map_leases(
+                    self.vm.fibers.values(),
+                ));
+        self.natives
+            .retain_map_leases(&roots)
+            .map_err(|error| VmError::Snapshot(error.to_string()))?;
+        let mut natives = self
             .natives
             .fork_for_artifact(vm.artifact())
+            .map_err(VmError::Snapshot)?;
+        natives
+            .protect_map_roots(roots)
             .map_err(VmError::Snapshot)?;
         Ok(Self {
             vm,
             natives,
             pending_natives: None,
+            candidate_base_array_stamp: Some(base_array_stamp),
             candidate_base_column_stamp: CandidateColumnBase::Forked(
                 self.natives
                     .column_identity_stamp()
                     .map_err(VmError::Snapshot)?,
+                self.natives.map_lease_stamp().map_err(VmError::Snapshot)?,
             ),
             line_columns: self.line_columns,
             pending_completion_events: Vec::new(),
@@ -151,6 +180,7 @@ impl RuntimeVm {
         Ok(PreparedCandidateState {
             artifact_id: self.vm.artifact_id(),
             base_column_stamp: self.candidate_base_column_stamp,
+            base_array_stamp: self.candidate_base_array_stamp,
             memory: self.vm.memory,
             natives: self.natives,
         })
@@ -164,7 +194,7 @@ impl RuntimeVm {
     /// Rejects a candidate prepared for another artifact generation.
     pub fn commit_candidate_state(
         &mut self,
-        candidate: PreparedCandidateState,
+        mut candidate: PreparedCandidateState,
     ) -> Result<(), VmError> {
         if !self.pending_completion_events.is_empty() {
             return Err(VmError::InvalidState(
@@ -176,7 +206,64 @@ impl RuntimeVm {
                 "candidate state belongs to another artifact".into(),
             ));
         }
-        let CandidateColumnBase::Forked(base) = candidate.base_column_stamp else {
+        let base_array_stamp = candidate.base_array_stamp.as_ref().ok_or_else(|| {
+            VmError::InvalidState("candidate has no array lease source guard".into())
+        })?;
+        self.vm.validate_array_lease_stamp(base_array_stamp)?;
+        let mut roots = crate::interpreter::bit_calls::live_bit_leases(self.vm.fibers.values());
+        roots.extend(self.vm.memory.array_leases.protected.iter().copied());
+        if candidate
+            .memory
+            .array_leases
+            .entries
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            != roots
+            || roots.iter().any(|id| {
+                candidate
+                    .memory
+                    .array_leases
+                    .entries
+                    .get(id)
+                    .zip(self.vm.memory.array_leases.entries.get(id))
+                    .is_none_or(|(candidate, parent)| {
+                        candidate.owner != parent.owner
+                            || candidate.input != parent.input
+                            || candidate.length != parent.length
+                    })
+            })
+        {
+            return Err(VmError::InvalidState(
+                "candidate array leases differ from protected parent roots".into(),
+            ));
+        }
+        candidate
+            .memory
+            .array_leases
+            .protected
+            .clone_from(&self.vm.memory.array_leases.protected);
+        // Inherited roots belong to a still-live outer runtime, not this isolated
+        // parent's discarded frames. Their exact set/source stamp is checked above;
+        // only this parent's own frame roots can be validated against its fibers.
+        let expected = roots
+            .iter()
+            .filter(|id| !self.vm.memory.array_leases.protected.contains(*id))
+            .filter_map(|id| {
+                self.vm
+                    .memory
+                    .array_leases
+                    .entries
+                    .get(id)
+                    .map(|lease| (*id, lease.owner))
+            })
+            .collect();
+        candidate.memory.validate_array_leases(
+            &self.vm.fibers,
+            &expected,
+            self.vm.config.maximum_operand_stack,
+        )?;
+        let CandidateColumnBase::Forked(base, map_base) = candidate.base_column_stamp else {
             return Err(VmError::InvalidState(
                 "candidate state was not forked from a live runtime".into(),
             ));
@@ -184,7 +271,20 @@ impl RuntimeVm {
         self.natives
             .validate_column_identity_stamp(base)
             .map_err(VmError::InvalidState)?;
+        self.natives
+            .validate_map_lease_stamp(map_base)
+            .map_err(VmError::InvalidState)?;
+        let roots =
+            self.natives
+                .candidate_map_roots(&crate::interpreter::map_calls::live_map_leases(
+                    self.vm.fibers.values(),
+                ));
+        candidate
+            .natives
+            .finish_map_candidate(&roots, self.natives.protected_map_roots())
+            .map_err(VmError::InvalidState)?;
         self.vm.memory = candidate.memory;
+        self.vm.prune_bit_leases();
         self.natives = candidate.natives;
         self.refresh_draw_line_string();
         Ok(())
@@ -198,6 +298,7 @@ impl RuntimeVm {
             natives,
             pending_natives: None,
             candidate_base_column_stamp: CandidateColumnBase::Unforked,
+            candidate_base_array_stamp: None,
             line_columns: DEFAULT_LINE_COLUMNS,
             pending_completion_events: Vec::new(),
         };
@@ -213,6 +314,7 @@ impl RuntimeVm {
             natives,
             pending_natives: None,
             candidate_base_column_stamp: CandidateColumnBase::Unforked,
+            candidate_base_array_stamp: None,
             line_columns: DEFAULT_LINE_COLUMNS,
             pending_completion_events: Vec::new(),
         };
@@ -237,6 +339,7 @@ impl RuntimeVm {
             natives,
             pending_natives: None,
             candidate_base_column_stamp: CandidateColumnBase::Unforked,
+            candidate_base_array_stamp: None,
             line_columns: DEFAULT_LINE_COLUMNS,
             pending_completion_events: Vec::new(),
         };
@@ -257,6 +360,7 @@ impl RuntimeVm {
             natives,
             pending_natives: None,
             candidate_base_column_stamp: CandidateColumnBase::Unforked,
+            candidate_base_array_stamp: None,
             line_columns: DEFAULT_LINE_COLUMNS,
             pending_completion_events: Vec::new(),
         };
@@ -279,6 +383,7 @@ impl RuntimeVm {
             natives,
             pending_natives: None,
             candidate_base_column_stamp: CandidateColumnBase::Unforked,
+            candidate_base_array_stamp: None,
             line_columns: DEFAULT_LINE_COLUMNS,
             pending_completion_events: Vec::new(),
         };
@@ -538,6 +643,10 @@ impl RuntimeVm {
             .map_err(VmError::InvalidState)?;
         let mut prepared = self.vm.prepare_runtime_state(transaction)?;
         prepared.structured_state = structured_state;
+        prepared.base_map_stamp = self
+            .natives
+            .map_lease_stamp()
+            .map_err(VmError::InvalidState)?;
         prepared.base_column_stamp = self
             .natives
             .column_identity_stamp()
@@ -561,6 +670,10 @@ impl VmRuntimeStatePort for RuntimeVm {
             .map_err(VmError::InvalidState)?;
         let mut prepared = self.vm.prepare_runtime_state(transaction)?;
         prepared.structured_state = structured_state;
+        prepared.base_map_stamp = self
+            .natives
+            .map_lease_stamp()
+            .map_err(VmError::InvalidState)?;
         prepared.base_column_stamp = self
             .natives
             .column_identity_stamp()
@@ -568,7 +681,9 @@ impl VmRuntimeStatePort for RuntimeVm {
         Ok(prepared)
     }
 
-    fn commit_runtime_state(&mut self, prepared: PreparedRuntimeState) -> Result<(), VmError> {
+    fn commit_runtime_state(&mut self, mut prepared: PreparedRuntimeState) -> Result<(), VmError> {
+        self.vm
+            .validate_array_lease_stamp(&prepared.base_array_stamp)?;
         if prepared.generation != self.vm.current_generation() {
             return Err(VmError::InvalidState(
                 "runtime state transaction belongs to a stale generation".into(),
@@ -577,9 +692,25 @@ impl VmRuntimeStatePort for RuntimeVm {
         self.natives
             .validate_column_identity_stamp(prepared.base_column_stamp)
             .map_err(VmError::InvalidState)?;
+        self.natives
+            .validate_map_lease_stamp(prepared.base_map_stamp)
+            .map_err(VmError::InvalidState)?;
+        let live_maps = if prepared.reset_execution {
+            BTreeSet::new()
+        } else {
+            crate::interpreter::map_calls::live_map_leases(self.vm.fibers.values())
+        };
+        prepared.structured_state = self
+            .natives
+            .prepare_map_lease_cleanup(prepared.structured_state.as_deref(), &live_maps)
+            .map_err(VmError::InvalidState)?;
         if let Some(structured_state) = &prepared.structured_state {
             self.natives
-                .commit_structured_state(structured_state, prepared.base_column_stamp)
+                .commit_structured_state(
+                    structured_state,
+                    prepared.base_column_stamp,
+                    prepared.base_map_stamp,
+                )
                 .map_err(VmError::InvalidState)?;
         }
         self.vm.commit_runtime_state(prepared)?;
@@ -909,6 +1040,11 @@ impl VmRuntimePort for RuntimeVm {
                 let fiber = self
                     .vm
                     .return_current_from_host(completion.request, value.as_ref())?;
+                self.natives
+                    .retain_map_leases(&crate::interpreter::map_calls::live_map_leases(
+                        self.vm.fibers.values(),
+                    ))
+                    .map_err(|error| VmError::InvalidState(error.to_string()))?;
                 if let Some(FiberStatus::Completed(value)) = self.vm.fiber_status(fiber) {
                     self.pending_completion_events
                         .push(VmPortEvent::FiberCompleted(fiber, value));
@@ -936,6 +1072,11 @@ impl VmRuntimePort for RuntimeVm {
             }
             VmHostCompletion::Error(failure) => {
                 let (fiber, fault) = self.vm.fail_waiting_host(completion.request, failure)?;
+                self.natives
+                    .retain_map_leases(&crate::interpreter::map_calls::live_map_leases(
+                        self.vm.fibers.values(),
+                    ))
+                    .map_err(|error| VmError::InvalidState(error.to_string()))?;
                 if let Some(fault) = fault {
                     self.pending_completion_events
                         .push(VmPortEvent::FiberFaulted(fiber, fault));
@@ -946,7 +1087,12 @@ impl VmRuntimePort for RuntimeVm {
     }
 
     fn cancel_fiber(&mut self, fiber: FiberId) -> Result<(), VmError> {
-        self.vm.cancel_fiber(fiber)
+        self.vm.cancel_fiber(fiber)?;
+        self.natives
+            .retain_map_leases(&crate::interpreter::map_calls::live_map_leases(
+                self.vm.fibers.values(),
+            ))
+            .map_err(|error| VmError::InvalidState(error.to_string()))
     }
 
     fn export_era_state(&self) -> EraState {
@@ -1010,20 +1156,24 @@ impl VmRuntimePort for RuntimeVm {
             .migrated_for_artifact(target.artifact())
             .map_err(VmError::Snapshot)?;
         self.vm.prepare_hot_reload_artifact(target)?;
-        self.pending_natives = Some((migrated, base_column_stamp));
+        let map_stamp = self.natives.map_lease_stamp().map_err(VmError::Snapshot)?;
+        self.pending_natives = Some((migrated, base_column_stamp, map_stamp));
         Ok(())
     }
 
     fn commit_hot_reload(&mut self) -> Result<HotReloadReport, VmError> {
-        let (_, base_column_stamp) = self
+        let (_, base_column_stamp, base_map_stamp) = self
             .pending_natives
             .as_ref()
             .ok_or_else(|| VmError::InvalidState("prepared native migration is missing".into()))?;
         self.natives
             .validate_column_identity_stamp(*base_column_stamp)
             .map_err(VmError::InvalidState)?;
+        self.natives
+            .validate_map_lease_stamp(*base_map_stamp)
+            .map_err(VmError::InvalidState)?;
         let report = self.vm.commit_hot_reload()?;
-        let (natives, _) = self
+        let (natives, _, _) = self
             .pending_natives
             .take()
             .expect("validated native migration remains available");
@@ -1166,6 +1316,7 @@ impl VmRestorePort for RuntimeVm {
             natives,
             pending_natives: None,
             candidate_base_column_stamp: CandidateColumnBase::Unforked,
+            candidate_base_array_stamp: None,
             line_columns: DEFAULT_LINE_COLUMNS,
             pending_completion_events: Vec::new(),
         };
@@ -1204,12 +1355,20 @@ fn validate_ready(
                 "host write belongs to another fiber".into(),
             ));
         }
-        let definition = vm
-            .artifact()
-            .globals
-            .iter()
-            .find(|definition| definition.key == write.target.variable)
-            .ok_or_else(|| VmError::InvalidState("host write variable is missing".into()))?;
+        // Public Host descriptors never carry the VM-private backing capability.
+        // A legitimate REF write names its live formal and resolves the binding in VM.
+        if write.target.backing.is_some() {
+            return Err(VmError::InvalidState(
+                "Host cannot inject an array backing identity".into(),
+            ));
+        }
+        let (_, definition) = vm.place_definition(fiber, &write.target).map_err(|error| {
+            VmError::ScriptFailure(crate::ExecutionFailure::classified(
+                crate::FaultCategory::HostContract,
+                crate::VmFaultCode::Host,
+                error.to_string(),
+            ))
+        })?;
         // Host completions are constructed by the trusted runtime and must update
         // reference pseudo-variables such as immutable-to-script ISTIMEOUT.
         if definition.value_type != write.value.value_type() {

@@ -88,6 +88,8 @@ impl RuntimeCallableShape {
 pub struct RuntimeVariableSymbol {
     pub key: crate::SymbolKey,
     pub reference: bool,
+    pub match_name_rejection: Option<MatchNameRejectionKind>,
+    pub character_disposal: CharacterArrayDisposal,
     pub reference_semantics: RuntimeReferenceSemantics,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -110,4 +112,16 @@ impl RuntimeArgumentConstraint {
                 | Self::MutableReferenceOrString
         ) || self == Self::IntegerOrMutableString && value_type == BytecodeType::String
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum MatchNameRejectionKind {
+    Script,
+    Internal,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum CharacterArrayDisposal {
+    Preserve,
+    ClearSparse,
 }

@@ -95,7 +95,11 @@ impl CallableSignature {
     pub fn arguments_for_arity(&self, arity: usize) -> &[ArgumentConstraint] {
         // The two-argument form replaces a stored document by numeric or string key.
         // Only the longer inline-XML form writes back into a mutable string argument.
-        if self.name == "XML_REPLACE" && arity == 2 {
+        if self.name == "MAP_VALUES" && arity == 1 {
+            &[ArgumentConstraint::String]
+        } else if self.name == "MAP_VALUES" && arity == 2 {
+            &[ArgumentConstraint::String, ArgumentConstraint::Integer]
+        } else if self.name == "XML_REPLACE" && arity == 2 {
             &[ArgumentConstraint::Any, ArgumentConstraint::String]
         } else {
             &self.arguments
@@ -175,6 +179,18 @@ pub(crate) fn builtin_available(
             identity.supports_call_text()
         }
         "STRFORMCHECK" => identity.supports_checked_runtime_forms(),
+        "GETCSVNOBYNAME"
+        | "GETCSVNOBYCALLNAME"
+        | "GETCSVNOBYNICKNAME"
+        | "GETCSVNOBYMASTERNAME"
+        | "BITSET"
+        | "BITGET"
+        | "BITTOGGLE"
+        | "BITINDEXOFFIRST"
+        | "MATCHALL"
+        | "MATCHALLEX" => identity.supports_snake_data_apis(),
+        "MAP_VALUES" | "MAP_MERGE" | "MAP_REMOVEIF" | "MAP_FINDKEY" | "MAP_TOSTRING"
+        | "MAP_FROMSTRING" => identity.supports_map_extensions(),
         _ => true,
     }
 }

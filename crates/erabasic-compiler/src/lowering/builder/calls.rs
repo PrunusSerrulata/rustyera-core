@@ -82,6 +82,34 @@ impl Builder<'_> {
                 return;
             }
         }
+        if let Some(function) = target_function
+            && function.parameters.iter().any(|parameter| {
+                self.context
+                    .program
+                    .variables
+                    .get(parameter.target.variable.0 as usize)
+                    .is_some_and(|variable| variable.reference)
+            })
+        {
+            self.reject_excess_user_arguments(
+                arguments.len().saturating_sub(1),
+                function.parameters.len(),
+                location,
+                || format!("{name} supplies too many arguments"),
+            );
+            let actuals =
+                Self::method_statement_arguments(arguments.get(1..).unwrap_or_default(), location);
+            let mode = if name.ends_with('F') {
+                erabasic_bytecode::UserCallMode::MethodDiscard
+            } else if name.contains("JUMP") {
+                erabasic_bytecode::UserCallMode::JumpProcedure
+            } else {
+                erabasic_bytecode::UserCallMode::Procedure
+            };
+            self.emit(opcode::push_string(&function.name), location);
+            self.lower_user_call_actuals(&actuals, mode, false, location);
+            return;
+        }
         let mut parameter_types =
             Vec::with_capacity(target_function.map_or(0, |function| function.parameters.len()));
         if let Some(function) = target_function {

@@ -4,6 +4,7 @@ mod native_authorization;
 mod provenance;
 mod runtime_symbols;
 mod source_map;
+mod staged_authorization;
 
 pub use provenance::{ValidatedOperandStacks, ValidatedStackState, ValidatedStackToken};
 
@@ -35,6 +36,8 @@ pub struct ValidationContext {
         BTreeMap<SymbolKey, erabasic_bytecode::RuntimeNativeAuthorization>,
     pub runtime_host_authorizations:
         BTreeMap<SymbolKey, erabasic_bytecode::RuntimeHostAuthorization>,
+    pub runtime_staged_authorizations:
+        BTreeMap<SymbolKey, erabasic_bytecode::RuntimeStagedAuthorization>,
     pub host_imports: BTreeMap<SymbolKey, HostImport>,
     pub host_capabilities: BTreeSet<HostCapability>,
     pub limits: ValidationLimits,
@@ -53,6 +56,7 @@ impl Default for ValidationContext {
             native_imports: BTreeMap::new(),
             runtime_native_authorizations: BTreeMap::new(),
             runtime_host_authorizations: BTreeMap::new(),
+            runtime_staged_authorizations: BTreeMap::new(),
             host_imports: BTreeMap::new(),
             host_capabilities: BTreeSet::new(),
             limits: ValidationLimits::default(),
@@ -178,6 +182,7 @@ fn validate_artifact(
     validate_symbols(&artifact, context, &mut diagnostics);
     native_authorization::validate(&artifact, context, &mut diagnostics);
     host_authorization::validate(&artifact, context, &mut diagnostics);
+    staged_authorization::validate(&artifact, context, &mut diagnostics);
     if let Err(message) = runtime_symbols::validate_runtime_builtins(&artifact.runtime_builtins) {
         diagnostics.push(ValidationDiagnostic::project(
             ValidationCode::InvalidOperand,
@@ -639,6 +644,11 @@ fn validate_functions(
         .iter()
         .map(|import| (import.import.key, &import.import))
         .collect();
+    let staged: BTreeMap<_, _> = artifact
+        .runtime_staged_authorizations
+        .iter()
+        .map(|authorization| (authorization.key, authorization))
+        .collect();
     let function_diagnostics = artifact
         .functions
         .par_iter()
@@ -650,6 +660,7 @@ fn validate_functions(
                 &functions,
                 &native,
                 &host,
+                &staged,
                 context,
                 &mut diagnostics,
             );
@@ -664,22 +675,16 @@ fn validate_functions(
     ValidatedOperandStacks::new(stacks)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn validate_function(
+fn validate_function_header(
     function: &BytecodeFunction,
-    globals: &BTreeMap<SymbolKey, &erabasic_bytecode::BytecodeGlobal>,
-    functions: &BTreeMap<SymbolKey, &BytecodeFunction>,
-    native: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
-    host: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
-    _context: &ValidationContext,
     diagnostics: &mut Vec<ValidationDiagnostic>,
-) -> provenance::FunctionStackProvenance {
+) -> Option<instructions::ProbeIndex> {
     if function.code.is_empty() {
         diagnostics.push(ValidationDiagnostic::project(
             ValidationCode::InvalidControlFlow,
             format!("function {} has no instructions", function.name),
         ));
-        return provenance::FunctionStackProvenance::default();
+        return None;
     }
     let mut label_names = BTreeSet::new();
     if function.labels.iter().any(|label| {
@@ -694,10 +699,10 @@ fn validate_function(
                 function.name
             ),
         ));
-        return provenance::FunctionStackProvenance::default();
+        return None;
     }
-    let probes = match instructions::ProbeIndex::new(function) {
-        Ok(probes) => probes,
+    match instructions::ProbeIndex::new(function) {
+        Ok(probes) => Some(probes),
         Err((index, (code, message))) => {
             diagnostics.push(ValidationDiagnostic::instruction(
                 code,
@@ -705,8 +710,24 @@ fn validate_function(
                 index,
                 message,
             ));
-            return provenance::FunctionStackProvenance::default();
+            None
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_function(
+    function: &BytecodeFunction,
+    globals: &BTreeMap<SymbolKey, &erabasic_bytecode::BytecodeGlobal>,
+    functions: &BTreeMap<SymbolKey, &BytecodeFunction>,
+    native: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
+    host: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
+    staged: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeStagedAuthorization>,
+    context: &ValidationContext,
+    diagnostics: &mut Vec<ValidationDiagnostic>,
+) -> provenance::FunctionStackProvenance {
+    let Some(probes) = validate_function_header(function, diagnostics) else {
+        return provenance::FunctionStackProvenance::default();
     };
     let mut states = vec![None; function.code.len()];
     states[0] = Some(Vec::<instructions::StackValue>::new());
@@ -718,7 +739,16 @@ fn validate_function(
             continue;
         };
         let successors = match apply_instruction(
-            function, index, &mut stack, globals, functions, native, host, &probes,
+            function,
+            index,
+            &mut stack,
+            globals,
+            functions,
+            native,
+            host,
+            staged,
+            &context.runtime_staged_authorizations,
+            &probes,
         ) {
             Ok(successors) => successors,
             Err((code, message)) => {

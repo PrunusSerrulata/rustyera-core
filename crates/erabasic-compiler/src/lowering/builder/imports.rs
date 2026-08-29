@@ -24,7 +24,11 @@ impl Builder<'_> {
             Some(ExecutionBinding::Native(contract)) => {
                 self.emit_native_call(name, parameters, result, *contract, location);
             }
-            Some(ExecutionBinding::ExpressionMethod { .. }) => {
+            Some(
+                ExecutionBinding::BitArray
+                | ExecutionBinding::ArrayMatch
+                | ExecutionBinding::ExpressionMethod { .. },
+            ) => {
                 self.diagnostics.push(CompilerDiagnostic::at(
                     CompilerDiagnosticCode::InvalidHir,
                     location,

@@ -21,7 +21,7 @@ pub use self::model::{
 };
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"RERAVMS\0";
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 17;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 18;
 const SNAPSHOT_HEADER_BYTES: usize = 60;
 const SNAPSHOT_COMPRESSION_LEVEL: i32 = 1;
 
@@ -389,6 +389,16 @@ impl Vm {
         if !self.memory.legacy.is_empty() {
             blockers.push(SnapshotBlocker::LegacyGenerationState);
         }
+        if !natives.protected_map_roots().is_empty() {
+            blockers.push(SnapshotBlocker::NativeService(
+                "isolated candidate MAP roots cannot be serialized".into(),
+            ));
+        }
+        if let Err(error) = natives.retain_map_leases(
+            &crate::interpreter::map_calls::live_map_leases(self.fibers.values()),
+        ) {
+            blockers.push(SnapshotBlocker::NativeService(error.to_string()));
+        }
         if let Err(error) = natives.snapshots() {
             blockers.push(SnapshotBlocker::NativeService(error));
         }
@@ -406,6 +416,17 @@ impl Vm {
     /// Returns an error when any fiber, reload, generation, host wait, or native
     /// service makes the current state unstable.
     pub fn snapshot(&self, natives: &NativeServiceRegistry) -> Result<VmSnapshot, VmError> {
+        if !self.memory.array_leases.protected.is_empty() {
+            return Err(VmError::Snapshot(
+                "isolated candidate array roots cannot be serialized".into(),
+            ));
+        }
+        if !natives.protected_map_roots().is_empty() {
+            return Err(VmError::Snapshot(
+                "isolated candidate MAP roots cannot be serialized".into(),
+            ));
+        }
+        self.validate_bit_leases()?;
         if let SnapshotEligibility::Ineligible(blockers) = self.snapshot_eligibility(natives) {
             return Err(VmError::Snapshot(format!(
                 "VM is not at a stable snapshot point: {blockers:?}"
@@ -440,6 +461,17 @@ impl Vm {
     /// Returns an error when the VM is not snapshot-eligible, a native service
     /// cannot be captured, or the payload cannot be serialized.
     pub fn encode_snapshot(&self, natives: &NativeServiceRegistry) -> Result<Vec<u8>, VmError> {
+        if !self.memory.array_leases.protected.is_empty() {
+            return Err(VmError::Snapshot(
+                "isolated candidate array roots cannot be serialized".into(),
+            ));
+        }
+        if !natives.protected_map_roots().is_empty() {
+            return Err(VmError::Snapshot(
+                "isolated candidate MAP roots cannot be serialized".into(),
+            ));
+        }
+        self.validate_bit_leases()?;
         if let SnapshotEligibility::Ineligible(blockers) = self.snapshot_eligibility(natives) {
             return Err(VmError::Snapshot(format!(
                 "VM is not at a stable snapshot point: {blockers:?}"
@@ -522,6 +554,11 @@ impl Vm {
                 }
             }
         }
+        NativeServiceRegistry::validate_map_snapshot(
+            &snapshot.native_states,
+            &crate::interpreter::map_calls::live_map_leases(snapshot.fibers.values()),
+        )
+        .map_err(VmError::Snapshot)?;
         snapshot
             .memory
             .materialize_snapshot()
@@ -595,9 +632,15 @@ impl Vm {
 }
 
 fn validate_restored_continuations(vm: &Vm) -> Result<(), VmError> {
+    vm.validate_bit_leases()?;
     for fiber in vm.fibers.values() {
         for frame in &fiber.frames {
-            if !vm.valid_frame_references(fiber, frame)
+            if !vm.valid_frame_match_calls(fiber, frame)
+                || frame
+                    .runtime_form
+                    .as_ref()
+                    .is_some_and(|form| !form.valid_match_tasks(vm, fiber))
+                || !vm.valid_frame_references(fiber, frame)
                 || !vm.valid_frame_user_calls(fiber, frame)
                 || !vm.valid_frame_user_call_origin(fiber, frame)
             {
@@ -612,6 +655,11 @@ fn validate_restored_continuations(vm: &Vm) -> Result<(), VmError> {
             {
                 return Err(VmError::Snapshot(
                     "snapshot EXISTVAR probe state is invalid".into(),
+                ));
+            }
+            if !crate::interpreter::map_calls::valid_map_calls(vm, fiber, frame) {
+                return Err(VmError::Snapshot(
+                    "snapshot MAP call state is invalid".into(),
                 ));
             }
             if let Some(continuation) = &frame.runtime_form
@@ -661,6 +709,24 @@ fn validate_snapshot(
     config: VmConfig,
 ) -> Result<(), VmError> {
     validate_compatibility_warning_sites(snapshot, artifact)?;
+    let detached_bytes =
+        snapshot
+            .memory
+            .array_leases
+            .detached
+            .values()
+            .try_fold(0_usize, |total, cell| {
+                cell.len()
+                    .checked_mul(std::mem::size_of::<i64>())
+                    .and_then(|bytes| total.checked_add(bytes))
+            });
+    if detached_bytes.is_none_or(|bytes| bytes > config.maximum_snapshot_bytes)
+        || snapshot.memory.array_leases.retained_bytes() > config.maximum_snapshot_bytes
+    {
+        return Err(VmError::Snapshot(
+            "array lease storage exceeds snapshot memory limit".into(),
+        ));
+    }
     if !snapshot.memory.legacy.is_empty() {
         return Err(VmError::Snapshot(
             "stable snapshots cannot contain legacy-generation storage".into(),

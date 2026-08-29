@@ -239,10 +239,7 @@ fn resolve_supplied_method_argument(
             _ => return Err(invalid("method reference source is not a scalar array")),
         };
         if !source.mutable
-            || matches!(
-                source.storage,
-                BytecodeStorage::Character | BytecodeStorage::Calculated
-            )
+            || matches!(source.storage, BytecodeStorage::Calculated)
             || source.dimensions.is_empty()
             || source.dimensions.len() != destination.dimensions.len()
             || parameter.value_type != expected
@@ -299,96 +296,47 @@ pub(crate) fn exists_method(
 }
 
 impl Vm {
-    /// Follow only existing whole-array REF bindings; reject stale owners, cycles and slices.
+    /// Resolve a formal alias to its scoped backing without reselecting a character.
     pub(crate) fn user_call_array_place(
         &self,
         fiber: &Fiber,
-        generation: GenerationId,
+        _generation: GenerationId,
         place: &PlaceDescriptor,
     ) -> Result<PlaceDescriptor, VmError> {
-        let program = self
-            .generations
-            .get(&generation)
-            .ok_or_else(|| invalid("method reference generation is missing"))?;
         let mut current = place.clone();
-        let source = program
-            .global(place.variable)
-            .ok_or_else(|| invalid("method reference source is missing"))?;
-        let source_type = source.value_type;
-        let source_rank = source.dimensions.len();
-        let mut alias_owner = None;
-        let mut seen = std::collections::BTreeSet::new();
+        let mut owners = std::collections::BTreeSet::new();
         loop {
-            if current.fiber != Some(fiber.id)
-                || current.character.is_some()
-                || !current.indices.is_empty()
-                || !seen.insert((current.variable, current.frame))
-            {
-                return Err(invalid(
-                    "method reference is stale, cyclic, or not a whole array",
-                ));
+            if current.fiber != Some(fiber.id) || !current.indices.is_empty() {
+                return Err(invalid("REF does not identify a whole array in this fiber"));
             }
-            let definition = program
-                .global(current.variable)
-                .ok_or_else(|| invalid("method reference variable is missing"))?;
-            if definition.value_type != source_type
-                || !definition.mutable
-                || definition.dimensions.is_empty()
-                || definition.dimensions.len() != source_rank
-                || matches!(
-                    definition.storage,
-                    BytecodeStorage::Character | BytecodeStorage::Calculated
-                )
-            {
-                return Err(invalid(
-                    "method reference requires a mutable non-character array",
-                ));
+            if current.backing.is_some() {
+                self.array_backing_record(fiber, &current)?;
+                return Ok(current);
             }
-            if definition.storage == BytecodeStorage::FunctionLocal {
-                let (owner_index, owner) = fiber
-                    .frames
-                    .iter()
-                    .enumerate()
-                    .find(|(_, frame)| {
-                        Some(frame.id) == current.frame
-                            && frame.generation == generation
-                            && Some(frame.function) == definition.owner
-                    })
-                    .ok_or_else(|| invalid("method reference owner frame is missing"))?;
-                if alias_owner.is_some_and(|previous| owner_index >= previous) {
-                    return Err(invalid(
-                        "method reference does not point to an ancestor frame",
-                    ));
-                }
-                let cell = owner
-                    .locals
-                    .get(&current.variable)
-                    .ok_or_else(|| invalid("method reference local storage is missing"))?;
-                if let Some(value @ (VmValue::IntegerPlace(_) | VmValue::StringPlace(_))) =
-                    cell.first()
+            let (generation, definition) = self.place_definition(fiber, &current)?;
+            let program = self
+                .generations
+                .get(&generation)
+                .ok_or_else(|| invalid("REF generation is missing"))?;
+            if !program.is_reference_variable(definition.key) {
+                return Err(invalid("REF alias is not a captured backing"));
+            }
+            let frame = super::find_frame(fiber, current.frame, definition.owner)?;
+            if !owners.insert((frame.id, definition.key)) {
+                return Err(invalid("REF alias cycle"));
+            }
+            current = match frame
+                .locals
+                .get(&definition.key)
+                .and_then(crate::VariableCell::first)
+            {
+                Some(VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound))
+                    if bound.backing.is_some() =>
                 {
-                    let expected = match source_type {
-                        BytecodeType::Integer => BytecodeType::IntegerPlace,
-                        BytecodeType::String => BytecodeType::StringPlace,
-                        _ => return Err(invalid("method reference source is not scalar")),
-                    };
-                    if value.value_type() != expected {
-                        return Err(invalid("method alias storage has an incompatible type"));
-                    }
-                    if let VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound) = value {
-                        alias_owner = Some(owner_index);
-                        current = *bound;
-                        continue;
-                    }
+                    *bound
                 }
-            } else if current.frame.is_some()
-                || self.memory.cell(generation, definition, 0).is_none()
-            {
-                return Err(invalid(
-                    "method reference storage or frame identity is invalid",
-                ));
-            }
-            return Ok(current);
+                _ => return Err(super::references::unbound_reference()),
+            };
         }
     }
 
@@ -440,8 +388,10 @@ impl Vm {
             .ok_or_else(|| invalid("method variable is missing"))?;
         let place = PlaceDescriptor {
             variable,
+            backing: None,
             indices: Vec::new(),
-            character: None,
+            character: (definition.storage == BytecodeStorage::Character)
+                .then(|| self.target_character_for_generation(generation) as u64),
             fiber: Some(fiber.id),
             frame: (definition.storage == BytecodeStorage::FunctionLocal).then_some(owner),
         };
@@ -452,14 +402,16 @@ impl Vm {
         })
     }
 
+    #[allow(clippy::too_many_arguments)] // Call ownership and origin are independent validated inputs.
     pub(crate) fn capture_user_argument(
-        &self,
+        &mut self,
         fiber: &Fiber,
         owner: crate::FrameId,
         method: &ResolvedUserCall,
         specs: &[UserArgumentSpec],
         slot: usize,
         actual: VmValue,
+        origin: super::array_leases::ArrayLeaseOrigin,
     ) -> Result<VmValue, VmError> {
         let program = self
             .generations
@@ -507,42 +459,46 @@ impl Vm {
                 let UserArgumentSpec::Variable(variable) = spec else {
                     return Err(invalid("reference argument has no variable identity"));
                 };
-                let expected =
-                    self.user_call_variable_place(fiber, method.generation, owner, *variable)?;
-                let expected_type = expected.value_type();
-                if actual.value_type() != expected_type {
-                    return Err(invalid(
-                        "captured method reference has an incompatible type",
-                    ));
-                }
-                let (VmValue::IntegerPlace(expected) | VmValue::StringPlace(expected)) = expected
-                else {
-                    unreachable!("helper returns a place");
-                };
-                let (VmValue::IntegerPlace(actual) | VmValue::StringPlace(actual)) = actual else {
-                    return Err(invalid("captured method reference is not a place"));
-                };
-                let expected = self.user_call_array_place(fiber, method.generation, &expected)?;
-                let actual = self.user_call_array_place(fiber, method.generation, &actual)?;
-                if actual != expected {
-                    return Err(invalid(
-                        "captured reference does not match the argument variable",
-                    ));
-                }
-                let target = program
-                    .function(method.function)
-                    .ok_or(VmError::MissingFunction(method.function))?;
-                let formal = program
-                    .global(target.parameters[slot].key)
-                    .ok_or_else(|| invalid("method formal is missing"))?;
-                let backing = program
-                    .global(actual.variable)
-                    .ok_or_else(|| invalid("method backing array is missing"))?;
-                if backing.dimensions.len() != formal.dimensions.len()
-                    || backing.value_type != formal.value_type
+                let expected_type = match program
+                    .global(*variable)
+                    .map(|definition| definition.value_type)
                 {
+                    Some(BytecodeType::Integer) => BytecodeType::IntegerPlace,
+                    Some(BytecodeType::String) => BytecodeType::StringPlace,
+                    _ => return Err(invalid("REF source scalar type is missing")),
+                };
+                let formal = program
+                    .function(method.function)
+                    .and_then(|function| function.parameters.get(slot))
+                    .and_then(|parameter| program.global(parameter.key))
+                    .ok_or_else(|| invalid("REF formal is missing"))?;
+                let formal_type = formal.value_type;
+                let formal_rank = formal.dimensions.len();
+                if actual.value_type() != expected_type {
+                    return Err(invalid("captured REF type differs"));
+                }
+                let (VmValue::IntegerPlace(mut actual) | VmValue::StringPlace(mut actual)) = actual
+                else {
+                    return Err(invalid("captured REF is not a place"));
+                };
+                if actual.variable != *variable
+                    || actual.backing.is_some()
+                    || actual.fiber != Some(fiber.id)
+                    || actual.frame.is_some_and(|frame| frame != owner)
+                {
+                    return Err(invalid("captured REF differs from its source slot/owner"));
+                }
+                // MakePlace only evaluates the selected character. Its synthetic zero element
+                // indices are discarded; ordinary source indices were never executed.
+                actual.indices.clear();
+                let actual = self.capture_array_reference(fiber, &actual, origin)?;
+                let (_, cell) = self.array_backing_record(fiber, &actual)?;
+                if cell.value_type != formal_type || cell.dimensions.len() != formal_rank {
+                    self.memory
+                        .array_leases
+                        .release(actual.backing.expect("capture has identity"));
                     return Err(invalid(
-                        "method backing array has an incompatible rank or type",
+                        "captured REF backing rank/type differs from formal",
                     ));
                 }
                 Ok(match expected_type {
@@ -578,26 +534,21 @@ impl Vm {
         let (VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) = value else {
             return Err(invalid("captured reference is not a place"));
         };
-        let backing = self.user_call_array_place(fiber, call.generation, place)?;
-        if backing != **place {
-            return Err(invalid(
-                "captured reference is an alias instead of a fixed backing",
-            ));
+        if !place.indices.is_empty() {
+            return Err(invalid("captured REF contains element indices"));
         }
-        let definition = program
-            .global(backing.variable)
-            .ok_or_else(|| invalid("captured reference backing is missing"))?;
-        let expected = match definition.value_type {
+        let (_, backing) = self.array_backing_record(fiber, place)?;
+        let expected = match backing.value_type {
             BytecodeType::Integer => BytecodeType::IntegerPlace,
             BytecodeType::String => BytecodeType::StringPlace,
-            _ => return Err(invalid("captured reference backing is not scalar")),
+            _ => return Err(invalid("captured REF backing is not scalar")),
         };
         if value.value_type() != expected
-            || definition.value_type != formal.value_type
-            || definition.dimensions.len() != formal.dimensions.len()
+            || backing.value_type != formal.value_type
+            || backing.dimensions.len() != formal.dimensions.len()
         {
             return Err(invalid(
-                "captured reference backing has an incompatible rank or type",
+                "captured REF backing has an incompatible rank or type",
             ));
         }
         Ok(())

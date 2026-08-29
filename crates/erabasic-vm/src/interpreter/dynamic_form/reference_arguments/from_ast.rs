@@ -129,6 +129,7 @@ impl<'a> GraphBuilder<'a> {
         };
         self.push(kind, value_type, expression.span)
     }
+    #[allow(clippy::too_many_lines)] // One pass binds a call node and its argument-place contract.
     fn call(
         &mut self,
         name: &str,
@@ -195,13 +196,39 @@ impl<'a> GraphBuilder<'a> {
                         .transpose()
                 })
                 .collect::<Result<Vec<_>, StepError>>()?;
+            let staged = erabasic_bytecode::RuntimeStagedKind::from_name(name);
             let host = self
                 .program
                 .artifact
                 .runtime_host_authorizations
                 .iter()
                 .any(|family| family.name.eq_ignore_ascii_case(name));
-            let (target, parameters) = if host {
+            let (target, parameters) = if let Some(kind) = staged {
+                let family = self
+                    .program
+                    .artifact
+                    .runtime_staged_authorizations
+                    .iter()
+                    .find(|family| family.kind == kind && family.name.eq_ignore_ascii_case(name))
+                    .ok_or_else(|| invalid("runtime staged term lacks a trusted authorization"))?;
+                if !family.accepts(&shapes) {
+                    return Err(invalid("runtime staged term has incompatible arguments"));
+                }
+                for (slot, argument) in arguments.iter_mut().enumerate() {
+                    argument.place = match kind {
+                        erabasic_bytecode::RuntimeStagedKind::Bit(_) => slot == 0,
+                        erabasic_bytecode::RuntimeStagedKind::MatchAll => slot == 0 || slot == 4,
+                        erabasic_bytecode::RuntimeStagedKind::MatchAllEx => slot == 4,
+                    };
+                }
+                (
+                    ReferenceTermCall::Staged {
+                        key: family.key,
+                        name: name.to_ascii_uppercase(),
+                    },
+                    Vec::new(),
+                )
+            } else if host {
                 let bound = super::super::host_calls::bind(self.program, name, &shapes)?;
                 (
                     ReferenceTermCall::Host {
@@ -220,11 +247,13 @@ impl<'a> GraphBuilder<'a> {
                     bound.import.parameters,
                 )
             };
-            for (argument, parameter) in arguments.iter_mut().zip(&parameters) {
-                argument.place = matches!(
-                    parameter,
-                    BytecodeType::IntegerPlace | BytecodeType::StringPlace
-                );
+            if staged.is_none() {
+                for (argument, parameter) in arguments.iter_mut().zip(&parameters) {
+                    argument.place = matches!(
+                        parameter,
+                        BytecodeType::IntegerPlace | BytecodeType::StringPlace
+                    );
+                }
             }
             target
         };

@@ -196,6 +196,10 @@ impl CooperativeCompiledCacheEncoder {
                         .artifact
                         .artifact()
                         .runtime_host_authorizations,
+                    runtime_staged_authorizations: &self
+                        .artifact
+                        .artifact()
+                        .runtime_staged_authorizations,
                     native_imports: &self.artifact.artifact().native_imports,
                     host_imports: &self.artifact.artifact().host_imports,
                     event_groups: &self.artifact.artifact().event_groups,

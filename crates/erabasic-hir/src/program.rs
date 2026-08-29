@@ -17,6 +17,20 @@ pub enum VariableScope {
     Parameter,
 }
 
+/// Reference name lookup fails before argument evaluation at these source-owned sites.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum MatchNameRejectionKind {
+    Script,
+    Internal,
+}
+
+/// CharacterData.Dispose clears only its built-in one-dimensional sparse arrays.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum CharacterArrayDisposal {
+    Preserve,
+    ClearSparse,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Variable {
     pub id: VariableId,
@@ -27,6 +41,9 @@ pub struct Variable {
     pub persistence: Persistence,
     pub mutable: bool,
     pub reference: bool,
+    /// Captured from the token declaration before per-function LOCAL resizing.
+    pub match_name_rejection: Option<MatchNameRejectionKind>,
+    pub character_disposal: CharacterArrayDisposal,
     pub reference_semantics: ReferenceVariableSemantics,
     pub static_lifetime: bool,
     pub initial_values: Vec<ConstantValue>,
@@ -63,6 +80,8 @@ pub struct CallCompatibility {
     pub compatible_rand: bool,
     /// Do not infer omitted character indices in runtime expression probes.
     pub system_no_target: bool,
+    /// Config.IgnoreCase for runtime variable-name token lookup.
+    pub ignore_case: bool,
 }
 
 /// Reference event modifiers retained after parsing. They affect dispatch order rather

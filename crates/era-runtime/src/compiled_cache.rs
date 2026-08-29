@@ -57,7 +57,10 @@ const PROFILELESS_PROJECT_VERSION: u8 = 8;
 const PROFILED_PROJECT_VERSION: u8 = 9;
 const ARITHMETIC_PROJECT_VERSION: u8 = 10;
 const CALL_PROJECT_VERSION: u8 = 11;
-const VERSION: u8 = 12;
+/// Last source-extractable project container before Batch 2 data APIs changed bytecode.
+/// Compiled caches at this version are deliberately rebuilt instead of decoded.
+const DATA_PROJECT_VERSION: u8 = 12;
+const VERSION: u8 = 13;
 const PROJECT_COMPRESSION_LEVEL: i32 = 3;
 const CACHE_COMPRESSION_LEVEL: i32 = 1;
 const TARGET_PARALLEL_SECTIONS: usize = 32;
@@ -107,6 +110,7 @@ struct CompiledCacheMetadataRef<'a> {
     runtime_variables: &'a [erabasic_bytecode::RuntimeVariableSymbol],
     runtime_native_authorizations: &'a [erabasic_bytecode::RuntimeNativeAuthorization],
     runtime_host_authorizations: &'a [erabasic_bytecode::RuntimeHostAuthorization],
+    runtime_staged_authorizations: &'a [erabasic_bytecode::RuntimeStagedAuthorization],
     native_imports: &'a [NativeImport],
     host_imports: &'a [HostImport],
     event_groups: &'a [BytecodeEventGroup],
@@ -120,6 +124,7 @@ struct CompiledCacheMetadata {
     runtime_variables: Vec<erabasic_bytecode::RuntimeVariableSymbol>,
     runtime_native_authorizations: Vec<erabasic_bytecode::RuntimeNativeAuthorization>,
     runtime_host_authorizations: Vec<erabasic_bytecode::RuntimeHostAuthorization>,
+    runtime_staged_authorizations: Vec<erabasic_bytecode::RuntimeStagedAuthorization>,
     native_imports: Vec<NativeImport>,
     host_imports: Vec<HostImport>,
     event_groups: Vec<BytecodeEventGroup>,

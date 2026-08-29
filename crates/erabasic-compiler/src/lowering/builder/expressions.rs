@@ -70,6 +70,15 @@ impl Builder<'_> {
             HirExprKind::Call { target, arguments } => {
                 // These built-ins must resolve the method before evaluating fallback or actuals.
                 if let CallTarget::Builtin { name } = target {
+                    if let Some(result) = self.lower_map_call(name, arguments, location) {
+                        return result;
+                    }
+                    if let Some(result) = self.lower_bit_call(name, arguments, location) {
+                        return result;
+                    }
+                    if let Some(result) = self.lower_match(name, arguments, location) {
+                        return result;
+                    }
                     if let Some(result) = self.lower_existvar(name, arguments, location) {
                         return result;
                     }
@@ -134,6 +143,26 @@ impl Builder<'_> {
                                     )
                                 },
                             );
+                            if target_function.parameters.iter().any(|parameter| {
+                                self.context
+                                    .program
+                                    .variables
+                                    .get(parameter.target.variable.0 as usize)
+                                    .is_some_and(|variable| variable.reference)
+                            }) {
+                                let result = match target_function.return_type {
+                                    SemanticType::String => erabasic_bytecode::MethodResult::String,
+                                    _ => erabasic_bytecode::MethodResult::Integer,
+                                };
+                                self.emit(opcode::push_string(&target_function.name), location);
+                                self.lower_user_call_actuals(
+                                    arguments,
+                                    result.into(),
+                                    false,
+                                    location,
+                                );
+                                return result.bytecode_type();
+                            }
                             let mut user_parameter_types = Vec::new();
                             for (index, parameter) in target_function.parameters.iter().enumerate()
                             {

@@ -15,6 +15,7 @@ use crate::{
 };
 
 mod arithmetic;
+pub(crate) mod bit_calls;
 mod character_ops;
 pub(crate) mod compatibility_diagnostics;
 mod dispatch;
@@ -24,6 +25,8 @@ mod extended_ops;
 mod fastpaths;
 mod host_calls;
 mod lookup;
+pub(crate) mod map_calls;
+pub(crate) mod matching;
 mod native_ops;
 mod operand;
 mod recovery;
@@ -61,6 +64,12 @@ enum StepOutcome {
         notification: crate::VmDiagnosticNotification,
     },
     BulkProgress(u64),
+    // Work completed before a failure still consumes this slice's budget. Keep
+    // this carrier internal; the public failure and its catch category are unchanged.
+    BulkFailure {
+        additional_instructions: u64,
+        error: StepError,
+    },
     DeferredNative,
     Yielded,
     Blocked,
@@ -148,6 +157,15 @@ impl Vm {
             .ok_or_else(|| StepError::new(VmFaultCode::InvalidInstruction, "missing frame"))?;
         frame.instruction = frame.instruction.saturating_add(1);
         if let Some(outcome) = self.dispatch_basic(fiber, position, opcode, policy)? {
+            return self.finish_dispatch(fiber, outcome);
+        }
+        if let Some(outcome) = self.dispatch_map_calls(fiber, position, opcode, natives)? {
+            return Ok(outcome);
+        }
+        if let Some(outcome) = self.dispatch_bit_calls(fiber, position, opcode, policy)? {
+            return Ok(outcome);
+        }
+        if let Some(outcome) = self.dispatch_match(fiber, position, opcode, policy)? {
             return self.finish_dispatch(fiber, outcome);
         }
         if let Some(outcome) = self.dispatch_existvar(fiber, position, opcode)? {

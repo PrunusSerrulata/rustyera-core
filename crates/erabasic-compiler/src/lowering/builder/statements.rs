@@ -25,6 +25,24 @@ impl Builder<'_> {
             return;
         }
         if let InstructionTarget::BuiltinMethod { return_type, .. } = target {
+            if erabasic_bytecode::MapCallKind::from_name(name).is_some() {
+                let arguments = Self::method_statement_arguments(arguments, location);
+                self.lower_map_call(name, &arguments, location);
+                self.store_method_result(*return_type, location);
+                return;
+            }
+            if erabasic_bytecode::BitOperation::from_name(name).is_some() {
+                let arguments = Self::method_statement_arguments(arguments, location);
+                self.lower_bit_call(name, &arguments, location);
+                self.store_method_result(*return_type, location);
+                return;
+            }
+            if matches!(name, "MATCHALL" | "MATCHALLEX") {
+                let arguments = Self::method_statement_arguments(arguments, location);
+                self.lower_match(name, &arguments, location);
+                self.store_method_result(*return_type, location);
+                return;
+            }
             if matches!(name, "HTML_STRINGLEN" | "HTML_STRINGLINES") {
                 let arguments = Self::method_statement_arguments(arguments, location);
                 self.lower_html_query(name, &arguments, location);

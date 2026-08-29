@@ -17,6 +17,8 @@ pub(super) struct RuntimeCallSite {
 pub(super) enum RuntimeBoundCall {
     Native(BoundRuntimeNative),
     Host(BoundRuntimeHost),
+    Bit(erabasic_bytecode::BitCallSpec),
+    Match(erabasic_bytecode::MatchCallSpec),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -272,18 +274,38 @@ impl RuntimeFormContinuation {
         let keep = previous
             .and_then(|id| self.call_plans.iter().position(|plan| plan.id == id))
             .map_or(0, |index| index + 1);
-        if self.host_call_sites().any(|site| {
-            self.call_plans[keep..]
-                .iter()
-                .any(|plan| plan.id == site.plan)
-        }) {
+        if self
+            .host_call_sites()
+            .chain(self.staged_call_sites())
+            .any(|site| {
+                self.call_plans[keep..]
+                    .iter()
+                    .any(|plan| plan.id == site.plan)
+            })
+        {
             return Err(invalid(
-                "runtime source plan would retire a live Host scope",
+                "runtime source plan would retire a live operation scope",
             ));
         }
         self.call_plans.truncate(keep);
         self.current_call_plan = previous;
         Ok(())
+    }
+    fn staged_call_sites(&self) -> impl Iterator<Item = RuntimeCallSite> + '_ {
+        self.work.iter().filter_map(|task| match task {
+            RuntimeFormTask::MapCapture { site, .. } | RuntimeFormTask::BitCapture { site, .. } => {
+                Some(*site)
+            }
+            RuntimeFormTask::MapFinish(call) | RuntimeFormTask::MapValuesEnabled { call, .. } => {
+                Some(call.site)
+            }
+            RuntimeFormTask::BitFinish(call) => Some(call.site),
+            RuntimeFormTask::MatchBegin(call)
+            | RuntimeFormTask::MatchEnd(call)
+            | RuntimeFormTask::MatchNeedle(call)
+            | RuntimeFormTask::MatchScan(call) => Some(call.site),
+            _ => None,
+        })
     }
     pub(super) fn valid_call_plans(&self, vm: &Vm) -> bool {
         let Some(program) = vm.generations.get(&self.generation) else {
@@ -348,6 +370,17 @@ impl RuntimeFormContinuation {
                 let (import, omitted) = match bound {
                     RuntimeBoundCall::Native(bound) => (&bound.import, &bound.omitted_arguments),
                     RuntimeBoundCall::Host(bound) => (&bound.import, &bound.omitted_arguments),
+                    RuntimeBoundCall::Bit(_) => {
+                        slots = slots.checked_add(1)?;
+                        continue;
+                    }
+                    RuntimeBoundCall::Match(spec) => {
+                        slots = slots.checked_add(1)?;
+                        if let erabasic_bytecode::MatchInput::Name(name) = &spec.input {
+                            bytes = bytes.checked_add(name.len())?;
+                        }
+                        continue;
+                    }
                 };
                 slots = slots
                     .checked_add(import.parameters.len())?

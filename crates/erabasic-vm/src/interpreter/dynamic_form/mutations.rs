@@ -142,6 +142,7 @@ impl RuntimeFormContinuation {
             &indices
         };
         let place = crate::PlaceDescriptor {
+            backing: None,
             variable,
             indices: value_indices.to_vec(),
             character,

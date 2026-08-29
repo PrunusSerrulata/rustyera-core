@@ -97,6 +97,8 @@ pub struct BytecodeCallCompatibility {
     pub compatible_rand: bool,
     /// Do not infer omitted character indices in runtime expression probes.
     pub system_no_target: bool,
+    /// Config.IgnoreCase for runtime variable-name token lookup.
+    pub ignore_case: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -185,6 +187,7 @@ pub struct BytecodeArtifact {
     pub runtime_variables: Vec<crate::RuntimeVariableSymbol>,
     pub runtime_native_authorizations: Vec<crate::RuntimeNativeAuthorization>,
     pub runtime_host_authorizations: Vec<crate::RuntimeHostAuthorization>,
+    pub runtime_staged_authorizations: Vec<crate::RuntimeStagedAuthorization>,
     pub project_data: ProjectData,
     pub globals: Vec<BytecodeGlobal>,
     pub native_imports: Vec<NativeImport>,
@@ -203,6 +206,7 @@ impl BytecodeArtifact {
         sort_if_needed_by_key(&mut self.runtime_variables, |symbol| symbol.key);
         sort_if_needed_by_key(&mut self.runtime_native_authorizations, |symbol| symbol.key);
         sort_if_needed_by_key(&mut self.runtime_host_authorizations, |symbol| symbol.key);
+        sort_if_needed_by_key(&mut self.runtime_staged_authorizations, |symbol| symbol.key);
         sort_if_needed_by_key(&mut self.globals, |global| global.key);
         sort_if_needed_by_key(&mut self.native_imports, |import| import.import.key);
         sort_if_needed_by_key(&mut self.host_imports, |import| import.import.key);
@@ -300,6 +304,7 @@ impl BytecodeArtifact {
                                         &self.runtime_variables,
                                         &self.runtime_native_authorizations,
                                         &self.runtime_host_authorizations,
+                                        &self.runtime_staged_authorizations,
                                     ),
                                 )
                             },

@@ -140,6 +140,10 @@ pub(super) fn owns_native(name: &str) -> bool {
             | "nosames"
             | "allsames"
             | "charanum"
+            | "getcsvnobyname"
+            | "getcsvnobycallname"
+            | "getcsvnobynickname"
+            | "getcsvnobymastername"
             | "getchara"
             | "getspchara"
             | "existcsv"
@@ -197,6 +201,10 @@ fn is_character_query(native_name: &str) -> bool {
     matches!(
         native_name,
         "charanum"
+            | "getcsvnobyname"
+            | "getcsvnobycallname"
+            | "getcsvnobynickname"
+            | "getcsvnobymastername"
             | "getchara"
             | "getspchara"
             | "existcsv"

@@ -165,7 +165,18 @@ impl Vm {
                 }
                 let actual = pop(&mut fiber.frames.last_mut().expect("caller exists").stack)?;
                 let value = self
-                    .capture_user_argument(fiber, owner, call, &spec.arguments, slot, actual)
+                    .capture_user_argument(
+                        fiber,
+                        owner,
+                        call,
+                        &spec.arguments,
+                        slot,
+                        actual,
+                        crate::state::array_leases::ArrayLeaseOrigin::UserBytecode {
+                            resolve: read_u32(position.encoded.payload, 0)? as usize,
+                            slot,
+                        },
+                    )
                     .map_err(map_vm_error)?;
                 let pending = fiber
                     .frames

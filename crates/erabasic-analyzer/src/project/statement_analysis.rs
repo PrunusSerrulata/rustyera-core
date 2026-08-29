@@ -562,6 +562,22 @@ fn analyze_instruction(
         diagnostics,
         index_resolver,
     };
+    if matches!(key.as_str(), "MATCHALL" | "MATCHALLEX") && method_signature.is_some() {
+        analyzer.check_match_source(
+            &key,
+            &arguments
+                .iter()
+                .map(|arg| match arg {
+                    Argument::Expression(expr)
+                    | Argument::MixedExpression {
+                        expression: expr, ..
+                    } => Some(expr),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            SourceLocation::new(source.source.id, statement.span),
+        );
+    }
     let mut lowered = Vec::new();
     for (index, argument) in arguments.iter().enumerate() {
         if static_target && index == 0 {
@@ -818,6 +834,16 @@ fn analyze_instruction(
                 SourceLocation::new(source.source.id, statement.span),
             );
         }
+        analyzer.check_map_output(
+            &key,
+            &expression_arguments,
+            SourceLocation::new(source.source.id, statement.span),
+        );
+        analyzer.check_bit_call(
+            &key,
+            &expression_arguments,
+            SourceLocation::new(source.source.id, statement.span),
+        );
         if key.contains("FORM") && !key.contains("FORMS") {
             if lowered.len() < signature.minimum_arguments {
                 diagnostics.push(AnalyzerDiagnostic::at(

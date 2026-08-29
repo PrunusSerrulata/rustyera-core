@@ -294,7 +294,10 @@ impl PreparedReferenceArguments {
             ReferenceTermKind::Value(_)
             | ReferenceTermKind::Postfix { .. }
             | ReferenceTermKind::Call {
-                target: ReferenceTermCall::User { .. } | ReferenceTermCall::Intrinsic { .. },
+                target:
+                    ReferenceTermCall::User { .. }
+                    | ReferenceTermCall::Intrinsic { .. }
+                    | ReferenceTermCall::Staged { .. },
                 ..
             } => false,
             ReferenceTermKind::Call {

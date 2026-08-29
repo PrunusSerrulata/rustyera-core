@@ -46,6 +46,9 @@ pub(crate) fn make_frame<'a>(
         runtime_form: None,
         user_calls: Vec::new(),
         existvar_checks: Vec::new(),
+        map_calls: Vec::new(),
+        bit_calls: Vec::new(),
+        match_calls: Vec::new(),
     }
 }
 

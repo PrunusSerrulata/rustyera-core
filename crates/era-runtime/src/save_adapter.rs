@@ -496,6 +496,7 @@ mod tests {
             runtime_builtins: Vec::new(),
             runtime_native_authorizations: Vec::new(),
             runtime_host_authorizations: Vec::new(),
+            runtime_staged_authorizations: Vec::new(),
             runtime_variables: Vec::new(),
             project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
                 .data
@@ -635,6 +636,7 @@ mod tests {
             runtime_builtins: Vec::new(),
             runtime_native_authorizations: Vec::new(),
             runtime_host_authorizations: Vec::new(),
+            runtime_staged_authorizations: Vec::new(),
             runtime_variables: Vec::new(),
             project_data,
             globals: Vec::new(),
@@ -709,9 +711,12 @@ mod tests {
             runtime_builtins: Vec::new(),
             runtime_native_authorizations: Vec::new(),
             runtime_host_authorizations: Vec::new(),
+            runtime_staged_authorizations: Vec::new(),
             runtime_variables: definitions
                 .iter()
                 .map(|global| erabasic_bytecode::RuntimeVariableSymbol {
+                    match_name_rejection: None,
+                    character_disposal: erabasic_bytecode::CharacterArrayDisposal::Preserve,
                     key: global.key,
                     reference: false,
                     reference_semantics: erabasic_bytecode::RuntimeReferenceSemantics {

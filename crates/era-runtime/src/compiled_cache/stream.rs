@@ -1,6 +1,6 @@
 use super::{
-    ARITHMETIC_PROJECT_VERSION, CALL_PROJECT_VERSION, DecodedProjectFile, EncodedSectionRef,
-    FIXED_SECTION_COUNT, LEGACY_PROJECT_VERSION, MANIFEST_SECTION_INDEX,
+    ARITHMETIC_PROJECT_VERSION, CALL_PROJECT_VERSION, DATA_PROJECT_VERSION, DecodedProjectFile,
+    EncodedSectionRef, FIXED_SECTION_COUNT, LEGACY_PROJECT_VERSION, MANIFEST_SECTION_INDEX,
     MAXIMUM_DECODED_PAYLOAD_BYTES, PREVIOUS_PROJECT_VERSION, PROFILED_PROJECT_VERSION,
     PROFILELESS_PROJECT_VERSION, PROJECT_MAGIC, ProjectFileError, ProjectSourceIdentity,
     ProtocolBytes, StreamingConfigurationJournal, TARGET_PARALLEL_SECTIONS, VERSION, apply_journal,
@@ -229,6 +229,7 @@ impl ProjectFileStreamDecoder {
                 | PROFILED_PROJECT_VERSION
                 | ARITHMETIC_PROJECT_VERSION
                 | CALL_PROJECT_VERSION
+                | DATA_PROJECT_VERSION
                 | VERSION
         ) {
             return Err(error(&format!(

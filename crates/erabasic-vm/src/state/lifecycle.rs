@@ -18,6 +18,9 @@ impl Vm {
             if let Some(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) = cell.first() {
                 return self.place_dimensions(fiber, &place).ok();
             }
+            if program.is_reference_variable(definition.key) {
+                return None;
+            }
             return Some(cell.dimensions.clone());
         }
         if let Some(definition) = program
@@ -47,6 +50,11 @@ impl Vm {
         fiber: FiberId,
         place: &PlaceDescriptor,
     ) -> Result<Vec<u64>, VmError> {
+        if place.backing.is_some() {
+            return Err(VmError::InvalidState(
+                "Host cannot inject an array backing identity".into(),
+            ));
+        }
         let fiber = self
             .fibers
             .get(&fiber)
@@ -54,13 +62,20 @@ impl Vm {
         self.place_dimensions(fiber, place)
     }
 
-    fn place_dimensions(
+    pub(crate) fn place_dimensions(
         &self,
         fiber: &Fiber,
         place: &PlaceDescriptor,
     ) -> Result<Vec<u64>, VmError> {
         let mut place = place.clone();
         for _ in 0..64 {
+            if place.backing.is_some() {
+                return Ok(self
+                    .checked_array_backing(fiber, &place)?
+                    .1
+                    .dimensions
+                    .clone());
+            }
             if place.fiber.is_some_and(|owner| owner != fiber.id) {
                 return Err(VmError::InvalidState(
                     "place belongs to another fiber".into(),
@@ -341,6 +356,7 @@ impl Vm {
         }
         fiber.frames.clear();
         fiber.state = FiberState::Cancelled;
+        self.prune_bit_leases();
         Ok(())
     }
 
@@ -461,6 +477,7 @@ impl Vm {
             self.runnable.push_back(fiber_id);
         }
         self.fibers.insert(fiber_id, fiber);
+        self.prune_bit_leases();
         Ok(fiber_id)
     }
 

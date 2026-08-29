@@ -167,8 +167,32 @@ impl Builder<'_> {
                     slot,
                     u32::try_from(self.code.len()).unwrap_or(u32::MAX),
                 );
-                // Array REF retains the original variable; element indices are not evaluated.
-                self.emit(opcode::variable(Opcode::MakePlace, *key, 0, 0), location);
+                // Character selection is the only evaluated part of a whole-array REF.
+                // Synthetic zeros only make the existing MakePlace character encoding explicit.
+                let place = method_argument_place(argument).expect("variable spec has a place");
+                let variable = &self.context.program.variables[place.variable.0 as usize];
+                let rank = variable.dimensions.len();
+                if variable.storage == erabasic_data::StorageScope::Character
+                    && place.indices.len() > rank
+                {
+                    let Ok(index_count) = u16::try_from(rank + 1) else {
+                        self.invalid_user_call(
+                            "user-call REF rank exceeds the bytecode format",
+                            location,
+                        );
+                        return None;
+                    };
+                    self.lower_expression(&place.indices[0], location);
+                    for _ in 0..rank {
+                        self.emit(opcode::push_integer(0), location);
+                    }
+                    self.emit(
+                        opcode::variable(Opcode::MakePlace, *key, index_count, 0),
+                        location,
+                    );
+                } else {
+                    self.emit(opcode::variable(Opcode::MakePlace, *key, 0, 0), location);
+                }
                 self.emit(opcode::capture_user_argument(resolve, slot, true), location);
                 self.patch_jump(value_join, self.code.len());
             } else {

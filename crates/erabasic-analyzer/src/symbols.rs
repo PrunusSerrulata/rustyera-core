@@ -257,6 +257,24 @@ impl Symbols {
             persistence: schema.persistence,
             mutable: schema.mutable,
             reference,
+            match_name_rejection: if reference
+                || matches!(scope, VariableScope::Function | VariableScope::Parameter)
+                || schema.is_enabled()
+            {
+                None
+            } else if scope == VariableScope::EraFunction || schema.can_forbid {
+                Some(erabasic_hir::MatchNameRejectionKind::Script)
+            } else {
+                Some(erabasic_hir::MatchNameRejectionKind::Internal)
+            },
+            character_disposal: if matches!(&schema.id, erabasic_data::VariableId::Builtin(_))
+                && schema.storage == StorageScope::Character
+                && schema.dimensions.len() == 1
+            {
+                erabasic_hir::CharacterArrayDisposal::ClearSparse
+            } else {
+                erabasic_hir::CharacterArrayDisposal::Preserve
+            },
             static_lifetime,
             initial_values,
             scope,

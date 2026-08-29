@@ -121,7 +121,7 @@ impl CompatibilityIdentity {
     pub fn for_profile(profile: CompatibilityProfileId) -> Self {
         let version = match profile {
             CompatibilityProfileId::EmueraEm => 1,
-            CompatibilityProfileId::EmueraSkiaSnake => 5,
+            CompatibilityProfileId::EmueraSkiaSnake => 6,
         };
         Self {
             profile,
@@ -178,6 +178,17 @@ impl CompatibilityIdentity {
     #[must_use]
     pub const fn supports_existvar_expression_probe(&self) -> bool {
         self.supports_call_text()
+    }
+
+    /// Deterministic data extensions share the v6 execution contract.
+    #[must_use]
+    pub const fn supports_snake_data_apis(&self) -> bool {
+        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 6
+    }
+
+    #[must_use]
+    pub const fn supports_map_extensions(&self) -> bool {
+        self.supports_snake_data_apis()
     }
 
     /// Policy for non-variadic user calls; builtin signatures remain exact.

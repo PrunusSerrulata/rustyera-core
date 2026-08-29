@@ -284,6 +284,7 @@ impl Vm {
         self.fill_place_array_range(
             fiber,
             &PlaceDescriptor {
+                backing: None,
                 variable: target.key,
                 indices: Vec::new(),
                 character: None,

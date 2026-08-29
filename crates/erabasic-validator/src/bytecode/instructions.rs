@@ -1,20 +1,27 @@
 use std::collections::BTreeMap;
 
 use erabasic_bytecode::{
-    BytecodeFunction, BytecodeStorage, BytecodeType, ImportKind, Opcode, SymbolKey, opcode,
+    BytecodeFunction, BytecodeStorage, BytecodeType, ImportKind, Opcode,
+    RuntimeStagedAuthorization, SymbolKey, opcode,
 };
 
 use crate::ValidationCode;
 
+mod bit_calls;
 mod existvar;
 mod methods;
 pub(super) use existvar::ProbeIndex;
+mod map_calls;
+mod matching;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum StackValue {
     Value(BytecodeType),
     UserCallToken { resolve: u32, next_slot: u16 },
     ExistVarProbeToken { begin: u32 },
+    MapCallToken { begin: u32 },
+    BitCallToken { begin: u32 },
+    MatchCallToken { begin: u32, phase: u8 },
 }
 
 impl From<BytecodeType> for StackValue {
@@ -32,10 +39,21 @@ pub(super) fn apply_instruction(
     functions: &BTreeMap<SymbolKey, &BytecodeFunction>,
     native: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
     host: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
+    staged: &BTreeMap<SymbolKey, &RuntimeStagedAuthorization>,
+    trusted_staged: &BTreeMap<SymbolKey, RuntimeStagedAuthorization>,
     probes: &ProbeIndex,
 ) -> Result<Vec<usize>, (ValidationCode, String)> {
     let successors = apply_instruction_inner(
-        function, index, stack, globals, functions, native, host, probes,
+        function,
+        index,
+        stack,
+        globals,
+        functions,
+        native,
+        host,
+        staged,
+        trusted_staged,
+        probes,
     )?;
     for target in &successors {
         existvar::validate_edge(function, index, *target)?;
@@ -52,6 +70,8 @@ fn apply_instruction_inner(
     functions: &BTreeMap<SymbolKey, &BytecodeFunction>,
     native: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
     host: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
+    staged: &BTreeMap<SymbolKey, &RuntimeStagedAuthorization>,
+    trusted_staged: &BTreeMap<SymbolKey, RuntimeStagedAuthorization>,
     probes: &ProbeIndex,
 ) -> Result<Vec<usize>, (ValidationCode, String)> {
     let instruction = &function.code[index];
@@ -68,6 +88,20 @@ fn apply_instruction_inner(
             .collect()
     };
     match opcode_value {
+        Opcode::BeginMapCall | Opcode::FinishMapCall | Opcode::AbandonMapCall => {
+            map_calls::apply(function, index, opcode_value, stack, native)?;
+        }
+        Opcode::BeginBitCall | Opcode::FinishBitCall => {
+            bit_calls::apply(
+                function,
+                index,
+                opcode_value,
+                stack,
+                globals,
+                staged,
+                trusted_staged,
+            )?;
+        }
         Opcode::Nop | Opcode::Yield | Opcode::ForBreak | Opcode::SelectEnd => {
             expect_payload(&instruction.payload, 0)?;
         }
@@ -217,7 +251,13 @@ fn apply_instruction_inner(
             expect_payload(&instruction.payload, 0)?;
             match stack.pop() {
                 Some(StackValue::Value(_)) => {}
-                Some(StackValue::UserCallToken { .. } | StackValue::ExistVarProbeToken { .. }) => {
+                Some(
+                    StackValue::UserCallToken { .. }
+                    | StackValue::ExistVarProbeToken { .. }
+                    | StackValue::MapCallToken { .. }
+                    | StackValue::BitCallToken { .. }
+                    | StackValue::MatchCallToken { .. },
+                ) => {
                     return Err((
                         ValidationCode::TypeMismatch,
                         "pop cannot discard a pending user-call token; use AbandonUserCall".into(),
@@ -295,6 +335,20 @@ fn apply_instruction_inner(
             }
             stack.push(BytecodeType::Integer.into());
         }
+        Opcode::BeginMatchCall | Opcode::MatchCallRange | Opcode::FinishMatchCall => {
+            return matching::apply(
+                function,
+                index,
+                opcode_value,
+                stack,
+                &matching::Context {
+                    globals,
+                    functions,
+                    staged,
+                    trusted_staged,
+                },
+            );
+        }
         Opcode::ProbeVariableName | Opcode::BeginExistVarProbe | Opcode::FinishExistVarProbe => {
             return existvar::apply(function, index, opcode_value, stack, probes);
         }
@@ -340,6 +394,16 @@ fn apply_instruction_inner(
                         ValidationCode::MissingReference,
                         "called function does not resolve".into(),
                     ))?;
+                    if target
+                        .parameters
+                        .iter()
+                        .any(|parameter| parameter.by_reference)
+                    {
+                        return Err((
+                            ValidationCode::TypeMismatch,
+                            "whole-array REF calls require staged argument capture".into(),
+                        ));
+                    }
                     (
                         target
                             .parameters

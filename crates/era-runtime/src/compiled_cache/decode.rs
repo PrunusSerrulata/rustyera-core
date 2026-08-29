@@ -34,6 +34,7 @@ fn decode_sections_with_progress(
         runtime_variables: parts.metadata.runtime_variables,
         runtime_native_authorizations: parts.metadata.runtime_native_authorizations,
         runtime_host_authorizations: parts.metadata.runtime_host_authorizations,
+        runtime_staged_authorizations: parts.metadata.runtime_staged_authorizations,
         project_data: parts.project_data,
         globals: parts.globals,
         native_imports: parts.metadata.native_imports,
@@ -476,6 +477,7 @@ fn parse_container_header(
                 | PROFILED_PROJECT_VERSION
                 | ARITHMETIC_PROJECT_VERSION
                 | CALL_PROJECT_VERSION
+                | DATA_PROJECT_VERSION
                 | VERSION
         ) | (ProjectContainerKind::CompiledCache, VERSION)
     ) {

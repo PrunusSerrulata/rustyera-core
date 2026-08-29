@@ -77,7 +77,16 @@ impl Vm {
         fiber.frames.truncate(owner_index + 1);
         let owner = fiber.frames.last_mut().expect("owner retained");
         owner.stack.truncate(stack_depth);
+        owner
+            .map_calls
+            .retain(|call| call.stack_index < stack_depth);
         owner.user_calls.truncate(user_calls);
+        owner
+            .bit_calls
+            .retain(|call| call.stack_index < stack_depth);
+        owner
+            .match_calls
+            .retain(|call| call.stack_index < stack_depth);
         match target {
             CatchTarget::Form(target) => finish_runtime_form_catch(fiber, target)?,
             CatchTarget::Expression(target) => {
@@ -116,6 +125,7 @@ impl Vm {
             Ok(true) => {
                 self.fibers.insert(fiber_id, fiber);
                 self.runnable.push_back(fiber_id);
+                self.prune_bit_leases();
                 return Ok((fiber_id, None));
             }
             Ok(false) => error,
@@ -140,6 +150,7 @@ impl Vm {
         };
         fiber.state = FiberState::Faulted(fault.clone());
         self.fibers.insert(fiber_id, fiber);
+        self.prune_bit_leases();
         Ok((fiber_id, Some(fault)))
     }
 }

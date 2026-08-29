@@ -697,6 +697,7 @@ fn analyze_with_context(
         ignore_triple_symbols: options.ignore_triple_symbols,
         compatible_rand: options.compatible_rand,
         system_no_target: options.system_no_target,
+        ignore_case: options.ignore_case,
     };
     program.variables = symbols.variables;
     program.functions = functions;

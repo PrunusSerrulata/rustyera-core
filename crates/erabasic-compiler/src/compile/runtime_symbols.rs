@@ -79,6 +79,22 @@ pub(super) fn runtime_variable_symbols(
         .map(|variable| erabasic_bytecode::RuntimeVariableSymbol {
             key: *keys.get(variable.id.0).expect("validated variable key"),
             reference: variable.reference,
+            match_name_rejection: variable.match_name_rejection.map(|kind| match kind {
+                erabasic_hir::MatchNameRejectionKind::Script => {
+                    erabasic_bytecode::MatchNameRejectionKind::Script
+                }
+                erabasic_hir::MatchNameRejectionKind::Internal => {
+                    erabasic_bytecode::MatchNameRejectionKind::Internal
+                }
+            }),
+            character_disposal: match variable.character_disposal {
+                erabasic_hir::CharacterArrayDisposal::Preserve => {
+                    erabasic_bytecode::CharacterArrayDisposal::Preserve
+                }
+                erabasic_hir::CharacterArrayDisposal::ClearSparse => {
+                    erabasic_bytecode::CharacterArrayDisposal::ClearSparse
+                }
+            },
             reference_semantics: erabasic_bytecode::RuntimeReferenceSemantics {
                 is_const: variable.reference_semantics.is_const,
                 can_restructure: variable.reference_semantics.can_restructure,
@@ -112,6 +128,33 @@ pub(super) fn runtime_native_authorizations(
         .collect::<Vec<_>>();
     families.sort_unstable_by_key(|family| family.key);
     families
+}
+
+/// Staged VM operations require their own trusted registry classification.
+pub(super) fn runtime_staged_authorizations(
+    symbols: &[RuntimeBuiltinSymbol],
+    registry: &crate::HostRegistry,
+) -> Vec<erabasic_bytecode::RuntimeStagedAuthorization> {
+    use erabasic_bytecode::{RuntimeStagedAuthorization, RuntimeStagedKind};
+    let mut values = symbols
+        .iter()
+        .filter_map(|symbol| {
+            let kind = RuntimeStagedKind::from_name(&symbol.name)?;
+            let matches = matches!(
+                (kind, registry.classification(&symbol.name)),
+                (
+                    RuntimeStagedKind::Bit(_),
+                    Some(crate::ExecutionBinding::BitArray)
+                ) | (
+                    RuntimeStagedKind::MatchAll | RuntimeStagedKind::MatchAllEx,
+                    Some(crate::ExecutionBinding::ArrayMatch)
+                )
+            );
+            matches.then(|| RuntimeStagedAuthorization::new(symbol, kind))
+        })
+        .collect::<Vec<_>>();
+    values.sort_unstable_by_key(|value| value.key);
+    values
 }
 
 /// Reached imports do not determine dynamic callable availability. Source registration

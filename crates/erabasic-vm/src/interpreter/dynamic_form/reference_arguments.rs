@@ -114,6 +114,7 @@ impl RuntimeFormContinuation {
                         ReferenceTermCall::Native { name, .. }
                         | ReferenceTermCall::DynamicNative { name, .. }
                         | ReferenceTermCall::Host { name, .. }
+                        | ReferenceTermCall::Staged { name, .. }
                         | ReferenceTermCall::Intrinsic { name },
                     ..
                 } => name.len(),
@@ -305,6 +306,7 @@ impl RuntimeFormContinuation {
                     ReferenceTermCall::Native { name, .. }
                     | ReferenceTermCall::DynamicNative { name, .. }
                     | ReferenceTermCall::Host { name, .. }
+                    | ReferenceTermCall::Staged { name, .. }
                     | ReferenceTermCall::Intrinsic { name },
                 ..
             } => Some(name.as_str()),

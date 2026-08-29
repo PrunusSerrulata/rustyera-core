@@ -5,6 +5,7 @@ use crate::state::{Fiber, FiberState, Frame};
 use erabasic_bytecode::{BytecodeArtifact, ImportKind, Opcode, UserCallSpec};
 use erabasic_validator::{ValidatedArtifact, ValidatedStackToken};
 
+#[allow(clippy::too_many_lines)] // Every opaque operand token is checked against one CFG summary.
 pub(super) fn valid_frame(artifact: &ValidatedArtifact, fiber: &Fiber, index: usize) -> bool {
     let Some(frame) = fiber.frames.get(index) else {
         return false;
@@ -17,6 +18,9 @@ pub(super) fn valid_frame(artifact: &ValidatedArtifact, fiber: &Fiber, index: us
         // They cannot resume, and must not retain executable lease/checkpoint state.
         return frame.user_calls.is_empty()
             && frame.existvar_checks.is_empty()
+            && frame.map_calls.is_empty()
+            && frame.bit_calls.is_empty()
+            && frame.match_calls.is_empty()
             && frame.runtime_form.is_none();
     }
     let child = fiber.frames.get(index + 1);
@@ -50,8 +54,63 @@ pub(super) fn valid_frame(artifact: &ValidatedArtifact, fiber: &Fiber, index: us
     }
     let mut user_calls = frame.user_calls.iter();
     let mut probes = frame.existvar_checks.iter();
+    let mut maps = frame.map_calls.iter();
+    let mut bits = frame.bit_calls.iter();
+    let mut matches = frame.match_calls.iter();
     for token in &summary.tokens {
         match *token {
+            ValidatedStackToken::MatchCall {
+                stack_index,
+                begin,
+                phase,
+            } => {
+                let Some(pending) = matches.next() else {
+                    return false;
+                };
+                if pending.stack_index != stack_index
+                    || pending.begin != begin as usize
+                    || pending.state.phase() != phase
+                    || frame.stack.get(stack_index) != Some(&VmValue::Integer(i64::from(begin)))
+                {
+                    return false;
+                }
+            }
+            ValidatedStackToken::MapCall { stack_index, begin } => {
+                let Some(call) = maps.next() else {
+                    return false;
+                };
+                if call.stack_index != stack_index
+                    || call.begin != begin as usize
+                    || frame.stack.get(stack_index) != Some(&VmValue::Integer(i64::from(begin)))
+                {
+                    return false;
+                }
+                if call.lease.is_some_and(|lease| {
+                    lease.owner
+                        != crate::structured::MapLeaseOwner {
+                            fiber: fiber.id,
+                            frame: frame.id,
+                            generation: frame.generation,
+                            function: frame.function,
+                            origin: crate::structured::MapLeaseOrigin::Bytecode {
+                                begin: begin as usize,
+                            },
+                        }
+                }) {
+                    return false;
+                }
+            }
+            ValidatedStackToken::BitCall { stack_index, begin } => {
+                let Some(call) = bits.next() else {
+                    return false;
+                };
+                if call.stack_index != stack_index
+                    || call.begin != begin as usize
+                    || frame.stack.get(stack_index) != Some(&VmValue::Integer(i64::from(begin)))
+                {
+                    return false;
+                }
+            }
             ValidatedStackToken::UserCall {
                 stack_index,
                 resolve,
@@ -82,7 +141,11 @@ pub(super) fn valid_frame(artifact: &ValidatedArtifact, fiber: &Fiber, index: us
         }
     }
     // Both directions matter: deleting a list and forging an extra lease are invalid.
-    user_calls.next().is_none() && probes.next().is_none()
+    user_calls.next().is_none()
+        && probes.next().is_none()
+        && maps.next().is_none()
+        && bits.next().is_none()
+        && matches.next().is_none()
 }
 
 /// The CFG models completed instructions. A suspended call has consumed its inputs

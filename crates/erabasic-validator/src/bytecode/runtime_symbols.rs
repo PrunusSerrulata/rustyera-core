@@ -37,7 +37,7 @@ pub(super) fn validate_runtime_builtins(symbols: &[RuntimeBuiltinSymbol]) -> Res
 pub(super) fn validate_runtime_variables(
     artifact: &erabasic_bytecode::BytecodeArtifact,
 ) -> Result<(), String> {
-    use erabasic_bytecode::BytecodeStorage;
+    use erabasic_bytecode::{BytecodeStorage, CharacterArrayDisposal};
     if artifact.runtime_variables.len() != artifact.globals.len() {
         return Err("runtime variable metadata does not exactly cover globals".into());
     }
@@ -60,7 +60,12 @@ pub(super) fn validate_runtime_variables(
             && (!definition.mutable
                 || definition.storage != BytecodeStorage::FunctionLocal
                 || definition.owner.is_none()
-                || !(1..=3).contains(&definition.dimensions.len()))
+                || !(1..=3).contains(&definition.dimensions.len())
+                || !matches!(
+                    definition.value_type,
+                    BytecodeType::Integer | BytecodeType::String
+                )
+                || symbol.match_name_rejection.is_some())
         {
             return Err("runtime REF metadata has an invalid declaration shape".into());
         }
@@ -68,6 +73,22 @@ pub(super) fn validate_runtime_variables(
             || (symbol.reference && symbol.reference_semantics.is_const)
         {
             return Err("runtime reference token semantics are inconsistent".into());
+        }
+        let sparse = definition.owner.is_none()
+            && definition.storage == BytecodeStorage::Character
+            && definition.dimensions.len() == 1
+            && artifact
+                .project_data
+                .schema
+                .variable(&definition.name)
+                .is_some_and(|schema| matches!(&schema.id, erabasic_data::VariableId::Builtin(_)));
+        let expected_disposal = if sparse {
+            CharacterArrayDisposal::ClearSparse
+        } else {
+            CharacterArrayDisposal::Preserve
+        };
+        if symbol.character_disposal != expected_disposal || (sparse && symbol.reference) {
+            return Err("runtime character disposal does not match its declaration source".into());
         }
     }
     for function in &artifact.functions {

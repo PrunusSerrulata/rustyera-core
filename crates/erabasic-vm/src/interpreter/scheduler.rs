@@ -199,6 +199,10 @@ impl Vm {
                 self.drain_compatibility_diagnostics(fiber.id, &position, &mut report.events);
                 let additional_instructions = match &outcome {
                     Ok(StepOutcome::BulkProgress(instructions)) => *instructions,
+                    Ok(StepOutcome::BulkFailure {
+                        additional_instructions,
+                        ..
+                    }) => *additional_instructions,
                     _ => 0,
                 };
                 self.observe_path_memo_instruction(
@@ -288,34 +292,36 @@ impl Vm {
                         }
                         break;
                     }
-                    Err(error) => match self.recover_runtime_form_failure(&mut fiber, &error) {
-                        Ok(true) => {
-                            if debug_checks_active
-                                && let Some(stop) = self.debug_stop_after(&fiber, false, false)
-                            {
-                                report.events.push(VmEvent::DebugStopped(stop));
+                    Err(error) | Ok(StepOutcome::BulkFailure { error, .. }) => {
+                        match self.recover_runtime_form_failure(&mut fiber, &error) {
+                            Ok(true) => {
+                                if debug_checks_active
+                                    && let Some(stop) = self.debug_stop_after(&fiber, false, false)
+                                {
+                                    report.events.push(VmEvent::DebugStopped(stop));
+                                    break;
+                                }
+                            }
+                            outcome => {
+                                let error = match outcome {
+                                    Err(internal) => internal,
+                                    Ok(_) => error,
+                                };
+                                self.abort_path_memo(fiber.id);
+                                for frame in &fiber.frames {
+                                    self.active_function_memos.remove(&frame.id);
+                                }
+                                fiber.clear_runtime_forms();
+                                let fault = self.make_classified_fault(fiber.id, &position, error);
+                                fiber.state = FiberState::Faulted(fault.clone());
+                                report.events.push(VmEvent::FiberFaulted {
+                                    fiber: fiber.id,
+                                    fault,
+                                });
                                 break;
                             }
                         }
-                        outcome => {
-                            let error = match outcome {
-                                Err(internal) => internal,
-                                Ok(_) => error,
-                            };
-                            self.abort_path_memo(fiber.id);
-                            for frame in &fiber.frames {
-                                self.active_function_memos.remove(&frame.id);
-                            }
-                            fiber.clear_runtime_forms();
-                            let fault = self.make_classified_fault(fiber.id, &position, error);
-                            fiber.state = FiberState::Faulted(fault.clone());
-                            report.events.push(VmEvent::FiberFaulted {
-                                fiber: fiber.id,
-                                fault,
-                            });
-                            break;
-                        }
-                    },
+                    }
                 }
                 if fiber.backward_branches_without_progress
                     > self.config.maximum_backward_branches_without_progress
@@ -378,6 +384,25 @@ impl Vm {
                     self.runnable.push_back(fiber_id);
                 }
             }
+            if let Err(error) = natives.retain_map_leases(&super::map_calls::live_map_leases(
+                self.fibers.values().chain(std::iter::once(&fiber)),
+            )) {
+                let frame = fiber.frames.last();
+                let position = InstructionPosition {
+                    generation: frame.map_or(self.current_generation, |frame| frame.generation),
+                    function: frame.map_or(SymbolKey::default(), |frame| frame.function),
+                    instruction: frame.map_or(0, |frame| frame.instruction),
+                    variable: None,
+                    encoded: DispatchInstruction::trap(),
+                };
+                let fault = self.make_classified_fault(fiber.id, &position, error);
+                fiber.clear_runtime_forms();
+                fiber.state = FiberState::Faulted(fault.clone());
+                report.events.push(VmEvent::FiberFaulted {
+                    fiber: fiber.id,
+                    fault,
+                });
+            }
             if matches!(fiber.state, FiberState::Faulted(_) | FiberState::Cancelled) {
                 self.abort_path_memo(fiber.id);
                 for frame in &fiber.frames {
@@ -385,6 +410,7 @@ impl Vm {
                 }
             }
             self.fibers.insert(fiber_id, fiber);
+            self.prune_bit_leases();
             if budget_exhausted || self.debug_is_paused() {
                 break;
             }

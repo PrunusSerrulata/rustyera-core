@@ -78,6 +78,7 @@ impl Vm {
                 };
                 if opcode == Opcode::MakePlace {
                     let place = PlaceDescriptor {
+                        backing: None,
                         variable: key,
                         indices: value_indices.to_vec(),
                         character,

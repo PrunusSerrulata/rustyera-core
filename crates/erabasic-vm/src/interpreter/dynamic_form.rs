@@ -8,17 +8,21 @@ use crate::{
     Fiber, FrameId, GenerationId, HostReady, NativeServiceRegistry, Vm, VmFaultCode, VmValue,
 };
 
+mod bit_calls;
 mod call_plan;
 mod call_text;
 mod checkpoints;
 mod existvar;
 mod frontend;
 mod host_calls;
+mod map_calls;
+mod matching;
 mod methods;
 mod mutations;
 mod native_binding;
 mod reference_arguments;
 mod source_arguments;
+mod staged_binding;
 mod support;
 mod typing;
 
@@ -46,6 +50,9 @@ pub(crate) struct RuntimeFormContinuation {
     next_checkpoint: u64,
     host_calls: Vec<host_calls::RuntimeHostCall>,
     next_host_scope: u64,
+    next_map_call: u64,
+    next_reference_scope: u64,
+    next_bit_call: u64,
     completion: RuntimeFormRoot,
     reference_arguments: Option<reference_arguments::PendingReferenceArguments>,
     reference_bindings: bool,
@@ -58,6 +65,12 @@ pub(crate) struct RuntimeFormContinuation {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 enum RuntimeFormTask {
+    BitCapture {
+        spec: erabasic_bytecode::BitCallSpec,
+        site: call_plan::RuntimeCallSite,
+        source: Vec<Option<Expr>>,
+    },
+    BitFinish(bit_calls::FormBitCall),
     StartForm(FormattedString),
     RenderForm(FormattedString),
     RenderPart(FormPart),
@@ -80,6 +93,16 @@ enum RuntimeFormTask {
         source: String,
         spec: erabasic_bytecode::CallTextSpec,
     },
+    MapCapture {
+        bound: erabasic_bytecode::BoundRuntimeNative,
+        site: call_plan::RuntimeCallSite,
+        arguments: Vec<Option<Expr>>,
+    },
+    MapValuesEnabled {
+        call: map_calls::MapWorkCall,
+        output: Option<Expr>,
+    },
+    MapFinish(map_calls::MapWorkCall),
     ReferenceArgumentsPump,
     RestoreReferenceBindings(bool),
     RestoreCallPlan(Option<u64>),
@@ -93,6 +116,10 @@ enum RuntimeFormTask {
         indices: usize,
     },
     Evaluate(Expr),
+    MatchBegin(matching::FormMatch),
+    MatchEnd(matching::FormMatch),
+    MatchNeedle(matching::FormMatch),
+    MatchScan(matching::FormMatch),
     ReadVariable {
         name: String,
         indices: usize,
@@ -208,6 +235,9 @@ pub(super) fn begin_runtime_form(
         next_checkpoint: 1,
         host_calls: Vec::new(),
         next_host_scope: 1,
+        next_map_call: 1,
+        next_reference_scope: 1,
+        next_bit_call: 1,
         completion: RuntimeFormRoot::Value(BytecodeType::String),
         reference_arguments: None,
         reference_bindings: false,
@@ -316,6 +346,9 @@ fn begin_work(
         next_checkpoint: 1,
         host_calls: Vec::new(),
         next_host_scope: 1,
+        next_map_call: 1,
+        next_reference_scope: 1,
+        next_bit_call: 1,
         completion,
         reference_arguments: None,
         reference_bindings: false,
@@ -474,6 +507,10 @@ impl RuntimeFormContinuation {
             RuntimeFormTask::HostAdvance(id) => {
                 return self.advance_host_call(vm, fiber, id, position, host, host_count);
             }
+            RuntimeFormTask::BitCapture { spec, site, source } => {
+                self.capture_bit(vm, fiber, spec, site, source)?;
+            }
+            RuntimeFormTask::BitFinish(call) => self.finish_bit(vm, fiber, call)?,
             RuntimeFormTask::ReferenceArgumentsPump => self.advance_reference_arguments(vm)?,
             RuntimeFormTask::RestoreCallPlan(previous) => {
                 self.restore_call_plan(previous)?;
@@ -569,6 +606,15 @@ impl RuntimeFormContinuation {
             RuntimeFormTask::ExistVarMode { source, .. } => {
                 self.existvar_mode(vm, fiber, source)?;
             }
+            RuntimeFormTask::MapCapture {
+                bound,
+                site,
+                arguments,
+            } => self.capture_map(vm, fiber, natives, bound, site, arguments)?,
+            RuntimeFormTask::MapValuesEnabled { call, output } => {
+                self.map_values_enabled(vm, fiber, natives, call, output)?;
+            }
+            RuntimeFormTask::MapFinish(call) => self.finish_map(vm, fiber, natives, call)?,
             RuntimeFormTask::FinishExpressionProbe(id) => self.finish_expression_probe(vm, id)?,
             RuntimeFormTask::FinishCallTextArgumentCatch(_) => {
                 return Err(StepError::new(
@@ -576,8 +622,12 @@ impl RuntimeFormContinuation {
                     "CALLSTR argument checkpoint escaped its user-call state",
                 ));
             }
+            RuntimeFormTask::MatchBegin(call) => self.match_begin(vm, fiber, call)?,
+            RuntimeFormTask::MatchEnd(call) => self.match_end(call)?,
+            RuntimeFormTask::MatchNeedle(call) => self.match_needle(call)?,
+            RuntimeFormTask::MatchScan(call) => self.match_scan(vm, fiber, call)?,
             RuntimeFormTask::Evaluate(expression) => {
-                self.evaluate_expression(vm, expression)?;
+                self.evaluate_expression(vm, fiber, expression)?;
             }
             RuntimeFormTask::ReadVariable { name, indices } => {
                 let indices = self.take_indices(indices)?;
@@ -718,8 +768,41 @@ impl RuntimeFormContinuation {
             }
             RuntimeFormTask::CaptureMethodArgument(mut call) => {
                 self.validate_method_call(vm, fiber, &call, true)?;
-                let actual = self.pop_value("STRFORM method argument is missing")?;
+                let mut actual = self.pop_value("STRFORM method argument is missing")?;
                 let slot = call.next_slot;
+                if matches!(
+                    call.call.bindings.get(slot),
+                    Some(crate::state::user_calls::UserArgumentBinding::ArrayReference)
+                ) {
+                    let erabasic_bytecode::UserArgumentSpec::Variable(variable) = call.specs[slot]
+                    else {
+                        return Err(StepError::new(
+                            VmFaultCode::InvalidInstruction,
+                            "REF selector has no source",
+                        ));
+                    };
+                    let VmValue::Integer(character) = actual else {
+                        return Err(StepError::new(
+                            VmFaultCode::InvalidInstruction,
+                            "REF selector is not integer",
+                        ));
+                    };
+                    let character = u64::try_from(character).map_err(|_| {
+                        StepError::script(
+                            crate::ScriptFaultKind::Bounds,
+                            VmFaultCode::Bounds,
+                            "character selector is out of range",
+                        )
+                    })?;
+                    actual = vm
+                        .user_call_variable_place(fiber, self.generation, self.frame, variable)
+                        .map_err(map_vm_error)?;
+                    let (VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) = &mut actual
+                    else {
+                        unreachable!("variable helper returns place");
+                    };
+                    place.character = Some(character);
+                }
                 call.captured[slot] = Some(
                     vm.capture_user_argument(
                         fiber,
@@ -728,6 +811,11 @@ impl RuntimeFormContinuation {
                         &call.specs,
                         slot,
                         actual,
+                        crate::state::array_leases::ArrayLeaseOrigin::UserForm {
+                            instruction: self.instruction,
+                            call: call.reference_scope,
+                            slot,
+                        },
                     )
                     .map_err(map_vm_error)?,
                 );
@@ -847,7 +935,12 @@ impl RuntimeFormContinuation {
         Ok(())
     }
 
-    fn evaluate_expression(&mut self, vm: &Vm, expression: Expr) -> Result<(), StepError> {
+    fn evaluate_expression(
+        &mut self,
+        vm: &Vm,
+        fiber: &Fiber,
+        expression: Expr,
+    ) -> Result<(), StepError> {
         match expression.kind {
             ExprKind::Integer(value) => self.values.push(VmValue::Integer(value)),
             ExprKind::String(value) => self.values.push(VmValue::String(value)),
@@ -925,7 +1018,7 @@ impl RuntimeFormContinuation {
                 if !name.eq_ignore_ascii_case("STRFORM")
                     && !name.eq_ignore_ascii_case("STRFORMCHECK")
                 {
-                    self.schedule_planned_call(vm, expression.span, &args)?;
+                    self.schedule_planned_call(vm, fiber, expression.span, &args)?;
                     return Ok(());
                 }
                 let count = args.len();
@@ -998,6 +1091,13 @@ impl RuntimeFormContinuation {
                 VmFaultCode::InvalidInstruction,
                 "user call bypassed lazy runtime-form resolver",
             ));
+        }
+        if let Some(value) =
+            super::character_ops::query_character_name(&generation.artifact, name, arguments)
+                .map_err(super::map_vm_error)?
+        {
+            self.values.push(value);
+            return Ok(());
         }
         if name.eq_ignore_ascii_case("STRFORM") || name.eq_ignore_ascii_case("STRFORMCHECK") {
             let family = native_binding::authorization(&generation, name)?;

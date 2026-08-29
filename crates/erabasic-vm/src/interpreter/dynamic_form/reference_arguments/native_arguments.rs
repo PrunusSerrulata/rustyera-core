@@ -40,6 +40,7 @@ impl RuntimeFormContinuation {
             character,
             fiber: Some(fiber.id),
             frame: (definition.storage == BytecodeStorage::FunctionLocal).then_some(self.frame),
+            backing: None,
         };
         self.values.push(match definition.value_type {
             BytecodeType::Integer => VmValue::IntegerPlace(Box::new(place)),
