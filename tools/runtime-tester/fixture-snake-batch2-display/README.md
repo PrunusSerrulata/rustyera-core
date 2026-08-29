@@ -7,4 +7,6 @@ empty-string behavior. `original-reject` records rejection of snake-only command
 
 All cases are observations until both fixed reference CLIs and Rust execute the same frozen input.
 The Rust report retains normalized presentation settings, resource replay state and per-line text
-background eligibility; pixel rendering is intentionally outside this fixture.
+background eligibility. The manifests pin the reference CLI's required presentation font so the
+shared oracle driver can initialize presentation observation; pixel rendering is intentionally
+outside this fixture.

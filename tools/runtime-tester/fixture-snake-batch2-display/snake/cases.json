@@ -1,6 +1,11 @@
 {
   "version": 1,
   "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
   "semanticBaselines": {
     "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
     "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
