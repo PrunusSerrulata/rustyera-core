@@ -677,45 +677,112 @@ Tauri 额外不可比来自 `info runtime.compiled_cache_ready`，未过滤或�
 
 ## 批次 3：安全 SQL（蛇版 TW P0）
 
-计划入口：[改造思路 / 批次 3](SNAKE_EMUERA_MIGRATION_PLAN.md#batch-3)。状态：待登记；负责人 / 最近更新：待填写。
+计划入口：[改造思路 / 批次 3](SNAKE_EMUERA_MIGRATION_PLAN.md#batch-3)；实施入口：
+[批次 3 分批实施方案](SNAKE_EMUERA_BATCH_3_IMPLEMENTATION_PLAN.md)。状态：**已完成约定的安全
+SQL 子集**，不代表完整蛇版 TW 已可进入标题、新游戏或存档流程；负责人 / 最近更新：Codex / 2026-08-30。
 
 ### 具体实施方案
 
-- 目标、S/D/C/N 编号、范围与明确不做项：待填写。
-- 前置批次/子项、已通过门禁和对应证据：待填写；区分可并行实现与必须汇合的集成验收。
-- 受影响仓库/模块、接口与数据格式、profile/cache/save/service 版本变化：待填写。
-- 分项步骤、文件/hunk 归属、共享基础依赖、资源隔离与提交划分：待填写。
-- 验收目标、最小 fixture、获准测试范围、风险/回退方案与用户时限：待填写。
+- 3.0 先冻结蛇版 reference 的 SQL 行为、真实资源摘要和安全差异；3.1 定义
+  `rustyera.sql@1` 服务、固定 limits 和脚本 API 目录；3.2 在 core 完成连接、typed value、reader、
+  transaction、Resource 派生 revision、MAP XML 与 snapshot/project lifecycle；3.3、3.4 分别接入
+  Web/Tauri 的共享 Worker provider 与 TUI APSW provider；3.5 用固定契约 fixture 收敛三端；3.6
+  最后使用真实蛇版 TW 数据库和翻译 XML 完成 QOL/GRAPH 流程与整批记录。
+- 只支持内存库及清单授权的只读 Resource seed；提交产生项目 `Data/sql` 中的不可变 revision，
+  以 CAS current 指针发布。不提供任意路径、URI、外部 `ATTACH`、extension、虚拟表或通用连接串。
+  SQL service 保持 v1；SQLite 固定为 Web/Tauri `3.53.0-build1`、TUI APSW `3.53.0.0`；本批未提高
+  发布版本，也未修改传统 save 格式。
+- core、TUI、Web 均在 `codex/snake-compatibility` 专用 worktree 分仓实现和提交；动态测试使用
+  `batch-3-work/` 下忽略的项目副本、独立 Data/OPFS/profile/Wine prefix、端口和证据目录。蛇版
+  Emuera、蛇版 TW 及其真实资源全程只读，保留游戏仓库原有 `emuera.config` 修改。
+- 3.6 的验收切片覆盖 QOL item/pharmacy/dish/mushi/wood、两个翻译 MAP、GRAPH schema/transaction
+  rebuild、BFS、跨地图边、节点属性、reader EOF/close、断连回滚、同会话重启 revision 复用、seed
+  摘要变化和 Tauri A-B-A 项目隔离。配额、异常关闭及拒绝面复用 3.3–3.5 已冻结的 provider/contract
+  测试；本批不补造真实项目没有的 BBAS MAP，也不运行完整标题、新游戏或传统存档初始化。
 
 ### 所作改动
 
 | 功能/修复项编号 | 组件与文件 | 实际改动及理由 | 契约/兼容性影响 | commit 与依赖 |
 |---|---|---|---|---|
-| 待填写 | 待填写 | 待填写 | 待填写 | 待填写 |
+| 3.0 | core oracle fixture/文档输入 | 冻结 SQL 资源、调用形状、参考返回和预检行为 | 仅测试基线 | core `3276b7d7` |
+| 3.1 | core protocol、compatibility、compiler API catalog | 定义安全 SQL v1、能力协商、limits、缺能力预加载拒绝和已支持/延后 API | 新增 `rustyera.sql@1`；snake identity 纳入 service policy | core `3a4deb91`、`be7ec967` |
+| 3.2 | core runtime/VM/CBOR/CDDL | 实现连接、执行、scalar/reader、transaction、revision、Resource seed、MAP XML、snapshot 和项目 lifecycle；修复 reader 值模式、静态省略参数及 MAP 导入成功值 | 三端共享同一 typed rows/error/revision 契约 | core `71a53db5`、`e7bf8962`、`fde13ea8`、`73535252`、`44783e2e`、`11ea5ffd` |
+| 3.3 | Web Worker、browser/Tauri storage bridge | 在专用共享 Worker 中运行 sqlite-wasm，按项目原子发布 revision；补齐 malformed payload 与浏览器 marker runner | Browser/WASM/Tauri 共用 SQLite/provider | Web `5eef7905`、`9afc4950`、`d6108d2b` |
+| 3.4 | TUI RuntimeWorker、APSW provider、打包 | 增加 APSW provider、C ABI service routing、原子存储、取消/epoch 清理及隔离测试 CLI | TUI 与 Web 的 SQLite/协议版本对齐 | TUI `7eb6f6df`、`8d9ae139` |
+| 3.5 | TUI/Web 共用 contract fixture 与 core pin | 收敛 typed value、transaction、MAP、restart、snapshot、A-B-A；修复 TUI restore 跨 epoch 回复和精确 revision 候选 | TUI/Web 都绑定 core `11ea5ffd` | TUI `fe49ed75`、`500929dc`、`7cbc7037`、`68d9c824`；Web `4d6bcf60`、`06274945` |
+| 3.6-TUI | `sql_provider.py` 与 provider regression | APSW 裸 `VACUUM` 会发出内部空 `ATTACH` authorizer 回调；只在严格、无参数、单语句裸 `VACUUM` 作用域放行，显式 `ATTACH`、`VACUUM INTO`、虚拟表和 extension 仍拒绝 | 修复真实 QOL 派生库压缩；不扩大连接权限 | TUI `13fab3af`；依赖 core `11ea5ffd` |
+| 3.6-Web | test-only `runtimeEvidence` 与测试 | 仅将 state chunk、storage write/read/read_chunk 的 bulk byte leaf 投影为长度+BLAKE3，避免 1.3 MiB 数据库在每个完整快照中展开；保留 typed envelope、限额、显式 failure 与 watchdog 语义 | 只影响启用测试控制时的证据体积，不改服务 CBOR 或产品存储数据 | Web `7e946c2b`；依赖 Web `06274945`、core `11ea5ffd` |
+| 3.6-fixture | ignored `batch-3-work/3.6/` | 真实资源切片、固定断言、5 秒阶段标记、三端场景与 trace；不提交游戏资源或派生数据库 | 测试材料，不进入产品/协议 | 未跟踪；ERB SHA-256 `4f52aa2d…1ded33` |
 
 ### 审查与验收结果
 
-- 实现/测试输入 revision、工作目录、环境、游戏/资源 hash、profile/seed：待填写。
-- 重构审查是否触发、唯一审查记录、结论及要求落实情况：待填写；未触发须说明。
-- 首条测试命令时间、已用/剩余墙钟预算、首次全量启动记录：待填写。
-- Oracle 选择与理由、语义基准和 wrapper revision：待填写；按范围分别记录原版与蛇版，或说明不适用。
+- 最终输入为 core `11ea5ffdf4484b3259900a7e7f060a0e41f63c1f`、TUI
+  `13fab3af753ba7487269c9df69afb32a16279d94`、Web
+  `7e946c2b7ea616a454eb6efd69b0ad3cb46d290f`；snake TW 为 `667b9cd0…`。固定 seed 的 runner
+  实际值为 `123446`，clock 为 `2026-08-30T00:00:00Z`，profile identity 为
+  `emuera.skia.snake@10/10`。
+- `qol_data.db` 精确 seed 为 1,368,064 bytes、SHA-256
+  `e03c5a3279735f68e0cabf108e1a786fb5793ab94c69e5a6f46d078b495593a1`、
+  `schema_version=101/user_version=0`；seed 变体只将 `user_version` 改为 1，SHA-256
+  `cdabbd3e623c249d611682efc316391b79386568356889c1c742731fe1cbb916`。
+  `tw_csv_chs.xml` / `tw_taste_chs.xml` SHA-256 分别为 `6cb8cf45…90635`、
+  `56086344…83750`；真实物理条目 4461/2376，经 MAP 主键覆盖后的 SQL 行数为 4431/2344。
+- 3.6 发现的 TUI 产品修复和 Web 测试观测修复各触发且只触发一次
+  `$refactor-rustyera-code` 审查，均在该修复点首条测试前完成。TUI 采用异常安全的 per-connection
+  bare-VACUUM scope；Web 采用精确 bulk leaf 的非递归投影、16 MiB state/64 MiB storage 限额及
+  数组分块 hash。全部要求先落实后才启动各自门禁；测试开始后没有再次启动审查。
+- 用户明确取消了本次任务全过程的共享 60 分钟测试墙钟上限；未据此放宽每命令 timeout、静态先于
+  动态、每套完整 suite 最多一次或 Web/Tauri 每 5 秒完整 DOM/runtime 快照规则。3.6 的 TUI 修复
+  只启动一次完整 pytest，Web 修复只启动一次完整 Vitest；失败后均只跑最小受影响集合。
+- 蛇版 SQL 语义使用 wrapper repository `0c50ccbe0c2434567ef527d72a54c967bd576f2a`、
+  semantic executable baseline `fc4fb21416768c17256d0e82f997e5f99c9bba91`；原版回归基线沿用
+  wrapper `ffe560…` / semantic `26a35dc…`。断连未提交 transaction 的 reference 返回 1，而安全
+  provider 返回 0；这是已登记的强制回滚差异，未改写成 matched。
+- 最终 C ABI dylib SHA-256 为 `76a9782f…9083`，Web WASM SHA-256 为
+  `de2dd1ec…1a161`，Tauri binary / webdriver manifest SHA-256 分别为
+  `e62049f2…fe436` / `d2cbdddb…a1027e`；Tauri build contract 因 Web testing bundle 变化只重建一次，
+  最终定向复验使用 `--require-reuse-build` 严格命中该产物。
 
 | 验收项 / 静态或动态阶段 | 命令与 fixture | 预期 | 首次结果 / 退出码 / 时间 | 修复后定向复验 | 证据与结论 |
 |---|---|---|---|---|---|
-| 待填写 | 待填写 | 待填写 | 待填写 | 待填写 | 待填写 |
+| 3.0–3.5 既有门禁 | 各子批次 core/TUI/Web focused、唯一 full suite、oracle 与真实客户端 contract | SQL v1 与三端固定 fixture 收敛 | 各提交已绑定当时的门禁；3.3 首次完整 Vitest 暴露 malformed fixture，3.4/3.5 暴露并修复 restore lifecycle | 只执行对应 decoder/runtime/provider 定向集合；3.6 未为整理日志重跑既有全量 | commit 列表为交付绑定；当前忽略目录未保留全部早期原始命令输出，故不补造遗失的逐命令时间/计数 |
+| 3.6 TUI 静态 | focused provider、Ruff、一次完整 pytest | 裸 VACUUM 最小放行，拒绝面不泄漏 | focused 初次 9 passed / 1 failed，失败是测试把 `load_extension` 的 SQLite code 误期望为 AUTH；不是产品失败 | 修正该断言后受影响集合 7 passed；Ruff exit 0；唯一完整 pytest exit 0，**530 passed / 5 skipped**，43.16s | `git diff --check` exit 0；无本机路径/凭据 |
+| 3.6 Web 静态 | focused Vitest、typecheck/lint/format/build/WASM、一次完整 Vitest | bulk evidence 有界且协议不变 | focused **152 passed**；typecheck/lint/build/build:wasm exit 0；format 首次因两文件 Prettier 失败 | 机械格式化后 format/focused/typecheck/lint 均 exit 0；build/WASM 因语义输入未变复用；唯一完整 Vitest exit 0，**97 files / 1409 tests** | 1,368,064-byte read snapshot 小于 1 KiB；invalid/oversize 显式 failure，digest churn 不掩盖 failure/overflow |
+| TUI 真实资源 + oracle | `tui-first-run.json`、同 serve `tui-restart.json`、独立 `tui-seed-variant.json` | QOL/GRAPH/TR、回滚、restart 与 seed identity | 首次实际流程在裸 VACUUM 返回 SQLITE_AUTH；sandbox Wine 另因 `wineserver bind` 被拒，登记为 infra | 最终三条 non-sandbox 均 exit 0；first reference diff equal（除登记 rollback），PERSIST 1→2，variant PERSIST 1/SEED 1 | `batch-3-work/3.6/evidence/tui/*.trace.ndjson`；最终三 trace SHA-256 `1e74296e…c3ab`、`41023b9c…e0bf`、`4193b3b0…1c9` |
+| Chromium 实际流程 | `scenarios/web.json`，真实 Chromium headless shell | first/restart、24 个阶段、全部结构化结果，无 fault/evidence failure | 初次在 1.3 MiB storage response 展开后触发相同快照；修复后又发现 fixture 误设 checkpoint、精确 output 未含阶段、restart 首标记超过观察窗 | 逐项只修测试观测/fixture；最终 exit 0，约 57s，PERSIST 1→2、SEED 0、`fault=null`、overflow=false/failure=null | `batch-3-work/3.6/evidence/web/chromium.trace.ndjson`，SHA-256 `a0c7ef37…3b6a` |
+| Firefox / Safari 实际首轮 | `test:browser-compat` + `B36_READY` | 真实浏览器、冷 OPFS、同一 SQL 切片 | 无产品差异 | Firefox 154.0.1 exit 0，约 10s；Safari 26.6.2 exit 0，约 1s，窗口未最小化 | `.rustyera/test-runs/browser-compat-firefox-1788078798519/` 与 `browser-compat-safari-1788078821193/`；全部首轮 marker |
+| Tauri A-B-A | ignored `snake-sql.spec.mjs`，official `test:tauri` | native bridge、restart、seed 变体和项目隔离 | 首次 cache miss 完成唯一重建并推进到变体，但外层 PTY 被回收，4 个 snapshot 无终态，记为 infra 未验证 | `--require-reuse-build` 命中当前 manifest，exit 0，**1 passing / 17.489s**；PERSIST 1→2、B=1、A return=3，SEED 0→1→0 | `.rustyera/test-runs/tauri-snapshots/2026-08-30T08-39-31.901Z-snake-sql.spec.mjs.jsonl`；4 个完整非相同快照，fault/evidence 均正常，无残留 GUI/WebDriver |
+| 固定数据库断言 | 实际 QOL/GRAPH/TR 查询与 reader | 行数、样本和返回值固定 | 最终各客户端一致 | 不需额外复验 | QOL `313/173/83/342/197/13`；GRAPH `1555/36418/132/642`；BFS `1/1/3/11`；cross `10/610/70/50`；reader `1/1/2/1/1/0/1/1`；翻译 `1/4431/.../1/2344/...` |
+| BBAS 前提 | 3.0 resource preflight / reference | 只登记实际存在性，不伪造文件 | `bbas_map_schema.xml` 与 `bbas_map.xml` 都缺失，reference DT row length 均为 0 | 不重跑/不生成替代资源 | 外部资源阻塞，按方案不阻碍 Batch 3 安全 SQL 子集完成 |
 
 ### 未完成项、阻塞与计划偏差
 
 | 项目 | 未完成原因 / 依赖 | 影响与已验证边界 | 下一步及解除条件 | 是否需更新改造思路 |
 |---|---|---|---|---|
-| 待填写 | 待填写 | 待填写 | 待填写 | 待填写 |
+| BBAS MAP | 真实蛇版 TW 缺少 `bbas_map_schema.xml`、`bbas_map.xml` | `CREATE_BBAS_DATABASE` 只能完成 3.0 的前提与 reference 行为确认；未构造数据库 | Batch 4 前由上游提供权威资源并锁定摘要后再验收 | 否，批次 3 方案已明确允许此外部阻塞 |
+| 延后 SQL/XML API | `SQL_CONNECTION_OPEN`、`SQL_ESCAPE`、Float scalar/reader、DT/custom XML import、MAP/DT/custom XML export 尚未实现 | 当前真实 QOL/GRAPH/TR 安全子集均未调用；缺能力仍稳定诊断 | 后续批次按真实调用优先级单独设计和版本化 | 否，属于已声明不做项 |
+| 完整标题/新游戏/存档 | 仍有 presentation/scene/存档及其他语言缺口；冻结规模报告有 8,571 条 analyzer diagnostics | 本批只证明固定 SQL 切片和客户端 provider，不证明完整项目可编译或可玩 | Batch 4 汇合主玩法 presentation、scene 与自身存档；不得以本批结果替代 | 否，改造思路已按批次拆分 |
+| 登记的安全差异 | provider 在 disconnect/epoch/project switch 强制回滚未提交 transaction；reference fixture 报告 rollback count 1 | Rust 实际断言为 0，防止未提交数据持久化；其余固定观测匹配 | 保留 difference ledger，后续不得放宽为外部 ATTACH 或隐式提交 | 否，安全边界有意不同 |
+| 早期原始门禁细节 | 3.0–3.5 的部分未跟踪原始静态日志在本轮开始前已不在 `batch-3-work` | 各组件提交、当前 pin 和 3.5 真实通过结果仍可核验；不为补报告重跑完整 suite | 后续批次从首条命令持久化精简 summary；不能补写未知时间/计数 | 否，证据留存缺口，不改变产品范围 |
 
 ### 交付与续做入口
 
-- 本批结论、已完成与未验证范围、是否满足整批验收：待填写。
-- 各组件提交、分项对应关系、发布/迁移注意事项、CHANGELOG_PENDING 更新情况：待填写。
-- 当前轮次/起止时间、最近观察状态或指标、材料与复现命令、下一步恢复入口：待填写。
-- 临时材料保留/清理、相关进程停止与资源释放情况：待填写。
+- Batch 3 的安全 SQL 承诺子集已满足整批验收：TUI、Chromium、Firefox、Safari 与 Tauri 均在
+  core `11ea5ffd` 上完成真实 QOL/GRAPH/TR 切片；TUI 对蛇版 reference 的唯一不同为登记的断连
+  回滚安全差异。BBAS 缺失、延后 API、完整标题/新游戏/存档和 8,571 条静态诊断不属于完成范围。
+- 最终组件提交：core 行为 `3276b7d7`、`3a4deb91`、`be7ec967`、`71a53db5`、`e7bf8962`、
+  `fde13ea8`、`73535252`、`44783e2e`、`11ea5ffd`；TUI `7eb6f6df`、`8d9ae139`、
+  `fe49ed75`、`500929dc`、`7cbc7037`、`68d9c824`、`13fab3af`；Web `5eef7905`、
+  `9afc4950`、`d6108d2b`、`4d6bcf60`、`06274945`、`7e946c2b`。本次 core 文档提交及根
+  `CHANGELOG_PENDING.md` 提交见任务最终交付；没有版本 bump、push 或主线合并。
+- 3.6 可复现入口为 workspace-local ignored `batch-3-work/3.6/`：`projects/`、`scenarios/`、
+  `tauri/snake-sql.spec.mjs` 与 `evidence/`。最终 ERB / fastpath SHA-256 分别为
+  `4f52aa2d…1ded33` / `2eea9cd0…be5d7`；Web scenario / Tauri spec SHA-256 分别为
+  `96915e11…5d36d` / `afc5b401…1d03`。恢复时先重核 core pin、资源、产物 manifest 和浏览器版本，
+  不复用已清理的 Data/OPFS/profile。
+- 各 runner 已清理隔离的可写项目/数据库并停止 Wine、browser、Tauri 与 WebDriver 进程；磁盘仍有
+  55 GiB 可用。按证据规则保留上述 fixture、trace、浏览器/Tauri snapshot 与唯一当前 Tauri
+  binary/manifest；它们是后续复核入口，不随本轮收尾删除。参考实现、游戏资源和用户配置未修改。
 
 <a id="batch-4"></a>
 
