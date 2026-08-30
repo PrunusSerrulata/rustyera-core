@@ -1,5 +1,8 @@
 use era_protocol::ProtocolBytes;
-use era_runtime_protocol::{ProjectManifest, SubmittedFile};
+use era_runtime_protocol::{
+    LogicalLength, ProjectManifest, SceneAnchorV1, SceneLayerV1, SceneOffsetV1,
+    SceneScrollPolicyV1, SceneSizeV1, SceneSourceV1, SceneStateV1, SubmittedFile,
+};
 
 #[test]
 fn compact_snapshot_preserves_and_validates_static_resource_identities() {
@@ -275,13 +278,13 @@ fn file_sprite_reload_inherits_only_an_identical_resource_digest() {
     let original_digest = original.frames[0].content_digest;
 
     let mut identical = graph(Some(vec![1, 2, 3]), 2);
-    identical.inherit_runtime_graph(&previous);
+    identical.inherit_runtime_graph(&previous, &[]).unwrap();
     let inherited = identical.sprite("file").expect("identical file sprite");
     assert_eq!(inherited.revision, original_revision);
     assert_eq!(inherited.frames[0].content_digest, original_digest);
 
     let mut changed = graph(Some(vec![3, 2, 1]), 2);
-    changed.inherit_runtime_graph(&previous);
+    changed.inherit_runtime_graph(&previous, &[]).unwrap();
     assert!(changed.sprite("file").is_none());
     changed
         .apply_metadata(
@@ -300,7 +303,7 @@ fn file_sprite_reload_inherits_only_an_identical_resource_digest() {
     assert_ne!(rebuilt.frames[0].content_digest, original_digest);
 
     let mut deleted = graph(None, 2);
-    deleted.inherit_runtime_graph(&previous);
+    deleted.inherit_runtime_graph(&previous, &[]).unwrap();
     assert!(deleted.sprite("file").is_none());
 }
 
@@ -718,4 +721,147 @@ fn portable_canvas_replay_captures_style_draw_and_snapshot_revisions() {
     assert_eq!(graph.animation_timer(), i32::from(i16::MAX));
     assert!(!graph.set_animation_timer(i64::from(i32::MIN) - 1));
     assert_eq!(graph.animation_timer(), i32::from(i16::MAX));
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn replay_keeps_only_the_exact_live_historical_dependency_closure() {
+    let mut graph = ResourceGraph::default();
+    for id in 1..=3 {
+        graph.create_canvas(id, 8, 8).unwrap();
+    }
+    assert!(graph.clear_canvas(1, 1, None));
+    assert!(graph.clear_canvas(2, 2, None));
+    assert!(graph.draw_canvas(3, 1, None, None, None, Some(2), 0, None));
+    assert!(graph.clear_canvas(1, 3, None));
+    assert!(graph.clear_canvas(2, 4, None));
+
+    assert!(graph.create_canvas_sprite("FROM_CANVAS", 1, None, [0, 0], None));
+    assert!(graph.create_animation_sprite("ANIM", 8, 8));
+    assert!(graph.add_animation_frame("ANIM", 2, [0, 0, 8, 8], [0, 0], 10));
+    let animation_revision = graph.sprite_revision("ANIM").unwrap();
+    assert!(graph.draw_sprite(3, "ANIM", None, None));
+    let animation_source = SceneSourceV1::Sprite {
+        sprite_name: "ANIM".into(),
+        resource_revision: animation_revision,
+    };
+    assert!(graph.retain_scene_source(&animation_source));
+
+    let scene = SceneStateV1 {
+        revision: 1,
+        layers: vec![SceneLayerV1 {
+            layer_id: 1,
+            sequence: 1,
+            source: animation_source,
+            depth: 1,
+            anchor: SceneAnchorV1::Viewport,
+            offset: SceneOffsetV1 {
+                x: LogicalLength(0),
+                y: LogicalLength(0),
+            },
+            size: SceneSizeV1 {
+                width: LogicalLength(8_000),
+                height: LogicalLength(8_000),
+            },
+            opacity: u8::MAX,
+            color_matrix: None,
+            scroll_policy: SceneScrollPolicyV1::Fixed,
+            interaction: None,
+            scene_revision: 1,
+            document_origin_y: LogicalLength(0),
+        }],
+    };
+    let roots = vec![scene.layers[0].source.clone()];
+    let baseline = graph.replay_for_roots(&roots).unwrap();
+    assert!(
+        baseline
+            .sprites
+            .iter()
+            .any(|sprite| { sprite.name == "ANIM" && sprite.revision == animation_revision })
+    );
+    let snapshot = serde_json::to_vec(&graph).expect("serialize revision snapshot maps");
+    graph = serde_json::from_slice(&snapshot).expect("restore revision snapshot maps");
+    assert_eq!(graph.exact_revisions.retained_canvas_command_bytes, 0);
+    let _ = graph.replay_for_roots(&roots).unwrap();
+    assert!(graph.exact_revisions.retained_canvas_command_bytes > 0);
+    assert!(graph.move_sprite("ANIM", 1, 2, false));
+    assert!(graph.dispose_sprite("ANIM"));
+    let replay = graph.replay_for_roots(&roots).unwrap();
+    let canvas_identities = replay
+        .canvases
+        .iter()
+        .map(|canvas| (canvas.canvas_id, canvas.revision))
+        .collect::<Vec<_>>();
+    assert_eq!(canvas_identities, [(1, 1), (1, 2), (2, 1), (2, 2), (3, 2)]);
+    let sprite_identities = replay
+        .sprites
+        .iter()
+        .map(|sprite| (sprite.name.as_str(), sprite.revision))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sprite_identities,
+        [
+            ("ANIM", animation_revision),
+            ("FROM_CANVAS", graph.sprite_revision("FROM_CANVAS").unwrap()),
+        ]
+    );
+    let from_canvas = replay
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "FROM_CANVAS")
+        .unwrap();
+    assert_eq!(from_canvas.canvas_id, Some(1));
+    assert_eq!(from_canvas.canvas_revision, Some(2));
+    let animation = replay
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "ANIM")
+        .unwrap();
+    assert_eq!(animation.frames[0].canvas_id, Some(2));
+    assert_eq!(animation.frames[0].canvas_revision, Some(2));
+    let target = replay
+        .canvases
+        .iter()
+        .find(|canvas| canvas.canvas_id == 3 && canvas.revision == 2)
+        .unwrap();
+    assert!(matches!(
+        target.commands.first(),
+        Some(CanvasReplayCommand::DrawCanvas {
+            source_canvas_id: 1,
+            source_revision: 1,
+            mask_canvas_id: Some(2),
+            mask_revision: Some(1),
+            ..
+        })
+    ));
+    assert!(matches!(
+        target.commands.last(),
+        Some(CanvasReplayCommand::DrawSprite {
+            name,
+            resource_revision,
+            ..
+        }) if name == "ANIM" && *resource_revision == animation_revision
+    ));
+
+    assert_eq!(graph.dispose_sprites(false), 1);
+    for id in 1..=3 {
+        assert!(graph.dispose_canvas(id));
+    }
+    let empty = graph.replay_for_roots(&[]).unwrap();
+    assert!(empty.sprites.is_empty());
+    assert!(empty.canvases.is_empty());
+    assert!(graph.exact_revisions.sprites.is_empty());
+    assert!(graph.exact_revisions.canvases.is_empty());
+}
+
+#[test]
+fn missing_exact_dependency_is_rejected_without_mutating_the_graph() {
+    let mut graph = ResourceGraph::default();
+    graph.create_canvas(1, 8, 8).unwrap();
+    let before = serde_json::to_value(&graph).unwrap();
+    assert!(!graph.retain_scene_source(&SceneSourceV1::Canvas {
+        canvas_id: 1,
+        resource_revision: 99,
+    }));
+    assert_eq!(serde_json::to_value(&graph).unwrap(), before);
 }

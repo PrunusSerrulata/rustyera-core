@@ -1006,12 +1006,18 @@ impl RuntimeSession {
                 else {
                     return commit_integer_result(vm, request.id, 0);
                 };
-                self.presentation.set_client_background_button_map(
-                    era_runtime_protocol::SceneSourceV1::Canvas {
-                        canvas_id,
-                        resource_revision: revision,
-                    },
-                );
+                let source = era_runtime_protocol::SceneSourceV1::Canvas {
+                    canvas_id,
+                    resource_revision: revision,
+                };
+                if !self
+                    .project_snapshot
+                    .as_mut()
+                    .is_some_and(|project| project.resource_graph.retain_scene_source(&source))
+                {
+                    return commit_integer_result(vm, request.id, 0);
+                }
+                self.presentation.set_client_background_button_map(source);
                 commit_integer_result(vm, request.id, 1)?;
             }
             "CBGSETG" => {
@@ -1026,11 +1032,19 @@ impl RuntimeSession {
                 let x = i32_argument_value(request, 1)?;
                 let y = i32_argument_value(request, 2)?;
                 let depth = cbg_depth(request, 3)?;
+                let source = era_runtime_protocol::SceneSourceV1::Canvas {
+                    canvas_id,
+                    resource_revision: revision,
+                };
+                if !self
+                    .project_snapshot
+                    .as_mut()
+                    .is_some_and(|project| project.resource_graph.retain_scene_source(&source))
+                {
+                    return commit_integer_result(vm, request.id, 0);
+                }
                 self.presentation.add_client_background(
-                    era_runtime_protocol::SceneSourceV1::Canvas {
-                        canvas_id,
-                        resource_revision: revision,
-                    },
+                    source,
                     depth,
                     x,
                     y,
@@ -1058,11 +1072,19 @@ impl RuntimeSession {
                 let height = optional_i32_argument(request, 5, 0)?;
                 let opacity = optional_opacity(request, 6, u8::MAX);
                 let color_matrix = optional_color_matrix(vm, request, 7)?;
+                let source = era_runtime_protocol::SceneSourceV1::Sprite {
+                    sprite_name,
+                    resource_revision: revision,
+                };
+                if !self
+                    .project_snapshot
+                    .as_mut()
+                    .is_some_and(|project| project.resource_graph.retain_scene_source(&source))
+                {
+                    return commit_integer_result(vm, request.id, 0);
+                }
                 self.presentation.add_client_background(
-                    era_runtime_protocol::SceneSourceV1::Sprite {
-                        sprite_name,
-                        resource_revision: revision,
-                    },
+                    source,
                     depth,
                     x,
                     y,
@@ -1098,16 +1120,26 @@ impl RuntimeSession {
                             resource_revision,
                         },
                     );
+                let source = era_runtime_protocol::SceneSourceV1::Sprite {
+                    sprite_name,
+                    resource_revision: sprite_revision,
+                };
                 let x = i32_argument_value(request, 3)?;
                 let y = i32_argument_value(request, 4)?;
                 let depth = cbg_depth(request, 5)?;
                 let title = request.argument(6).map(display_value);
+                let mut roots = vec![source.clone()];
+                roots.extend(hover_source.iter().cloned());
+                let retained = self
+                    .project_snapshot
+                    .as_mut()
+                    .is_some_and(|project| project.resource_graph.retain_scene_sources(&roots));
+                if !retained {
+                    return commit_integer_result(vm, request.id, 0);
+                }
                 let token = self.allocate_interaction();
                 self.presentation.add_client_background(
-                    era_runtime_protocol::SceneSourceV1::Sprite {
-                        sprite_name,
-                        resource_revision: sprite_revision,
-                    },
+                    source,
                     depth,
                     x,
                     y,
@@ -1149,11 +1181,20 @@ impl RuntimeSession {
                 } else {
                     era_runtime_protocol::SceneAnchorV1::Viewport
                 };
+                let source = era_runtime_protocol::SceneSourceV1::Sprite {
+                    sprite_name,
+                    resource_revision,
+                };
+                if !self
+                    .project_snapshot
+                    .as_mut()
+                    .is_some_and(|project| project.resource_graph.retain_scene_source(&source))
+                {
+                    commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+                    return Ok(());
+                }
                 self.presentation.add_image_layer(
-                    era_runtime_protocol::SceneSourceV1::Sprite {
-                        sprite_name,
-                        resource_revision,
-                    },
+                    source,
                     depth,
                     anchor,
                     x,

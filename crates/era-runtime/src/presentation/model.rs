@@ -5,14 +5,19 @@ use std::sync::Arc;
 
 use era_runtime_protocol::{
     AudioState, Color, DisplayLine, DisplayRun, InputWait, InteractionToken, LineAlignment,
-    PresentationDelta, PresentationHistoryOperation, PresentationSettings, PresentationSnapshot,
-    ResourceReplay, SceneOperationV1, SceneSourceV1, SceneStateV1, TextStyle, TooltipSettings,
+    LogicalLength, PresentationDelta, PresentationHistoryOperation, PresentationSettings,
+    PresentationSnapshot, ResourceReplay, SceneOperationV1, SceneSourceV1, SceneStateV1, TextStyle,
+    TooltipSettings,
 };
 use erabasic_vm::CharacterWidthMode;
 use serde::{Deserialize, Serialize};
 
 const fn dirty_line_count() -> bool {
     true
+}
+
+const fn zero_logical_length() -> LogicalLength {
+    LogicalLength(0)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -33,6 +38,9 @@ pub(crate) struct PresentationModel {
     pub(super) input_wait: Option<InputWait>,
     pub(super) next_line: u64,
     pub(super) logical_line_count: i64,
+    /// Monotonic, non-negative semantic document coordinate; independent of LINECOUNT edits.
+    #[serde(default = "zero_logical_length")]
+    pub(super) canonical_document_cursor_y: LogicalLength,
     #[serde(skip, default = "dirty_line_count")]
     pub(super) line_count_dirty: bool,
     pub(super) settings: PresentationSettings,

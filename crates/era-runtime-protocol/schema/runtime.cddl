@@ -1,4 +1,4 @@
-; Runtime channel version: 44.0.
+; Runtime channel version: 45.0.
 ; RuntimeMessage is encoded as a minicbor enum [stable-tag, typed-body].
 runtime-message =
   [0, client-hello] /
@@ -248,7 +248,8 @@ scene-layer-v1 = {
   ? 8: [int, int, int, int, int, int, int, int, int, int,
       int, int, int, int, int, int, int, int, int, int,
       int, int, int, int, int],
-  9: scene-scroll-policy-v1, ? 10: scene-interaction-v1, 11: uint
+  9: scene-scroll-policy-v1, ? 10: scene-interaction-v1, 11: uint,
+  12: uint ; canonical document origin, zero unless viewport/follow-content
 }
 scene-state-v1 = { 0: uint, 1: [* scene-layer-v1] }
 scene-operation-v1 =
@@ -272,15 +273,16 @@ display-line = {
   0: uint, 1: bool, 2: bool, 3: bool, 4: uint, 5: [* display-run], 6: bool
 }
 sprite-frame-replay = {
+  ; 5 and 7 are an atomic exact canvas reference and must appear together.
   0: tstr, 1: [int, int, int, int], 2: [int, int], 3: uint,
-  ? 4: [uint, uint], ? 5: int, ? 6: bstr
+  ? 4: [uint, uint], ? 5: int, ? 6: bstr, ? 7: uint
 }
 canvas-point = { 0: int, 1: int }
 canvas-size = { 0: uint, 1: uint }
 canvas-rect = { 0: int, 1: int, 2: int, 3: int }
 canvas-replay-command =
   [0, [uint, canvas-rect / null]] / ; Clear
-  [1, [tstr, canvas-rect, [* int] / null]] / ; DrawSprite
+  [1, [tstr, canvas-rect, [* int] / null, uint]] / ; DrawSprite
   [2, [canvas-point, uint]] / ; SetPixel
   [3, [canvas-rect, uint]] / ; FillRectangle
   [4, [uint]] / ; SetBrush
@@ -289,8 +291,9 @@ canvas-replay-command =
   [7, [tstr, int, uint]] / ; SetFont
   [8, [canvas-point, canvas-point]] / ; DrawLine
   [9, [tstr, canvas-point]] / ; DrawText
+  ; DrawCanvas mask id/revision (positions 5 and 8) are both null or both present.
   [10, [int, uint, canvas-rect, canvas-rect, [* int] / null,
-        int / null, int, canvas-point / null]] / ; DrawCanvas
+        int / null, int, canvas-point / null, uint / null]] / ; DrawCanvas
   [11, [bstr, bstr]] / ; LoadEncodedImage
   [12, [canvas-point]] / ; PolygonPointAdd
   [13, []] / ; PolygonPointClear
@@ -300,8 +303,9 @@ canvas-replay = {
   0: int, 1: canvas-size, 2: [* canvas-replay-command], 3: uint
 }
 sprite-replay = {
+  ; 4 and 7 are an atomic exact canvas reference and must appear together.
   0: tstr, 1: [uint, uint], 2: [int, int], 3: [* sprite-frame-replay],
-  ? 4: int, ? 5: canvas-rect, 6: uint
+  ? 4: int, ? 5: canvas-rect, 6: uint, ? 7: uint
 }
 resource-replay = { 0: [* sprite-replay], 1: [* canvas-replay], 2: int }
 presentation-delta = { 0: uint, 1: uint, 2: [* presentation-operation] }
@@ -386,6 +390,8 @@ sql-response-v1 = {
 ; Protocol 42 adds canonical scene v1 snapshots/deltas and pixel/column cell width intents.
 ; Protocol 43 adds digest-bound sprite frames and deterministic polygon canvas replay.
 ; Protocol 44 adds CBG hover/hit-map scene interactions and revision-bound line geometry.
+; Protocol 45 makes scene document origins and every mutable resource dependency exact-revision
+; bound, including historical replay closure.
 ; It retains Protocol 41 safe SQL v1 payloads and ServiceKind 11 with the existing descriptor,
 ; digest, chunking, and cancellation flow. It retains Protocol 24 authoritative logs,
 ; Protocol 23 snapshot purposes, source-identity-first project loading,

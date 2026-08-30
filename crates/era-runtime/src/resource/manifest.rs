@@ -55,6 +55,7 @@ pub(super) fn parse_resource_manifest(
                     position_x: 0,
                     position_y: 0,
                     canvas_id: None,
+                    canvas_revision: None,
                     canvas_rectangle: None,
                 },
             );
@@ -100,6 +101,7 @@ pub(super) fn parse_resource_manifest(
             image_path,
             content_digest: None,
             canvas_id: None,
+            canvas_revision: None,
             source_x: rect.map_or(0, |value| value.0),
             source_y: rect.map_or(0, |value| value.1),
             source_width: rect.and_then(|value| u32::try_from(value.2).ok()),
@@ -138,6 +140,7 @@ pub(super) fn parse_resource_manifest(
                 position_x: 0,
                 position_y: 0,
                 canvas_id: None,
+                canvas_revision: None,
                 canvas_rectangle: None,
             },
         );

@@ -23,6 +23,7 @@ pub(super) fn model() -> PresentationModel {
         input_wait: None,
         next_line: 1,
         logical_line_count: 0,
+        canonical_document_cursor_y: LogicalLength(0),
         line_count_dirty: true,
         settings: PresentationSettings {
             drawable_width: LogicalLength(760_000),

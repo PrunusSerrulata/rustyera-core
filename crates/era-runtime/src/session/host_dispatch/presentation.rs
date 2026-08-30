@@ -698,8 +698,18 @@ impl RuntimeSession {
                 .as_ref()
                 .and_then(|project| project.resource_graph.sprite_revision(&resource));
             if let Some(resource_revision) = resource_revision {
-                self.presentation
-                    .add_background(resource, resource_revision, depth, opacity);
+                let source = era_runtime_protocol::SceneSourceV1::Sprite {
+                    sprite_name: resource.clone(),
+                    resource_revision,
+                };
+                if self
+                    .project_snapshot
+                    .as_mut()
+                    .is_some_and(|project| project.resource_graph.retain_scene_source(&source))
+                {
+                    self.presentation
+                        .add_background(resource, resource_revision, depth, opacity);
+                }
             }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();

@@ -196,20 +196,23 @@ impl RuntimeSession {
         if !self.presentation.resource_replay_is_ready_to_publish() {
             return false;
         }
-        self.materialize_resource_replay();
-        true
+        self.materialize_resource_replay()
     }
 
-    fn materialize_resource_replay(&mut self) {
+    fn materialize_resource_replay(&mut self) -> bool {
         if !self.presentation.resource_replay_stale() {
-            return;
+            return false;
         }
-        let replay = self
-            .project_snapshot
-            .as_ref()
-            .map(|project| project.resource_graph.replay())
-            .unwrap_or_default();
+        let roots = self.presentation.resource_roots();
+        let replay = match self.project_snapshot.as_mut() {
+            Some(project) => match project.resource_graph.replay_for_roots(&roots) {
+                Ok(replay) => replay,
+                Err(_) => return false,
+            },
+            None => era_runtime_protocol::ResourceReplay::default(),
+        };
         self.presentation.set_resource_replay(replay);
+        true
     }
 
     pub(in super::super) fn complete_graphics_result(

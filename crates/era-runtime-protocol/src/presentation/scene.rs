@@ -122,6 +122,13 @@ pub struct SceneLayerV1 {
     pub interaction: Option<SceneInteractionV1>,
     #[n(11)]
     pub scene_revision: u64,
+    /// Runtime-owned semantic document coordinate captured when the layer is inserted.
+    ///
+    /// For `FollowContent`, frontends project this origin together with their current
+    /// scroll position. It is deliberately not a browser `scrollTop`, terminal row, or
+    /// other device observation. `Fixed` layers use zero.
+    #[n(12)]
+    pub document_origin_y: LogicalLength,
 }
 
 #[derive(Clone, Debug, Default, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -185,6 +192,7 @@ pub enum SceneReplayError {
     NonMonotonicSequence,
     ChangedSequence,
     InvalidLayerRevision,
+    InvalidDocumentOrigin,
 }
 
 impl SceneStateV1 {
@@ -300,6 +308,19 @@ impl SceneStateV1 {
         {
             return Err(SceneReplayError::InvalidLayerRevision);
         }
+        if self
+            .layers
+            .iter()
+            .any(|layer| match (layer.anchor, layer.scroll_policy) {
+                (SceneAnchorV1::Viewport, SceneScrollPolicyV1::FollowContent) => {
+                    layer.document_origin_y.0 < 0
+                }
+                (SceneAnchorV1::Viewport, SceneScrollPolicyV1::Fixed)
+                | (SceneAnchorV1::DisplayLine { .. }, _) => layer.document_origin_y.0 != 0,
+            })
+        {
+            return Err(SceneReplayError::InvalidDocumentOrigin);
+        }
         Ok(())
     }
 }
@@ -331,6 +352,7 @@ mod tests {
             scroll_policy: SceneScrollPolicyV1::Fixed,
             interaction: None,
             scene_revision: 1,
+            document_origin_y: LogicalLength(0),
         }
     }
 
@@ -464,5 +486,35 @@ mod tests {
             Err(SceneReplayError::InvalidLayerRevision)
         );
         assert_eq!(state, before);
+    }
+
+    #[test]
+    fn document_origin_is_valid_only_for_viewport_follow_content() {
+        let mut invalid = layer(1, 1, 0, SceneAnchorV1::Viewport);
+        invalid.document_origin_y = LogicalLength(1);
+        let mut state = SceneStateV1::default();
+        assert_eq!(
+            state.apply_delta(&SceneDeltaV1 {
+                base_revision: 0,
+                new_revision: 1,
+                operations: vec![SceneOperationV1::UpsertLayer {
+                    layer: Box::new(invalid),
+                }],
+            }),
+            Err(SceneReplayError::InvalidDocumentOrigin)
+        );
+
+        let mut valid = layer(1, 1, 0, SceneAnchorV1::Viewport);
+        valid.scroll_policy = SceneScrollPolicyV1::FollowContent;
+        valid.document_origin_y = LogicalLength(1);
+        state
+            .apply_delta(&SceneDeltaV1 {
+                base_revision: 0,
+                new_revision: 1,
+                operations: vec![SceneOperationV1::UpsertLayer {
+                    layer: Box::new(valid),
+                }],
+            })
+            .unwrap();
     }
 }

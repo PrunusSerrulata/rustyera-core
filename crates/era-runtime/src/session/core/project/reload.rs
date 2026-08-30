@@ -122,11 +122,19 @@ impl RuntimeSession {
                 );
             }
         }
+        let resource_roots = self.presentation.resource_roots();
         if let (Some(next), Some(previous)) =
             (build.snapshot.as_mut(), self.project_snapshot.as_ref())
+            && let Err(error) = next
+                .resource_graph
+                .inherit_runtime_graph(&previous.resource_graph, &resource_roots)
         {
-            next.resource_graph
-                .inherit_runtime_graph(&previous.resource_graph);
+            self.set_phase(previous_phase)?;
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                &format!("project reload breaks the live resource replay closure: {error}"),
+            );
         }
         let replay_origin = if reload.changes.is_empty() {
             None

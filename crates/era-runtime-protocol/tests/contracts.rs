@@ -62,11 +62,13 @@ fn scene_golden_layer() -> SceneLayerV1 {
         scroll_policy: SceneScrollPolicyV1::Fixed,
         interaction: None,
         scene_revision: 4,
+        document_origin_y: runtime_protocol::LogicalLength(0),
     }
 }
 
 #[test]
-fn protocol_42_scene_and_cell_intents_have_stable_json_cbor_and_cddl() {
+#[allow(clippy::too_many_lines)]
+fn protocol_45_scene_and_cell_intents_have_stable_json_cbor_and_cddl() {
     let empty_scene = SceneStateV1 {
         revision: 3,
         layers: Vec::new(),
@@ -96,6 +98,21 @@ fn protocol_42_scene_and_cell_intents_have_stable_json_cbor_and_cddl() {
         decode_canonical::<SceneStateV1>(&encode_canonical(&replayed).unwrap()),
         Ok(replayed.clone())
     );
+    let mut following = scene_golden_layer();
+    following.scroll_policy = SceneScrollPolicyV1::FollowContent;
+    following.document_origin_y = runtime_protocol::LogicalLength(19_000);
+    let following = SceneStateV1 {
+        revision: 4,
+        layers: vec![following],
+    };
+    assert_eq!(
+        serde_json::to_value(&following).unwrap()["layers"][0]["document_origin_y"],
+        serde_json::json!(19_000)
+    );
+    assert_eq!(
+        decode_canonical::<SceneStateV1>(&encode_canonical(&following).unwrap()),
+        Ok(following)
+    );
 
     let project_width = CellWidthIntent::ProjectColumns(12);
     assert_eq!(
@@ -119,8 +136,32 @@ fn protocol_42_scene_and_cell_intents_have_stable_json_cbor_and_cddl() {
 
     let matrix = HtmlColorMatrix::Fixed(Box::new([256; 25]));
     assert_eq!(
-        decode_canonical::<HtmlColorMatrix>(&encode_canonical(&matrix).unwrap()),
-        Ok(matrix)
+        serde_json::to_value(&matrix).unwrap(),
+        serde_json::json!({"type": "fixed", "value": vec![256; 25]})
+    );
+    assert_eq!(encode_canonical(&matrix).unwrap(), {
+        let mut bytes = vec![0x82, 0x01, 0x81, 0x98, 0x19];
+        for _ in 0..25 {
+            bytes.extend([0x19, 0x01, 0x00]);
+        }
+        bytes
+    });
+    let variable = HtmlColorMatrix::Variable {
+        name: "MATRIX".into(),
+        indices: [1, 2, 3],
+    };
+    assert_eq!(
+        serde_json::to_value(&variable).unwrap(),
+        serde_json::json!({
+            "type": "variable",
+            "value": {"name": "MATRIX", "indices": [1, 2, 3]}
+        })
+    );
+    assert_eq!(
+        encode_canonical(&variable).unwrap(),
+        vec![
+            0x82, 0x00, 0x82, 0x66, b'M', b'A', b'T', b'R', b'I', b'X', 0x83, 0x01, 0x02, 0x03,
+        ]
     );
 
     let schema = include_str!("../schema/runtime.cddl");
@@ -135,7 +176,7 @@ fn protocol_42_scene_and_cell_intents_have_stable_json_cbor_and_cddl() {
     ] {
         assert!(schema.contains(definition));
     }
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
 }
 
 #[test]
@@ -151,12 +192,12 @@ fn protocol_42_scene_operations_and_delta_have_exact_json_and_cbor() {
                 "depth":0,"anchor":{"type":"viewport"},
                 "offset":{"x":0,"y":0},"size":{"width":0,"height":0},
                 "opacity":255,"color_matrix":null,"scroll_policy":"fixed",
-                "interaction":null,"scene_revision":4
+                "interaction":null,"scene_revision":4,"document_origin_y":0
             }}),
             vec![
-                0x82, 0x00, 0x81, 0xaa, 0x00, 0x01, 0x01, 0x02, 0x02, 0x82, 0x00, 0x82, 0x61, b'R',
+                0x82, 0x00, 0x81, 0xab, 0x00, 0x01, 0x01, 0x02, 0x02, 0x82, 0x00, 0x82, 0x61, b'R',
                 0x03, 0x03, 0x00, 0x04, 0x82, 0x00, 0x80, 0x05, 0xa2, 0x00, 0x00, 0x01, 0x00, 0x06,
-                0xa2, 0x00, 0x00, 0x01, 0x00, 0x07, 0x18, 0xff, 0x09, 0x00, 0x0b, 0x04,
+                0xa2, 0x00, 0x00, 0x01, 0x00, 0x07, 0x18, 0xff, 0x09, 0x00, 0x0b, 0x04, 0x0c, 0x00,
             ],
         ),
         (
@@ -372,7 +413,7 @@ fn protocol_44_scene_interactions_and_line_geometry_have_stable_contracts() {
         GET_LINE_GEOMETRY_OPERATION_VERSION,
         ProtocolVersion::new(1, 0)
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
     let schema = include_str!("../schema/runtime.cddl");
     assert!(schema.contains("get-line-geometry-v1-request"));
     assert!(schema.contains("get-line-geometry-v1-response"));
@@ -467,7 +508,7 @@ fn protocol_40_round_trips_input_environment_wait_and_ordered_device_contracts()
         .unwrap(),
         pump
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
     let schema = include_str!("../schema/runtime.cddl");
     for definition in [
         "environment-capability",
@@ -498,7 +539,7 @@ fn protocol_24_carries_backend_authoritative_logs() {
         RuntimeMessage::decode_payload(98, &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
 }
 
 #[test]
@@ -531,7 +572,7 @@ fn protocol_38_carries_correlated_secondary_vm_faults() {
         RuntimeMessage::decode_payload(message.tag(), &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
     let schema = include_str!("../schema/runtime.cddl");
     assert!(schema.contains("runtime-vm-fault-detail"));
     assert_eq!(
@@ -566,7 +607,7 @@ fn protocol_34_carries_diagnostic_notification_guidance() {
         serde_json::to_value(&message).unwrap()["value"]["notification"],
         "log_only"
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
 }
 
 #[test]
@@ -589,7 +630,7 @@ fn protocol_35_carries_the_encoded_journal_byte_limit_at_map_key_six() {
     assert!(include_str!("../schema/runtime.cddl").contains(
         "runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint, 6: uint }"
     ));
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
 }
 
 #[test]
@@ -735,7 +776,7 @@ fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
 }
 
 #[test]
@@ -744,7 +785,7 @@ fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -910,7 +951,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -949,7 +990,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
     assert_eq!(StateExportKind::InputReplay as u8, 4);
 }
 
@@ -1133,6 +1174,7 @@ fn transient_effects_have_an_independent_idempotent_stream() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn resource_replay_is_a_renderer_independent_protocol_value() {
     let encoded_image = CanvasReplayCommand::LoadEncodedImage {
         content_digest: ProtocolBytes::new(vec![1, 2]),
@@ -1164,10 +1206,12 @@ fn resource_replay_is_a_renderer_independent_protocol_value() {
                 destination_size: None,
                 canvas_id: None,
                 content_digest: Some(ProtocolBytes::new(vec![7; 32])),
+                canvas_revision: None,
             }],
             canvas_id: None,
             canvas_rectangle: None,
             revision: 4,
+            canvas_revision: None,
         }],
         canvases: vec![CanvasReplay {
             canvas_id: 3,
@@ -1192,6 +1236,189 @@ fn resource_replay_is_a_renderer_independent_protocol_value() {
     };
     let encoded = encode_canonical(&replay).expect("encode resource replay");
     assert_eq!(decode_canonical(&encoded), Ok(replay));
+
+    let exact_canvas_edge = CanvasReplayCommand::DrawCanvas {
+        source_canvas_id: 9,
+        source_revision: u64::MAX,
+        source: runtime_protocol::CanvasRect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        },
+        destination: runtime_protocol::CanvasRect {
+            x: 2,
+            y: 3,
+            width: 4,
+            height: 5,
+        },
+        color_matrix: None,
+        mask_canvas_id: Some(10),
+        rotation_millidegrees: 0,
+        rotation_center: None,
+        mask_revision: Some(u64::MAX - 1),
+    };
+    assert_eq!(
+        serde_json::to_value(&exact_canvas_edge).unwrap(),
+        serde_json::json!({
+            "type": "draw_canvas",
+            "source_canvas_id": 9,
+            "source_revision": u64::MAX,
+            "source": {"x":0,"y":0,"width":1,"height":1},
+            "destination": {"x":2,"y":3,"width":4,"height":5},
+            "color_matrix": null,
+            "mask_canvas_id": 10,
+            "rotation_millidegrees": 0,
+            "rotation_center": null,
+            "mask_revision": u64::MAX - 1
+        })
+    );
+    assert_eq!(
+        decode_canonical::<CanvasReplayCommand>(&encode_canonical(&exact_canvas_edge).unwrap()),
+        Ok(exact_canvas_edge)
+    );
+
+    let frame = SpriteFrameReplay {
+        resource_id: String::new(),
+        source_rectangle: [0, 0, 1, 1],
+        offset: [0, 0],
+        delay_ms: 1,
+        destination_size: None,
+        canvas_id: Some(2),
+        content_digest: None,
+        canvas_revision: Some(3),
+    };
+    assert_eq!(
+        serde_json::to_value(&frame).unwrap(),
+        serde_json::json!({
+            "resource_id":"", "source_rectangle":[0,0,1,1], "offset":[0,0],
+            "delay_ms":1, "destination_size":null, "canvas_id":2,
+            "content_digest":null, "canvas_revision":3
+        })
+    );
+    assert_eq!(
+        encode_canonical(&frame).unwrap(),
+        vec![
+            0xa6, 0x00, 0x60, 0x01, 0x84, 0x00, 0x00, 0x01, 0x01, 0x02, 0x82, 0x00, 0x00, 0x03,
+            0x01, 0x05, 0x02, 0x07, 0x03,
+        ]
+    );
+    let sprite = SpriteReplay {
+        name: "S".into(),
+        size: [1, 1],
+        position: [0, 0],
+        frames: Vec::new(),
+        canvas_id: Some(2),
+        canvas_rectangle: None,
+        revision: 4,
+        canvas_revision: Some(3),
+    };
+    assert_eq!(
+        serde_json::to_value(&sprite).unwrap(),
+        serde_json::json!({
+            "name":"S", "size":[1,1], "position":[0,0], "frames":[],
+            "canvas_id":2, "canvas_rectangle":null, "revision":4, "canvas_revision":3
+        })
+    );
+    assert_eq!(
+        encode_canonical(&sprite).unwrap(),
+        vec![
+            0xa7, 0x00, 0x61, b'S', 0x01, 0x82, 0x01, 0x01, 0x02, 0x82, 0x00, 0x00, 0x03, 0x80,
+            0x04, 0x02, 0x06, 0x04, 0x07, 0x03,
+        ]
+    );
+    let draw_sprite = CanvasReplayCommand::DrawSprite {
+        name: "S".into(),
+        destination: runtime_protocol::CanvasRect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        },
+        color_matrix: None,
+        resource_revision: 4,
+    };
+    assert_eq!(
+        serde_json::to_value(&draw_sprite).unwrap(),
+        serde_json::json!({
+            "type":"draw_sprite", "name":"S",
+            "destination":{"x":0,"y":0,"width":1,"height":1},
+            "color_matrix":null, "resource_revision":4
+        })
+    );
+    assert_eq!(
+        encode_canonical(&draw_sprite).unwrap(),
+        vec![
+            0x82, 0x01, 0x84, 0x61, b'S', 0xa4, 0x00, 0x00, 0x01, 0x00, 0x02, 0x01, 0x03, 0x01,
+            0xf6, 0x04,
+        ]
+    );
+    let draw_canvas = CanvasReplayCommand::DrawCanvas {
+        source_canvas_id: 1,
+        source_revision: 2,
+        source: runtime_protocol::CanvasRect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        },
+        destination: runtime_protocol::CanvasRect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        },
+        color_matrix: None,
+        mask_canvas_id: Some(3),
+        rotation_millidegrees: 0,
+        rotation_center: None,
+        mask_revision: Some(4),
+    };
+    assert_eq!(
+        encode_canonical(&draw_canvas).unwrap(),
+        vec![
+            0x82, 0x0a, 0x89, 0x01, 0x02, 0xa4, 0x00, 0x00, 0x01, 0x00, 0x02, 0x01, 0x03, 0x01,
+            0xa4, 0x00, 0x00, 0x01, 0x00, 0x02, 0x01, 0x03, 0x01, 0xf6, 0x03, 0x00, 0xf6, 0x04,
+        ]
+    );
+
+    let valid = ResourceReplay {
+        sprites: vec![sprite],
+        canvases: vec![
+            CanvasReplay {
+                canvas_id: 1,
+                size: CanvasSize {
+                    width: 1,
+                    height: 1,
+                },
+                commands: vec![draw_canvas, draw_sprite],
+                revision: 2,
+            },
+            CanvasReplay {
+                canvas_id: 2,
+                size: CanvasSize {
+                    width: 1,
+                    height: 1,
+                },
+                commands: vec![],
+                revision: 3,
+            },
+            CanvasReplay {
+                canvas_id: 3,
+                size: CanvasSize {
+                    width: 1,
+                    height: 1,
+                },
+                commands: vec![],
+                revision: 4,
+            },
+        ],
+        animation_timer_ms: 0,
+    };
+    assert_eq!(valid.validate_exact_references(), Ok(()));
+    let mut partial = valid;
+    partial.sprites[0].canvas_revision = None;
+    assert!(partial.validate_exact_references().is_err());
 }
 
 #[test]
@@ -1397,7 +1624,7 @@ fn protocol_41_carries_safe_sql_v1_without_native_paths_or_handles() {
     );
     assert_eq!(SqlLimitsV1::FIXED.maximum_connections, 8);
     assert_eq!(SqlLimitsV1::FIXED.execution_budget_ms, 5_000);
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
     let schema = include_str!("../schema/runtime.cddl");
     assert!(schema.contains("sql-request-v1"));
     assert!(schema.contains("sql-response-v1"));

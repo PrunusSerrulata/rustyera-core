@@ -248,6 +248,7 @@ fn line_anchored_image_layers_follow_content_and_expire_with_stable_lines() {
         model.scene.layers[0].scroll_policy,
         SceneScrollPolicyV1::FollowContent
     );
+    assert_eq!(model.scene.layers[0].document_origin_y, LogicalLength(0));
     model.append_print_text("line".into(), false, true);
     assert_eq!(model.line_id_at_display_index(0), Some(first_line_id));
     model.delete_last_lines(1);
@@ -275,6 +276,36 @@ fn line_anchored_image_layers_follow_content_and_expire_with_stable_lines() {
     assert_eq!(model.line_id_at_display_index(0), Some(trimmed_line_id + 1));
     assert!(!model.image_layer_exists(4));
     assert!(model.scene.layers.is_empty());
+}
+
+#[test]
+fn follow_content_captures_a_canonical_document_origin_not_client_scroll() {
+    let mut model = PresentationModel::default();
+    model.set_projection(true, true, true, true, true);
+    model.settings.maximum_physical_lines = 1;
+    model.append_text("completed".into(), false);
+    let canonical_line_height = model.settings.line_height;
+    model.delete_last_lines(1);
+    model.append_text("trimmed replacement".into(), false);
+    model.append_text("forces max-log trim".into(), false);
+    model.add_image_layer(
+        test_scene_source("following", 3),
+        1,
+        SceneAnchorV1::Viewport,
+        0,
+        0,
+        1,
+        1,
+        255,
+        None,
+        true,
+    );
+    let layer = &model.scene.layers[0];
+    assert_eq!(
+        layer.document_origin_y,
+        LogicalLength(canonical_line_height.0.saturating_mul(3))
+    );
+    assert_eq!(model.snapshot().scene.layers[0], layer.clone());
 }
 
 #[test]

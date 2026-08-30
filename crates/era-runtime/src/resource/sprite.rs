@@ -14,6 +14,7 @@ pub(crate) struct SpriteDefinition {
     pub(crate) position_x: i32,
     pub(crate) position_y: i32,
     pub(crate) canvas_id: Option<i64>,
+    pub(crate) canvas_revision: Option<u64>,
     pub(crate) canvas_rectangle: Option<[i32; 4]>,
 }
 
@@ -24,6 +25,7 @@ pub(crate) struct SpriteFrame {
     #[serde(default)]
     pub(crate) content_digest: Option<[u8; 32]>,
     pub(crate) canvas_id: Option<i64>,
+    pub(crate) canvas_revision: Option<u64>,
     pub(crate) source_x: i32,
     pub(crate) source_y: i32,
     pub(crate) source_width: Option<u32>,

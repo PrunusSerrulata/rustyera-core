@@ -880,13 +880,28 @@ fn snake_graphics_resources_execute_overloads_safe_files_and_polygon_replay() {
         sprite("ROOT").frames[0].content_digest,
         sprite("LOCAL").frames[0].content_digest,
     );
-    let canvas = replay.canvases.iter().find(|canvas| canvas.canvas_id == 1).unwrap();
-    assert!(canvas.commands.iter().any(
-        |command| matches!(command, CanvasReplayCommand::DrawPolygon),
-    ));
-    assert!(canvas.commands.iter().any(
-        |command| matches!(command, CanvasReplayCommand::FillPolygon),
-    ));
+    let canvas = replay
+        .canvases
+        .iter()
+        .filter(|canvas| canvas.canvas_id == 1)
+        .max_by_key(|canvas| canvas.revision)
+        .unwrap();
+    assert!(
+        canvas
+            .commands
+            .iter()
+            .any(|command| matches!(command, CanvasReplayCommand::DrawPolygon)),
+        "{:#?}",
+        canvas.commands
+    );
+    assert!(
+        canvas
+            .commands
+            .iter()
+            .any(|command| matches!(command, CanvasReplayCommand::FillPolygon)),
+        "{:#?}",
+        canvas.commands
+    );
     assert!(matches!(
         canvas.commands.last(),
         Some(CanvasReplayCommand::PolygonPointClear)

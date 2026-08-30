@@ -777,6 +777,7 @@ impl PresentationModel {
         } else {
             self.logical_line_count + 1
         };
+        self.advance_canonical_document_cursor();
         self.line_count_dirty = true;
         if self.replace_next_temporary {
             self.history_edits
@@ -890,6 +891,7 @@ impl PresentationModel {
         } else {
             self.logical_line_count + 1
         };
+        self.advance_canonical_document_cursor();
         self.line_count_dirty = true;
         self.history_edits
             .push(PresentationHistoryEdit::Append { line });
@@ -920,6 +922,13 @@ impl PresentationModel {
             self.history_edits
                 .push(PresentationHistoryEdit::TrimPhysical { count });
         }
+    }
+
+    fn advance_canonical_document_cursor(&mut self) {
+        self.canonical_document_cursor_y.0 = self
+            .canonical_document_cursor_y
+            .0
+            .saturating_add(self.settings.line_height.0.max(0));
     }
 
     fn button_run(

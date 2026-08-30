@@ -70,6 +70,20 @@ impl PresentationModel {
             && (self.input_wait.is_some() || (self.redraw_enabled && self.delivery.dirty.redraw))
     }
 
+    /// All committed and pending sources that keep an exact resource revision live.
+    pub(crate) fn resource_roots(&self) -> Vec<SceneSourceV1> {
+        let mut roots = Vec::new();
+        for layer in &self.scene.layers {
+            roots.push(layer.source.clone());
+            if let Some(interaction) = &layer.interaction {
+                roots.extend(interaction.hover_source.iter().cloned());
+                roots.extend(interaction.hit_map.iter().cloned());
+            }
+        }
+        roots.extend(self.cbg_button_map.iter().cloned());
+        roots
+    }
+
     pub(crate) fn add_background(
         &mut self,
         resource_id: String,
@@ -102,6 +116,7 @@ impl PresentationModel {
                 scroll_policy: SceneScrollPolicyV1::Fixed,
                 interaction: None,
                 scene_revision: self.scene.revision.saturating_add(1),
+                document_origin_y: LogicalLength(0),
             }),
         };
         self.apply_scene_operations(vec![operation]);
@@ -170,6 +185,7 @@ impl PresentationModel {
                 scroll_policy: SceneScrollPolicyV1::Fixed,
                 interaction,
                 scene_revision: self.scene.revision.saturating_add(1),
+                document_origin_y: LogicalLength(0),
             }),
         }]);
         self.cbg_layers.push(CbgLayerIndex {
@@ -246,13 +262,26 @@ impl PresentationModel {
             return false;
         }
         self.cbg_button_map = Some(source);
+        let revision = self.revision;
         self.refresh_client_background_interactions();
+        self.resource_replay_stale = true;
+        if self.revision == revision {
+            self.bump();
+        }
         true
     }
 
     pub(crate) fn clear_client_background_button_map(&mut self) {
+        if self.cbg_button_map.is_none() {
+            return;
+        }
         self.cbg_button_map = None;
+        let revision = self.revision;
         self.refresh_client_background_interactions();
+        self.resource_replay_stale = true;
+        if self.revision == revision {
+            self.bump();
+        }
     }
 
     fn refresh_client_background_interactions(&mut self) {
@@ -319,6 +348,10 @@ impl PresentationModel {
                 },
                 interaction: None,
                 scene_revision: self.scene.revision.saturating_add(1),
+                document_origin_y: match (anchor, follow_content) {
+                    (SceneAnchorV1::Viewport, true) => self.canonical_document_cursor_y,
+                    _ => LogicalLength(0),
+                },
             }),
         }]);
         self.image_layers.push(ImageLayerIndex { layer_id, depth });
@@ -449,6 +482,9 @@ impl PresentationModel {
             .expect("runtime-created scene deltas satisfy the public contract");
         self.scene_operations.extend(operations);
         self.delivery.dirty.scene = true;
+        // Scene edges are roots of the exact resource-revision closure. Re-materialize
+        // resources even when no canvas or sprite mutated so removed roots release history.
+        self.resource_replay_stale = true;
         self.bump();
     }
 

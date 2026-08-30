@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `44.0`。源码入口：
+> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `45.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | C ABI 3.9 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
-| Runtime 协议 44.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
+| Runtime 协议 45.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
 
 破坏性变更必须提升相应版本，并同步 Schema、C 头、文档与测试。数字消息标记已经是
@@ -609,7 +609,11 @@ scene 是所有背景与独立图层的唯一权威来源：
 
 - `SceneStateV1 {revision,layers}`；图层按 depth 降序、再按不可变 sequence 升序投影；
 - `SceneLayerV1` 固定携带 layer_id、sequence、source、depth、anchor、offset、size、
-  opacity、可选 5×5 color_matrix、scroll_policy、interaction? 和 scene_revision；
+  opacity、可选 5×5 color_matrix、scroll_policy、interaction?、scene_revision 和
+  document_origin_y；后者来自独立、非负、饱和递增的 runtime canonical document
+  cursor，不随 CLEARLINE、MaxLog trim 或可回绕的 LINECOUNT 回退。只有 Viewport +
+  FollowContent 使用创建时 cursor；Viewport + Fixed 与所有 DisplayLine anchor 必须为 0。
+  前端据此结合自己的当前滚动位置投影；它不是 DOM scrollTop、终端行号或设备观测；
 - `SceneInteractionV1` 除 token、value、enabled 外，可携带 hover_source、hit_map 与 title；
   CBG 按钮映射只影响 runtime 已发出的交互能力，前端不得从 canvas 像素自行构造脚本值；
 - source 是 Resource、Sprite 或 Canvas，并携带其精确 `resource_revision`；
@@ -622,17 +626,28 @@ scene 是所有背景与独立图层的唯一权威来源：
 资源重放字段：
 
 - `ResourceReplay {sprites, canvases, animation_timer_ms}`；
-- `SpriteReplay {name,size,position,frames,canvas_id?,canvas_rectangle?,revision}`；scene 中的
+- sprites 和 canvases 是按 `(name,revision)`、`(canvas_id,revision)` 排序的数组，同一名称
+  或 canvas_id 可以出现多个修订；前端必须以完整二元 identity 索引，不能转成只保留最新
+  值的 map，也不能经浮点 number 转换 revision；replay 只携带当前资源及 scene/resource
+  引用（包括尚未附到图层的 CBG button map）可达的历史依赖闭包。runtime 以显式工作队列
+  完整收集并验证闭包后才原子发布/剪枝；缺少任一精确边时拒绝发布；
+- `SpriteReplay {name,size,position,frames,canvas_id?,canvas_rectangle?,revision,
+  canvas_revision?}`；scene 中的
   Sprite source 必须绑定该 revision，不得只按同名资源取“最新值”；
 - `SpriteFrameReplay {resource_id,source_rectangle[4],offset[2],delay_ms,
-  destination_size?,canvas_id?,content_digest?}`；文件资源必须携带精确内容摘要，canvas
-  frame 不携带摘要；前端可按摘要去重解码，但仍按 resource_id 解析项目资源；
+  destination_size?,canvas_id?,content_digest?,canvas_revision?}`；文件资源必须携带精确
+  内容摘要，canvas frame 不携带摘要但必须携带精确 canvas_revision；前端可按摘要去重
+  解码，但仍按 resource_id 解析项目资源；
 - `CanvasReplay {canvas_id,size,commands,revision}`；
 - canvas 命令为 Clear、DrawSprite、SetPixel、FillRectangle、SetBrush、SetPen、
   SetDashStyle、SetFont、DrawLine、DrawText、DrawCanvas、LoadEncodedImage、
   PolygonPointAdd、PolygonPointClear、DrawPolygon、FillPolygon；字段与
   [`presentation.rs`](../crates/era-runtime-protocol/src/presentation.rs) 同名。颜色矩阵
-  是整数数组；DrawCanvas 的 5×5 值为 1/256 定点，rotation 是 millidegrees。
+  是整数数组；DrawSprite 携带精确 sprite resource_revision；DrawCanvas 的 source、mask
+  分别携带精确 canvas revision，5×5 值为 1/256 定点，rotation 是 millidegrees。
+  `SpriteReplay`、`SpriteFrameReplay` 的 canvas_id/canvas_revision，以及 DrawCanvas 的
+  mask_canvas_id/mask_revision 都是不可拆分的成对字段；两者只出现一个即为非法 replay。
+  当前与历史 canvas 命令按 `(canvas_id,revision)` 去重后共同受 64 MiB 保留预算约束；
   多边形点列是 canvas 重放状态：PolygonPointAdd/Clear 依次更新它，后续 DrawPolygon 与
   FillPolygon 消费当时的完整点列；前端不得把四类命令当作彼此独立的无状态增量。
 
@@ -665,6 +680,10 @@ width/height/display/cm，以及 div 的 position/size/depth/display/border/padd
 HTML 查询中都先拒绝，provider 不会看到它们。HTML_PRINTC 右对齐、HTML_PRINTLC
 左对齐；显式正宽度和默认 `PrintCLength × FontSize / 2` 都以 LogicalPixels 保留，空串
 不产生 cell，超宽内容不截断并按当前行剩余宽度决定换行。
+
+测试/日志用 serde JSON 中，`HtmlColorMatrix` 固定使用 adjacent tag：解析阶段为
+`{"type":"variable","value":{"name":...,"indices":[...]}}`，跨 presentation 边界后为
+`{"type":"fixed","value":[25 个整数]}`；该 JSON 形状不改变线上 CBOR enum 编码。
 
 ### 8.3 投影反馈
 
@@ -942,7 +961,7 @@ JSON number，摘要使用小写 BLAKE3 十六进制。历史最多
 Canvas 命令的完整字段：
 
 - `Clear {argb,rectangle?}`；
-  `DrawSprite {name,destination,color_matrix?}`；
+  `DrawSprite {name,destination,color_matrix?,resource_revision}`；
   `SetPixel {point,argb}`；
   `FillRectangle {rectangle,brush_argb}`；
 - `SetBrush {argb}`；
@@ -952,7 +971,7 @@ Canvas 命令的完整字段：
 - `DrawLine {start,end}`；
   `DrawText {text,point}`；
 - `DrawCanvas {source_canvas_id,source_revision,source,destination,color_matrix?,
-  mask_canvas_id?,rotation_millidegrees,rotation_center?}`；
+  mask_canvas_id?,rotation_millidegrees,rotation_center?,mask_revision?}`；
 - `LoadEncodedImage {content_digest,encoded}`。
 
 HTML semantic 的完整字段：

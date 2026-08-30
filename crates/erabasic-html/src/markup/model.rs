@@ -207,7 +207,7 @@ pub struct HtmlTextRenderIntent {
 /// Parsing produces a validated variable address. The runtime replaces it with
 /// fixed 1/256 values before the document crosses the presentation boundary.
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum HtmlColorMatrix {
     #[n(0)]
     Variable {
