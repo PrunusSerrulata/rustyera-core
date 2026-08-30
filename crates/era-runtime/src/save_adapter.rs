@@ -1,3 +1,4 @@
+use era_runtime_protocol::{SqlDatabaseIdentityV1, SqlRevisionV1};
 use era_runtime_save::{
     OpaqueSaveExtension, SaveCodecError, SaveCodecLimits, SaveDocument, SaveExtension,
     SaveFileKind, SaveFormat, SaveMetadata, Text1808Layout, Text1808ValueType, Text1808Variable,
@@ -5,8 +6,10 @@ use era_runtime_save::{
     encode_text_with_layout,
 };
 use erabasic_bytecode::{BytecodeArtifact, BytecodePersistence, BytecodeStorage, BytecodeType};
+use erabasic_compat::CompatibilityProfileId;
 use erabasic_data::VariableId;
 use erabasic_vm::{EraState, StructuredExtension};
+use minicbor::{Decode, Encode};
 
 mod entries;
 
@@ -119,51 +122,50 @@ pub(crate) struct DecodedEraSave {
     pub(crate) description: String,
     pub(crate) opaque_extensions: Vec<OpaqueSaveExtension>,
     pub(crate) structured_extensions: Vec<StructuredExtension>,
+    pub(crate) owned_state: Option<DecodedOwnedSaveState>,
+}
+
+pub(crate) struct DecodedOwnedSaveState {
+    pub(crate) global_state: EraState,
+    pub(crate) global_opaque_extensions: Vec<OpaqueSaveExtension>,
+    pub(crate) global_structured_extensions: Vec<StructuredExtension>,
+    pub(crate) sfmt_state: Vec<i64>,
+    pub(crate) databases: Vec<OwnedDatabaseRevisionV1>,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq)]
+#[cbor(map)]
+pub(crate) struct OwnedSaveStateV1 {
+    #[n(0)]
+    pub(crate) format_version: u32,
+    #[n(1)]
+    pub(crate) global_payload: minicbor::bytes::ByteVec,
+    #[n(2)]
+    pub(crate) sfmt_state: Vec<i64>,
+    #[n(3)]
+    pub(crate) databases: Vec<OwnedDatabaseRevisionV1>,
+}
+
+impl OwnedSaveStateV1 {
+    pub(crate) const FORMAT_VERSION: u32 = 1;
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq)]
+#[cbor(map)]
+pub(crate) struct OwnedDatabaseRevisionV1 {
+    #[n(0)]
+    pub(crate) logical_name: String,
+    #[n(1)]
+    pub(crate) identity: SqlDatabaseIdentityV1,
+    #[n(2)]
+    pub(crate) exact_durable_revision: SqlRevisionV1,
 }
 
 pub(crate) fn decode_era_save(
     bytes: &[u8],
     artifact: &BytecodeArtifact,
 ) -> Result<DecodedEraSave, SaveCodecError> {
-    let bytes = era_runtime_save::unwrap_compatible_save(
-        bytes,
-        &artifact.manifest.compatibility,
-        SaveCodecLimits::default(),
-    )?;
-    // Both binary headers begin with the non-UTF-8 0x89 signature byte.
-    let document = if bytes.starts_with(&[0x89]) {
-        decode_sparse(bytes, SaveCodecLimits::default())?
-    } else {
-        decode_text_with_layout(
-            bytes,
-            &text_layout(artifact, SaveFileKind::Normal)?,
-            SaveCodecLimits::default(),
-        )?
-    };
-    if document.kind != SaveFileKind::Normal {
-        return Err(SaveCodecError::InvalidFormat(
-            "start requires an ordinary save".into(),
-        ));
-    }
-    let definitions = SaveDefinitionIndex::new(artifact);
-    let variables = decode_entries(&document.variables, &definitions.shared)?;
-    let characters = document
-        .characters
-        .iter()
-        .map(|entries| decode_entries(entries, &definitions.character))
-        .collect::<Result<Vec<_>, _>>()?;
-    let (structured_extensions, opaque_extensions) = decode_extensions(document.opaque_extensions)?;
-    Ok(DecodedEraSave {
-        state: EraState {
-            unique_code: document.metadata.unique_code,
-            version: document.metadata.version,
-            variables,
-            characters,
-        },
-        description: document.metadata.description,
-        opaque_extensions,
-        structured_extensions,
-    })
+    decode_scoped_save(bytes, artifact, SaveFileKind::Normal)
 }
 
 pub(crate) fn decode_scoped_save(
@@ -171,11 +173,44 @@ pub(crate) fn decode_scoped_save(
     artifact: &BytecodeArtifact,
     kind: SaveFileKind,
 ) -> Result<DecodedEraSave, SaveCodecError> {
-    let bytes = era_runtime_save::unwrap_compatible_save(
+    let envelope = era_runtime_save::unwrap_compatible_envelope(
         bytes,
         &artifact.manifest.compatibility,
         SaveCodecLimits::default(),
     )?;
+    let mut decoded = decode_scoped_payload(envelope.payload, artifact, kind)?;
+    match (artifact.manifest.compatibility.profile, kind) {
+        (CompatibilityProfileId::EmueraSkiaSnake, SaveFileKind::Normal) => {
+            if envelope.state.is_empty() {
+                return Err(SaveCodecError::InvalidFormat(
+                    "snake ordinary save is missing OwnedSaveStateV1".into(),
+                ));
+            }
+            let owned = decode_owned_state(envelope.state, artifact)?;
+            if owned.global_state.unique_code != decoded.state.unique_code
+                || owned.global_state.version != decoded.state.version
+            {
+                return Err(SaveCodecError::InvalidFormat(
+                    "OwnedSaveStateV1 GLOBAL identity differs from its ordinary payload".into(),
+                ));
+            }
+            decoded.owned_state = Some(owned);
+        }
+        (CompatibilityProfileId::EmueraSkiaSnake, _) if !envelope.state.is_empty() => {
+            return Err(SaveCodecError::InvalidFormat(
+                "scoped snake save unexpectedly contains ordinary owned state".into(),
+            ));
+        }
+        _ => {}
+    }
+    Ok(decoded)
+}
+
+fn decode_scoped_payload(
+    bytes: &[u8],
+    artifact: &BytecodeArtifact,
+    kind: SaveFileKind,
+) -> Result<DecodedEraSave, SaveCodecError> {
     let document = if bytes.starts_with(&[0x89]) {
         decode_sparse(bytes, SaveCodecLimits::default())?
     } else {
@@ -208,7 +243,149 @@ pub(crate) fn decode_scoped_save(
         description: document.metadata.description,
         opaque_extensions,
         structured_extensions,
+        owned_state: None,
     })
+}
+
+fn decode_owned_state(
+    bytes: &[u8],
+    artifact: &BytecodeArtifact,
+) -> Result<DecodedOwnedSaveState, SaveCodecError> {
+    preflight_owned_state(bytes)?;
+    let state: OwnedSaveStateV1 = era_protocol::decode_canonical(bytes)
+        .map_err(|error| SaveCodecError::InvalidFormat(error.to_string()))?;
+    let canonical = era_protocol::encode_canonical(&state)
+        .map_err(|error| SaveCodecError::InvalidFormat(error.to_string()))?;
+    if canonical.as_slice() != bytes {
+        return Err(SaveCodecError::InvalidFormat(
+            "OwnedSaveStateV1 does not exactly match its canonical schema".into(),
+        ));
+    }
+    validate_owned_state(&state)?;
+    let global = decode_scoped_payload(
+        state.global_payload.as_ref(),
+        artifact,
+        SaveFileKind::Global,
+    )?;
+    Ok(DecodedOwnedSaveState {
+        global_state: global.state,
+        global_opaque_extensions: global.opaque_extensions,
+        global_structured_extensions: global.structured_extensions,
+        sfmt_state: state.sfmt_state,
+        databases: state.databases,
+    })
+}
+
+fn preflight_owned_state(bytes: &[u8]) -> Result<(), SaveCodecError> {
+    if bytes.len() > SaveCodecLimits::default().maximum_bytes {
+        return Err(SaveCodecError::LimitExceeded("OwnedSaveStateV1 bytes"));
+    }
+    let mut decoder = minicbor::Decoder::new(bytes);
+    let fields = decoder
+        .map()
+        .map_err(|error| SaveCodecError::InvalidFormat(error.to_string()))?
+        .ok_or_else(|| {
+            SaveCodecError::InvalidFormat("OwnedSaveStateV1 must use a definite map".into())
+        })?;
+    for _ in 0..fields {
+        let field = decoder
+            .u32()
+            .map_err(|error| SaveCodecError::InvalidFormat(error.to_string()))?;
+        match field {
+            2 => {
+                let count = decoder
+                    .array()
+                    .map_err(|error| SaveCodecError::InvalidFormat(error.to_string()))?
+                    .ok_or_else(|| {
+                        SaveCodecError::InvalidFormat(
+                            "OwnedSaveStateV1 SFMT must use a definite array".into(),
+                        )
+                    })?;
+                if count > 625 {
+                    return Err(SaveCodecError::LimitExceeded("SFMT state elements"));
+                }
+                for _ in 0..count {
+                    decoder
+                        .skip()
+                        .map_err(|error| SaveCodecError::InvalidFormat(error.to_string()))?;
+                }
+            }
+            3 => {
+                let count = decoder
+                    .array()
+                    .map_err(|error| SaveCodecError::InvalidFormat(error.to_string()))?
+                    .ok_or_else(|| {
+                        SaveCodecError::InvalidFormat(
+                            "OwnedSaveStateV1 databases must use a definite array".into(),
+                        )
+                    })?;
+                if count > u64::from(era_runtime_protocol::SqlLimitsV1::FIXED.maximum_connections) {
+                    return Err(SaveCodecError::LimitExceeded("SQL connection count"));
+                }
+                for _ in 0..count {
+                    decoder
+                        .skip()
+                        .map_err(|error| SaveCodecError::InvalidFormat(error.to_string()))?;
+                }
+            }
+            _ => decoder
+                .skip()
+                .map_err(|error| SaveCodecError::InvalidFormat(error.to_string()))?,
+        }
+    }
+    Ok(())
+}
+
+fn validate_owned_state(state: &OwnedSaveStateV1) -> Result<(), SaveCodecError> {
+    if state.format_version != OwnedSaveStateV1::FORMAT_VERSION {
+        return Err(SaveCodecError::InvalidFormat(format!(
+            "unsupported OwnedSaveStateV1 format {}",
+            state.format_version
+        )));
+    }
+    if state.sfmt_state.len() != 625 || !(0..=624).contains(&state.sfmt_state[624]) {
+        return Err(SaveCodecError::InvalidFormat(
+            "OwnedSaveStateV1 contains an invalid SFMT snapshot".into(),
+        ));
+    }
+    if state.databases.len() > era_runtime_protocol::SqlLimitsV1::FIXED.maximum_connections as usize
+    {
+        return Err(SaveCodecError::LimitExceeded("SQL connection count"));
+    }
+    let mut previous = None;
+    for database in &state.databases {
+        let normalized =
+            crate::sql::normalize_sql_name(&database.logical_name).ok_or_else(|| {
+                SaveCodecError::InvalidFormat(
+                    "OwnedSaveStateV1 contains an invalid SQL logical identity".into(),
+                )
+            })?;
+        if previous
+            .as_ref()
+            .is_some_and(|previous| previous >= &normalized)
+        {
+            return Err(SaveCodecError::InvalidFormat(
+                "OwnedSaveStateV1 SQL identities are duplicated or not sorted".into(),
+            ));
+        }
+        let source_valid = match &database.identity.source {
+            era_runtime_protocol::SqlDatabaseSourceV1::Memory => true,
+            era_runtime_protocol::SqlDatabaseSourceV1::ResourceSeed(seed) => {
+                seed.sha256.as_slice().len() == 32
+            }
+        };
+        if !source_valid
+            || database.identity.sqlite_version != era_runtime_protocol::SQL_SQLITE_VERSION
+            || database.identity.format_version != era_runtime_protocol::SQL_DATABASE_FORMAT_VERSION
+            || database.exact_durable_revision.sha256.as_slice().len() != 32
+        {
+            return Err(SaveCodecError::InvalidFormat(
+                "OwnedSaveStateV1 contains an unsupported SQL identity or revision".into(),
+            ));
+        }
+        previous = Some(normalized);
+    }
+    Ok(())
 }
 
 pub(crate) fn merge_structured_extensions(
@@ -282,42 +459,19 @@ pub(crate) fn encode_era_save(
     opaque_extensions: Vec<OpaqueSaveExtension>,
     format: SaveFormat,
 ) -> Result<Vec<u8>, SaveCodecError> {
-    let encoded_characters = state
-        .characters
-        .iter()
-        .map(|variables| encode_entries(variables, artifact, true))
-        .collect::<Result<Vec<_>, _>>()?;
-    let character_user_defined_starts = encoded_characters
-        .iter()
-        .map(|encoded| encoded.user_defined_start)
-        .collect();
-    let characters = encoded_characters
-        .into_iter()
-        .map(|encoded| encoded.entries)
-        .collect();
-    let document = SaveDocument {
-        format,
-        kind: SaveFileKind::Normal,
-        metadata: SaveMetadata {
-            unique_code: state.unique_code,
-            version: state.version,
-            description,
-        },
-        characters,
-        character_user_defined_starts,
-        variables: encode_entries(&state.variables, artifact, false)?.entries,
+    if artifact.manifest.compatibility.profile == CompatibilityProfileId::EmueraSkiaSnake {
+        return Err(SaveCodecError::InvalidFormat(
+            "snake ordinary saves require canonical OwnedSaveStateV1".into(),
+        ));
+    }
+    let payload = encode_scoped_payload(
+        state,
+        artifact,
+        SaveFileKind::Normal,
+        description,
         opaque_extensions,
-        text_payload: None,
-    };
-    let payload = if format == SaveFormat::Text1808 {
-        encode_text_with_layout(
-            &document,
-            &text_layout(artifact, SaveFileKind::Normal)?,
-            SaveCodecLimits::default(),
-        )
-    } else {
-        encode(&document, format, SaveCodecLimits::default())
-    }?;
+        format,
+    )?;
     era_runtime_save::wrap_compatible_save(
         payload,
         &artifact.manifest.compatibility,
@@ -325,7 +479,55 @@ pub(crate) fn encode_era_save(
     )
 }
 
-pub(crate) fn encode_scoped_save(
+pub(crate) fn encode_owned_era_save(
+    state: &EraState,
+    artifact: &BytecodeArtifact,
+    description: String,
+    opaque_extensions: Vec<OpaqueSaveExtension>,
+    owned_state: &OwnedSaveStateV1,
+    format: SaveFormat,
+) -> Result<Vec<u8>, SaveCodecError> {
+    if artifact.manifest.compatibility.profile != CompatibilityProfileId::EmueraSkiaSnake {
+        return encode_era_save(state, artifact, description, opaque_extensions, format);
+    }
+    validate_owned_state(owned_state)?;
+    let payload = encode_scoped_payload(
+        state,
+        artifact,
+        SaveFileKind::Normal,
+        description,
+        opaque_extensions,
+        format,
+    )?;
+    let owned_state = era_protocol::encode_canonical(owned_state)
+        .map_err(|error| SaveCodecError::InvalidFormat(error.to_string()))?;
+    era_runtime_save::wrap_compatible_save_with_state(
+        payload,
+        &owned_state,
+        &artifact.manifest.compatibility,
+        SaveCodecLimits::default(),
+    )
+}
+
+pub(crate) fn encode_scoped_save_payload(
+    state: &EraState,
+    artifact: &BytecodeArtifact,
+    kind: SaveFileKind,
+    description: String,
+    opaque_extensions: Vec<OpaqueSaveExtension>,
+    format: SaveFormat,
+) -> Result<Vec<u8>, SaveCodecError> {
+    encode_scoped_payload(
+        state,
+        artifact,
+        kind,
+        description,
+        opaque_extensions,
+        format,
+    )
+}
+
+fn encode_scoped_payload(
     state: &EraState,
     artifact: &BytecodeArtifact,
     kind: SaveFileKind,
@@ -360,7 +562,7 @@ pub(crate) fn encode_scoped_save(
         opaque_extensions,
         text_payload: None,
     };
-    let payload = if format == SaveFormat::Text1808 {
+    if format == SaveFormat::Text1808 {
         encode_text_with_layout(
             &document,
             &text_layout(artifact, kind)?,
@@ -368,7 +570,32 @@ pub(crate) fn encode_scoped_save(
         )
     } else {
         encode(&document, format, SaveCodecLimits::default())
-    }?;
+    }
+}
+
+pub(crate) fn encode_scoped_save(
+    state: &EraState,
+    artifact: &BytecodeArtifact,
+    kind: SaveFileKind,
+    description: String,
+    opaque_extensions: Vec<OpaqueSaveExtension>,
+    format: SaveFormat,
+) -> Result<Vec<u8>, SaveCodecError> {
+    if kind == SaveFileKind::Normal
+        && artifact.manifest.compatibility.profile == CompatibilityProfileId::EmueraSkiaSnake
+    {
+        return Err(SaveCodecError::InvalidFormat(
+            "snake ordinary saves require canonical OwnedSaveStateV1".into(),
+        ));
+    }
+    let payload = encode_scoped_payload(
+        state,
+        artifact,
+        kind,
+        description,
+        opaque_extensions,
+        format,
+    )?;
     era_runtime_save::wrap_compatible_save(
         payload,
         &artifact.manifest.compatibility,
@@ -488,6 +715,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn snake_scoped_saves_round_trip_and_reference_sessions_reject_them() {
         use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
         let mut artifact = BytecodeArtifact {
@@ -517,8 +745,28 @@ mod tests {
             variables: BTreeMap::new(),
             characters: Vec::new(),
         };
+        assert!(
+            encode_era_save(
+                &state,
+                &artifact,
+                "missing-owned-state".into(),
+                Vec::new(),
+                SaveFormat::Binary1808,
+            )
+            .is_err()
+        );
+        assert!(
+            encode_scoped_save(
+                &state,
+                &artifact,
+                SaveFileKind::Normal,
+                "missing-owned-state".into(),
+                Vec::new(),
+                SaveFormat::Binary1808,
+            )
+            .is_err()
+        );
         for kind in [
-            SaveFileKind::Normal,
             SaveFileKind::Global,
             SaveFileKind::Variable,
             SaveFileKind::Character,
@@ -544,12 +792,77 @@ mod tests {
             SaveFormat::Binary1808,
             SaveFormat::Binary1808Gzip,
         ] {
-            let encoded =
-                encode_era_save(&state, &artifact, "ordinary".into(), Vec::new(), format).unwrap();
-            assert_eq!(
-                decode_era_save(&encoded, &artifact).unwrap().description,
-                "ordinary"
-            );
+            let global_payload = encode_scoped_save_payload(
+                &state,
+                &artifact,
+                SaveFileKind::Global,
+                String::new(),
+                Vec::new(),
+                SaveFormat::Binary1808,
+            )
+            .unwrap();
+            let owned = OwnedSaveStateV1 {
+                format_version: OwnedSaveStateV1::FORMAT_VERSION,
+                global_payload: global_payload.into(),
+                sfmt_state: vec![0; 625],
+                databases: Vec::new(),
+            };
+            let encoded = encode_owned_era_save(
+                &state,
+                &artifact,
+                "ordinary".into(),
+                Vec::new(),
+                &owned,
+                format,
+            )
+            .unwrap();
+            let restored = decode_era_save(&encoded, &artifact).unwrap();
+            assert_eq!(restored.description, "ordinary");
+            assert_eq!(restored.owned_state.unwrap().sfmt_state, vec![0; 625]);
+            if format == SaveFormat::Binary1808 {
+                let mut invalid_sfmt = owned.clone();
+                invalid_sfmt.sfmt_state.pop();
+                assert!(
+                    encode_owned_era_save(
+                        &state,
+                        &artifact,
+                        String::new(),
+                        Vec::new(),
+                        &invalid_sfmt,
+                        format,
+                    )
+                    .is_err()
+                );
+
+                let identity = SqlDatabaseIdentityV1 {
+                    source: era_runtime_protocol::SqlDatabaseSourceV1::Memory,
+                    sqlite_version: era_runtime_protocol::SQL_SQLITE_VERSION.into(),
+                    format_version: era_runtime_protocol::SQL_DATABASE_FORMAT_VERSION,
+                };
+                let revision = SqlRevisionV1 {
+                    sha256: era_protocol::ProtocolBytes::new(vec![7; 32]),
+                };
+                let mut unsorted = owned.clone();
+                unsorted.databases = ["z", "a"]
+                    .into_iter()
+                    .map(|logical_name| OwnedDatabaseRevisionV1 {
+                        logical_name: logical_name.into(),
+                        identity: identity.clone(),
+                        exact_durable_revision: revision.clone(),
+                    })
+                    .collect();
+                assert!(
+                    encode_owned_era_save(
+                        &state,
+                        &artifact,
+                        String::new(),
+                        Vec::new(),
+                        &unsorted,
+                        format,
+                    )
+                    .is_err()
+                );
+            }
             let bare = encode_era_save(&state, &reference, "reference".into(), Vec::new(), format)
                 .unwrap();
             assert!(decode_era_save(&bare, &artifact).is_err());
@@ -558,6 +871,138 @@ mod tests {
                 "reference"
             );
         }
+
+        let global_payload = encode_scoped_save_payload(
+            &state,
+            &artifact,
+            SaveFileKind::Global,
+            String::new(),
+            Vec::new(),
+            SaveFormat::Binary1808,
+        )
+        .unwrap();
+        let owned = |marker: i64| OwnedSaveStateV1 {
+            format_version: OwnedSaveStateV1::FORMAT_VERSION,
+            global_payload: global_payload.clone().into(),
+            sfmt_state: vec![marker; 625],
+            databases: Vec::new(),
+        };
+        let encode_owned = |owned: &OwnedSaveStateV1| {
+            encode_owned_era_save(
+                &state,
+                &artifact,
+                "isolated".into(),
+                Vec::new(),
+                owned,
+                SaveFormat::Binary1808Gzip,
+            )
+            .unwrap()
+        };
+        let save_a = encode_owned(&owned(1));
+        let save_b = encode_owned(&owned(2));
+        let save_a_again = encode_owned(&owned(1));
+        assert_eq!(save_a, save_a_again);
+        assert_ne!(save_a, save_b);
+        assert_eq!(
+            decode_era_save(&save_a, &artifact)
+                .unwrap()
+                .owned_state
+                .unwrap()
+                .sfmt_state[0],
+            1
+        );
+        assert_eq!(
+            decode_era_save(&save_b, &artifact)
+                .unwrap()
+                .owned_state
+                .unwrap()
+                .sfmt_state[0],
+            2
+        );
+
+        let ordinary_payload = encode_scoped_save_payload(
+            &state,
+            &artifact,
+            SaveFileKind::Normal,
+            String::new(),
+            Vec::new(),
+            SaveFormat::Binary1808,
+        )
+        .unwrap();
+        let mut noncanonical_state = era_protocol::encode_canonical(&owned(3)).unwrap();
+        noncanonical_state.push(0);
+        let noncanonical = era_runtime_save::wrap_compatible_save_with_state(
+            ordinary_payload,
+            &noncanonical_state,
+            &artifact.manifest.compatibility,
+            SaveCodecLimits::default(),
+        )
+        .unwrap();
+        assert!(decode_era_save(&noncanonical, &artifact).is_err());
+
+        let mut extended_state = era_protocol::encode_canonical(&owned(3)).unwrap();
+        assert_eq!(extended_state[0], 0xa4);
+        extended_state[0] = 0xa5;
+        extended_state.extend_from_slice(&[0x04, 0xf6]);
+        let extended = era_runtime_save::wrap_compatible_save_with_state(
+            encode_scoped_save_payload(
+                &state,
+                &artifact,
+                SaveFileKind::Normal,
+                String::new(),
+                Vec::new(),
+                SaveFormat::Binary1808,
+            )
+            .unwrap(),
+            &extended_state,
+            &artifact.manifest.compatibility,
+            SaveCodecLimits::default(),
+        )
+        .unwrap();
+        assert!(decode_era_save(&extended, &artifact).is_err());
+
+        let mut oversized_sfmt = minicbor::Encoder::new(Vec::new());
+        oversized_sfmt
+            .map(1)
+            .unwrap()
+            .u8(2)
+            .unwrap()
+            .array(626)
+            .unwrap();
+        for _ in 0..626 {
+            oversized_sfmt.i64(0).unwrap();
+        }
+        assert!(matches!(
+            decode_owned_state(&oversized_sfmt.into_writer(), &artifact),
+            Err(SaveCodecError::LimitExceeded("SFMT state elements"))
+        ));
+        let mut oversized_databases = minicbor::Encoder::new(Vec::new());
+        oversized_databases
+            .map(1)
+            .unwrap()
+            .u8(3)
+            .unwrap()
+            .array(9)
+            .unwrap();
+        assert!(matches!(
+            decode_owned_state(&oversized_databases.into_writer(), &artifact),
+            Err(SaveCodecError::LimitExceeded("SQL connection count"))
+        ));
+
+        let mut foreign_global = state.clone();
+        foreign_global.version += 1;
+        let mut mismatched = owned(4);
+        mismatched.global_payload = encode_scoped_save_payload(
+            &foreign_global,
+            &artifact,
+            SaveFileKind::Global,
+            String::new(),
+            Vec::new(),
+            SaveFormat::Binary1808,
+        )
+        .unwrap()
+        .into();
+        assert!(decode_era_save(&encode_owned(&mismatched), &artifact).is_err());
     }
 
     #[test]

@@ -167,6 +167,95 @@ impl RuntimeVm {
         })
     }
 
+    /// Fork a complete candidate for an atomic state replacement.
+    ///
+    /// Unlike `fork_isolated`, this candidate does not retain any caller-frame array or MAP
+    /// roots: a successful ordinary load discards the current execution timeline. The live VM
+    /// remains untouched while traditional variables, structured data, and random state are
+    /// validated on the returned candidate.
+    ///
+    /// # Errors
+    /// Returns an error for pending completion events or an already isolated parent.
+    pub fn fork_for_state_replacement(&self) -> Result<Self, VmError> {
+        if !self.pending_completion_events.is_empty() {
+            return Err(VmError::InvalidState(
+                "pending Host completion events must be delivered before replacement forking"
+                    .into(),
+            ));
+        }
+        if !self.vm.memory.array_leases.protected.is_empty()
+            || !self.natives.protected_map_roots().is_empty()
+        {
+            return Err(VmError::InvalidState(
+                "an isolated candidate cannot become a replacement source".into(),
+            ));
+        }
+        let mut vm = self.vm.clone();
+        vm.clear_execution();
+        let natives = self
+            .natives
+            .fork_for_artifact(vm.artifact())
+            .map_err(VmError::Snapshot)?;
+        natives
+            .retain_map_leases(&BTreeSet::new())
+            .map_err(|error| VmError::Snapshot(error.to_string()))?;
+        let mut result = Self {
+            vm,
+            natives,
+            pending_natives: None,
+            candidate_base_column_stamp: CandidateColumnBase::Unforked,
+            candidate_base_array_stamp: None,
+            line_columns: self.line_columns,
+            pending_completion_events: Vec::new(),
+        };
+        result.refresh_draw_line_string();
+        Ok(result)
+    }
+
+    /// Replace the complete VM/native state with a previously validated replacement candidate.
+    ///
+    /// # Errors
+    /// Rejects stale artifacts, generations, candidates with execution, or pending completions.
+    pub fn commit_state_replacement(&mut self, replacement: Self) -> Result<(), VmError> {
+        self.validate_state_replacement(&replacement)?;
+        *self = replacement;
+        Ok(())
+    }
+
+    /// Validate a complete replacement without publishing it.
+    ///
+    /// # Errors
+    /// Rejects the same stale or executable candidates as [`Self::commit_state_replacement`].
+    pub fn validate_state_replacement(&self, replacement: &Self) -> Result<(), VmError> {
+        if !self.pending_completion_events.is_empty()
+            || !replacement.pending_completion_events.is_empty()
+        {
+            return Err(VmError::InvalidState(
+                "state replacement cannot cross pending Host completion events".into(),
+            ));
+        }
+        if self.vm.artifact_id() != replacement.vm.artifact_id()
+            || self.vm.current_generation() != replacement.vm.current_generation()
+        {
+            return Err(VmError::InvalidState(
+                "state replacement belongs to a stale artifact generation".into(),
+            ));
+        }
+        if !replacement.vm.fibers.is_empty() || replacement.has_work() {
+            return Err(VmError::InvalidState(
+                "state replacement candidate unexpectedly contains execution".into(),
+            ));
+        }
+        if !replacement.vm.memory.array_leases.protected.is_empty()
+            || !replacement.natives.protected_map_roots().is_empty()
+        {
+            return Err(VmError::InvalidState(
+                "state replacement candidate retained parent roots".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Consume a completed candidate after all terminal completion events were delivered.
     ///
     /// # Errors

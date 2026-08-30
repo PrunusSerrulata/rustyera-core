@@ -15,7 +15,8 @@ pub use binary::{
     encode_save_extension,
 };
 pub use compatibility::{
-    inspect_compatible_metadata, unwrap_compatible_save, wrap_compatible_save,
+    CompatibleSaveEnvelope, inspect_compatible_metadata, unwrap_compatible_envelope,
+    unwrap_compatible_save, wrap_compatible_save, wrap_compatible_save_with_state,
 };
 pub use metadata::{SaveMetadataInspection, inspect_metadata};
 pub use model::{
