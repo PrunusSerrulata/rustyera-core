@@ -234,6 +234,7 @@ impl RuntimeSession {
                     &pending,
                     PendingService::Host(
                         ExternalCompletion::PointerState { .. }
+                            | ExternalCompletion::LineGeometry { .. }
                             | ExternalCompletion::CanvasPixel { .. }
                     )
                 );
@@ -262,6 +263,7 @@ impl RuntimeSession {
                     | ExternalCompletion::SpritePixel { request: id }
                     | ExternalCompletion::UpdateCheck { request: id, .. }
                     | ExternalCompletion::PointerState { request: id, .. }
+                    | ExternalCompletion::LineGeometry { request: id, .. }
                     | ExternalCompletion::Extension { request: id, .. }
                     | ExternalCompletion::TextExtent { request: id, .. }
                     | ExternalCompletion::DrawTextExtent { request: id, .. }
@@ -401,6 +403,49 @@ impl RuntimeSession {
                             PointerCoordinate::Y => VmValue::Integer(state.y.0),
                             PointerCoordinate::Button => VmValue::String(state.button_value),
                         })
+                    }
+                    ExternalCompletion::LineGeometry {
+                        context, line_id, ..
+                    } => {
+                        let geometry: GetLineGeometryV1Response =
+                            match decode_canonical(payload.as_slice()) {
+                                Ok(geometry) => geometry,
+                                Err(error) => {
+                                    return self.fault(
+                                        FaultCode::ServiceFailure,
+                                        &format!(
+                                            "invalid get_line_geometry_v1 service response: {error}"
+                                        ),
+                                        None,
+                                    );
+                                }
+                            };
+                        if !self.validate_projection_query_context(context, geometry.context)? {
+                            return Ok(());
+                        }
+                        if geometry.line_id != line_id
+                            || geometry.height.0 < 0
+                            || geometry.viewport_height.0 < 0
+                        {
+                            return self.fault(
+                                FaultCode::ServiceFailure,
+                                "line geometry response contains a mismatched line or negative size",
+                                None,
+                            );
+                        }
+                        let Some(value) = geometry
+                            .top
+                            .0
+                            .checked_add(geometry.height.0)
+                            .and_then(|value| value.checked_sub(geometry.viewport_height.0))
+                        else {
+                            return self.fault(
+                                FaultCode::ServiceFailure,
+                                "line geometry response overflows GETLINEY coordinates",
+                                None,
+                            );
+                        };
+                        Some(VmValue::Integer(value))
                     }
                     ExternalCompletion::Extension {
                         return_type,

@@ -155,6 +155,23 @@ fn start_projection_service_with_messages(
     operation: &str,
     operation_version: ProtocolVersion,
 ) -> (RuntimeSession, ServiceRequest, Vec<RuntimeMessage>) {
+    start_projection_service_with_profile(
+        source,
+        kind,
+        operation,
+        operation_version,
+        era_runtime_protocol::CompatibilityIdentity::default(),
+    )
+}
+
+fn start_projection_service_with_profile(
+    source: &str,
+    kind: ServiceKind,
+    operation: &str,
+    operation_version: ProtocolVersion,
+    compatibility: era_runtime_protocol::CompatibilityIdentity,
+) -> (RuntimeSession, ServiceRequest, Vec<RuntimeMessage>) {
+    let profile = compatibility.profile;
     let mut client_capabilities = capabilities();
     client_capabilities.html = true;
     client_capabilities.graphics = kind == ServiceKind::Canvas;
@@ -191,14 +208,20 @@ fn start_projection_service_with_messages(
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
-            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+            compatibility,
             project_revision: 1,
-            files: vec![SubmittedFile {
-                relative_path: "projection.erb".into(),
-                category: FileCategory::Erb,
-                payload: FilePayload::Utf8(source.into()),
-                content_hash: None,
-            }],
+            files: {
+                let mut files = vec![SubmittedFile {
+                    relative_path: "projection.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8(source.into()),
+                    content_hash: None,
+                }];
+                if profile == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake {
+                    files.insert(0, profile_configuration_file(profile));
+                }
+                files
+            },
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -1596,6 +1619,32 @@ fn pointer_service_negotiates_only_the_existing_operation_version() {
 }
 
 #[test]
+fn line_geometry_service_negotiates_only_the_pinned_v1_operation() {
+    let selected = crate::session::selected_service_capabilities(&[
+        ServiceCapability {
+            kind: ServiceKind::PresentationQuery,
+            operation: GET_LINE_GEOMETRY_OPERATION.into(),
+            versions: VersionRange::exact(GET_LINE_GEOMETRY_OPERATION_VERSION),
+        },
+        ServiceCapability {
+            kind: ServiceKind::PresentationQuery,
+            operation: "get_line_geometry_native".into(),
+            versions: VersionRange::exact(GET_LINE_GEOMETRY_OPERATION_VERSION),
+        },
+    ]);
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].operation, GET_LINE_GEOMETRY_OPERATION);
+    assert!(
+        crate::session::selected_service_capabilities(&[ServiceCapability {
+            kind: ServiceKind::PresentationQuery,
+            operation: GET_LINE_GEOMETRY_OPERATION.into(),
+            versions: VersionRange::exact(ProtocolVersion::new(2, 0)),
+        }])
+        .is_empty()
+    );
+}
+
+#[test]
 fn sql_service_negotiates_only_the_pinned_v1_operation() {
     let selected = crate::session::selected_service_capabilities(&[
         ServiceCapability {
@@ -1712,6 +1761,88 @@ fn pointer_query_flushes_prints_and_returns_each_canonical_value() {
             );
         }
     }
+}
+
+#[test]
+fn snake_getliney_resolves_a_display_index_to_revision_bound_stable_geometry() {
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let (mut session, request, messages) = start_projection_service_with_profile(
+        "@SYSTEM_TITLE\nPRINTL first\nPRINTL second\nRESULT = GETLINEY(0)\nWAIT\nRETURN\n",
+        ServiceKind::PresentationQuery,
+        GET_LINE_GEOMETRY_OPERATION,
+        GET_LINE_GEOMETRY_OPERATION_VERSION,
+        snake,
+    );
+    let query: GetLineGeometryV1Request =
+        decode_canonical(request.payload.as_slice()).unwrap();
+    assert_eq!(query.line_id, 1);
+    assert_eq!(query.context.presentation_revision, session.presentation.revision());
+    let request_index = messages
+        .iter()
+        .position(|message| matches!(
+            message,
+            RuntimeMessage::ServiceRequest(value) if value.request_id == request.request_id
+        ))
+        .unwrap();
+    assert!(messages[..request_index].iter().any(|message| matches!(
+        message,
+        RuntimeMessage::PresentationDelta(_) | RuntimeMessage::PresentationSnapshot(_)
+    )));
+
+    complete_projection_reply(
+        &mut session,
+        &request,
+        encode_canonical(&GetLineGeometryV1Response {
+            context: query.context,
+            line_id: query.line_id,
+            top: ProjectionLength(100),
+            height: ProjectionLength(20),
+            viewport_height: ProjectionLength(80),
+        })
+        .unwrap(),
+    );
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
+        40
+    );
+}
+
+#[test]
+fn snake_getliney_rejects_stale_geometry_without_committing_the_assignment() {
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let (mut session, request, _) = start_projection_service_with_profile(
+        "@SYSTEM_TITLE\nPRINTL first\nRESULT = 77\nRESULT = GETLINEY(0)\nWAIT\nRETURN\n",
+        ServiceKind::PresentationQuery,
+        GET_LINE_GEOMETRY_OPERATION,
+        GET_LINE_GEOMETRY_OPERATION_VERSION,
+        snake,
+    );
+    let query: GetLineGeometryV1Request =
+        decode_canonical(request.payload.as_slice()).unwrap();
+    let mut stale = query.context;
+    stale.projection_space_revision = stale.projection_space_revision.saturating_add(1);
+    complete_projection_reply(
+        &mut session,
+        &request,
+        encode_canonical(&GetLineGeometryV1Response {
+            context: stale,
+            line_id: query.line_id,
+            top: ProjectionLength(100),
+            height: ProjectionLength(20),
+            viewport_height: ProjectionLength(80),
+        })
+        .unwrap(),
+    );
+    assert_eq!(session.phase(), RuntimePhase::Faulted);
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
+        77
+    );
 }
 
 #[test]

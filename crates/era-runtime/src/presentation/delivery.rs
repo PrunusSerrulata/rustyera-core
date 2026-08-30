@@ -12,6 +12,14 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
 impl PresentationModel {
+    pub(crate) fn line_id_at_display_index(&self, raw_index: i64) -> Option<u64> {
+        let index = usize::try_from(raw_index).ok()?;
+        self.lines.get(index).map(|line| line.line_id).or_else(|| {
+            // Emuera's current display index names the not-yet-committed line.
+            (index == self.lines.len()).then_some(self.next_line)
+        })
+    }
+
     pub(crate) fn display_line(&self, raw_index: i64, from_end: bool) -> String {
         let index = if from_end && raw_index < 0 {
             let distance = usize::try_from(raw_index.unsigned_abs()).unwrap_or(usize::MAX);

@@ -788,7 +788,31 @@ impl RuntimeSession {
                 },
             );
         }
-        if matches!(name.as_str(), "MOUSEX" | "MOUSEY" | "MOUSEB") {
+        if name == "GETLINEY" {
+            let index = integer_argument_value(request, 0)?;
+            let Some(line_id) = self.presentation.line_id_at_display_index(index) else {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    "GETLINEY display index does not identify a retained line",
+                );
+            };
+            let context = self.presentation_observation_context()?;
+            self.issue_host_service(
+                vm,
+                request,
+                ExternalCompletion::LineGeometry {
+                    request: request.id,
+                    context,
+                    line_id,
+                },
+                ServiceKind::PresentationQuery,
+                GET_LINE_GEOMETRY_OPERATION,
+                GET_LINE_GEOMETRY_OPERATION_VERSION,
+                &GetLineGeometryV1Request { context, line_id },
+            )
+        } else if matches!(name.as_str(), "MOUSEX" | "MOUSEY" | "MOUSEB") {
             let coordinate = match name.as_str() {
                 "MOUSEX" => PointerCoordinate::X,
                 "MOUSEY" => PointerCoordinate::Y,

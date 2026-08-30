@@ -50,6 +50,11 @@ pub(crate) enum ExternalCompletion {
         environment_revision: u64,
         projection_space_revision: u64,
     },
+    LineGeometry {
+        request: HostRequestId,
+        context: era_runtime_protocol::ProjectionQueryContext,
+        line_id: u64,
+    },
     Extension {
         request: HostRequestId,
         return_type: era_runtime_protocol::ExtensionValueType,

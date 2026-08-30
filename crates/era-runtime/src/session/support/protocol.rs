@@ -56,6 +56,9 @@ pub(in super::super) fn selected_service_capabilities(
                 (ServiceKind::PresentationQuery, GET_DISPLAY_LINE_OPERATION) => {
                     GET_DISPLAY_LINE_OPERATION_VERSION
                 }
+                (ServiceKind::PresentationQuery, GET_LINE_GEOMETRY_OPERATION) => {
+                    GET_LINE_GEOMETRY_OPERATION_VERSION
+                }
                 (ServiceKind::PresentationQuery, HTML_GET_PRINTED_STR_OPERATION) => {
                     HTML_GET_PRINTED_STR_OPERATION_VERSION
                 }
