@@ -462,7 +462,7 @@ impl RuntimeSession {
                 era_runtime_protocol::SqlResultV1::MapImported { .. },
             ) => {
                 self.sql.release_connection(&connection_key);
-                self.finish_sql_value(request, VmValue::Integer(0))
+                self.finish_sql_value(request, VmValue::Integer(1))
             }
             (
                 SqlServiceContinuation::Disconnect {

@@ -360,7 +360,7 @@ fn sql_map_import_uses_resource_digest_and_preserves_rows() {
     answer_map_import(&mut fixture, &service, &payload, connection, 3);
     assert_eq!(fixture.session.phase(), RuntimePhase::WaitingInput);
     assert_eq!(fixture.integer(0), 0);
-    assert_eq!(fixture.integer(1), 0);
+    assert_eq!(fixture.integer(1), 1);
 
     let mut mismatch = map_fixture(xml);
     mismatch.answer_memory_open(Some(revision(1)));
@@ -415,7 +415,7 @@ fn sql_map_import_accepts_exact_size_and_row_limits_but_rejects_the_next_row() {
     assert!(rows.is_empty());
     answer_map_import(&mut bytes_fixture, &service, &payload, connection, 0);
     assert_eq!(bytes_fixture.session.phase(), RuntimePhase::WaitingInput);
-    assert_eq!(bytes_fixture.integer(1), 0);
+    assert_eq!(bytes_fixture.integer(1), 1);
 
     let row = "<p><k></k><v></v></p>";
     let maximum_rows =
@@ -439,7 +439,7 @@ fn sql_map_import_accepts_exact_size_and_row_limits_but_rejects_the_next_row() {
         SqlLimitsV1::FIXED.maximum_map_rows,
     );
     assert_eq!(rows_fixture.session.phase(), RuntimePhase::WaitingInput);
-    assert_eq!(rows_fixture.integer(1), 0);
+    assert_eq!(rows_fixture.integer(1), 1);
 
     let too_many_rows = format!("<map>{}</map>", row.repeat(maximum_rows + 1)).into_bytes();
     assert!(too_many_rows.len() < maximum_bytes);
