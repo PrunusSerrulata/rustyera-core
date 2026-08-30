@@ -496,6 +496,7 @@ fn real_vm_reader_get_eof_and_close_follow_provider_state() {
         LOCAL = SQL_EXECUTE_READER(\"db\", \"SELECT value\")\n\
         RESULT:0 = SQL_READER_READ(LOCAL)\n\
         RESULT:1 = SQL_READER_GET_LONG(LOCAL, 0)\n\
+        RESULTS:0 '= SQL_READER_GET_STRING(LOCAL, 0)\n\
         RESULT:2 = SQL_READER_READ(LOCAL)\n\
         RESULT:3 = SQL_READER_READ(LOCAL)\n\
         SQL_READER_CLOSE LOCAL\n\
@@ -556,6 +557,7 @@ fn real_vm_reader_get_eof_and_close_follow_provider_state() {
         SqlOperationV1::ReaderGet {
             reader: value,
             column: 0,
+            mode: era_runtime_protocol::SqlReaderValueModeV1::Integer,
         } if *value == reader
     ));
     let messages = harness.respond(
@@ -569,6 +571,30 @@ fn real_vm_reader_get_eof_and_close_follow_provider_state() {
             1,
             SqlResultV1::ReaderValue {
                 value: SqlValueV1::Integer(42),
+            },
+        ),
+    );
+
+    let get_string = take_sql_request(messages);
+    assert!(matches!(
+        &get_string.payload.operation,
+        SqlOperationV1::ReaderGet {
+            reader: value,
+            column: 0,
+            mode: era_runtime_protocol::SqlReaderValueModeV1::String,
+        } if *value == reader
+    ));
+    let messages = harness.respond(
+        &get_string,
+        reader_response(
+            &get_string,
+            connection,
+            revision(1),
+            reader,
+            SqlReaderStatusV1::Row,
+            1,
+            SqlResultV1::ReaderValue {
+                value: SqlValueV1::String("42".into()),
             },
         ),
     );

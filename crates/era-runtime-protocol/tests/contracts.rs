@@ -1110,12 +1110,13 @@ fn protocol_41_carries_safe_sql_v1_without_native_paths_or_handles() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn safe_sql_v1_round_trips_every_operation_and_result_variant() {
     use runtime_protocol::{
         SQL_DATABASE_FORMAT_VERSION, SQL_SQLITE_VERSION, SqlConnectionHandleV1,
         SqlDatabaseIdentityV1, SqlDatabaseSourceV1, SqlErrorCodeV1, SqlErrorV1, SqlExecuteModeV1,
         SqlLimitsV1, SqlMapRowV1, SqlOpenRevisionV1, SqlOperationKindV1, SqlOperationV1,
-        SqlReaderHandleV1, SqlResultV1, SqlValueV1,
+        SqlReaderHandleV1, SqlReaderValueModeV1, SqlResultV1, SqlValueV1,
     };
 
     let connection = SqlConnectionHandleV1 {
@@ -1149,7 +1150,16 @@ fn safe_sql_v1_round_trips_every_operation_and_result_variant() {
             ],
         },
         SqlOperationV1::ReaderRead { reader },
-        SqlOperationV1::ReaderGet { reader, column: 1 },
+        SqlOperationV1::ReaderGet {
+            reader,
+            column: 1,
+            mode: SqlReaderValueModeV1::Integer,
+        },
+        SqlOperationV1::ReaderGet {
+            reader,
+            column: 2,
+            mode: SqlReaderValueModeV1::String,
+        },
         SqlOperationV1::ReaderIsNull { reader, column: 2 },
         SqlOperationV1::ReaderClose { reader },
         SqlOperationV1::ImportMapRows {
@@ -1166,6 +1176,11 @@ fn safe_sql_v1_round_trips_every_operation_and_result_variant() {
         let encoded = encode_canonical(&operation).unwrap();
         assert_eq!(
             decode_canonical::<SqlOperationV1>(&encoded).unwrap(),
+            operation
+        );
+        let json = serde_json::to_value(&operation).unwrap();
+        assert_eq!(
+            serde_json::from_value::<SqlOperationV1>(json).unwrap(),
             operation
         );
     }

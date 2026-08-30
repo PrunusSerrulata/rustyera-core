@@ -405,6 +405,11 @@ impl RuntimeSession {
             era_runtime_protocol::SqlOperationV1::ReaderGet {
                 reader: reader.handle,
                 column,
+                mode: if string {
+                    era_runtime_protocol::SqlReaderValueModeV1::String
+                } else {
+                    era_runtime_protocol::SqlReaderValueModeV1::Integer
+                },
             },
         )
     }

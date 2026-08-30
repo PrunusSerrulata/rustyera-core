@@ -231,13 +231,14 @@ sql-revision-v1 = { 0: bstr }
 sql-open-revision-v1 = [0] / [1, sql-revision-v1]
 sql-value-v1 = [0] / [1, int] / [2, tstr]
 sql-execute-mode-v1 = 0..3
+sql-reader-value-mode-v1 = 0..1
 sql-map-row-v1 = { 0: tstr, 1: tstr }
 sql-operation-v1 =
   [0, sql-connection-handle-v1, tstr, sql-database-identity-v1,
       sql-open-revision-v1, sql-limits-v1] /
   [1, sql-connection-handle-v1, sql-execute-mode-v1, tstr, [* sql-value-v1]] /
   [2, sql-reader-handle-v1] /
-  [3, sql-reader-handle-v1, uint] /
+  [3, sql-reader-handle-v1, uint, sql-reader-value-mode-v1] /
   [4, sql-reader-handle-v1, uint] /
   [5, sql-reader-handle-v1] /
   [6, sql-connection-handle-v1, tstr, [* sql-map-row-v1]] /

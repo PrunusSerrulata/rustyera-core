@@ -160,6 +160,16 @@ pub enum SqlExecuteModeV1 {
     Reader,
 }
 
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum SqlReaderValueModeV1 {
+    #[n(0)]
+    Integer,
+    #[n(1)]
+    String,
+}
+
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct SqlMapRowV1 {
@@ -207,6 +217,8 @@ pub enum SqlOperationV1 {
         reader: SqlReaderHandleV1,
         #[n(1)]
         column: u32,
+        #[n(2)]
+        mode: SqlReaderValueModeV1,
     },
     #[n(4)]
     ReaderIsNull {
