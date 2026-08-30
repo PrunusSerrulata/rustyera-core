@@ -794,23 +794,51 @@ impl RuntimeSession {
             });
             return self.complete_graphics_result(vm, request.id, i64::from(added));
         }
+        if name == "SPRITECREATEFROMFILE" {
+            *status = HostDispatchStatus::Handled;
+            let sprite = request.argument(0).map_or_else(String::new, display_value);
+            let path = string_argument_value(request, 1, name)?;
+            let relative_to_source = request
+                .argument(2)
+                .is_some_and(|value| integer_value_or_zero(value) != 0);
+            let declaring_source = request
+                .origin
+                .source
+                .as_ref()
+                .map(|source| source.relative_path.as_str());
+            let created = self.project_snapshot.as_mut().is_some_and(|project| {
+                project.resource_graph.create_file_sprite(
+                    &sprite,
+                    &path,
+                    declaring_source,
+                    relative_to_source,
+                )
+            });
+            return self.complete_graphics_result(vm, request.id, i64::from(created));
+        }
         if name == "SPRITECREATE" {
             *status = HostDispatchStatus::Handled;
-            if matches!(request.arguments.len(), 8 | 10) {
+            let snake_graphics = self.project_snapshot.as_ref().is_some_and(|project| {
+                project
+                    .manifest
+                    .compatibility
+                    .supports_snake_display_state()
+            });
+            if matches!(request.arguments.len(), 8 | 10) && !snake_graphics {
                 return self.fault(
                     FaultCode::UnsupportedRuntimeFeature,
-                    "SPRITECREATE destination-size forms are not implemented",
+                    "SPRITECREATE 8/10-argument forms require the snake profile",
                     Some(request.origin.clone()),
                 );
             }
-            if !matches!(request.arguments.len(), 2 | 6) {
+            if !matches!(request.arguments.len(), 2 | 6 | 8 | 10) {
                 return Err(RuntimeError::Internal(
                     "SPRITECREATE physical source shape is invalid".into(),
                 ));
             }
             let sprite = request.argument(0).map_or_else(String::new, display_value);
             let id = integer_argument_value(request, 1)?;
-            let rectangle = if request.arguments.len() == 6 {
+            let rectangle = if request.arguments.len() >= 6 {
                 Some([
                     i32_argument_value(request, 2)?,
                     i32_argument_value(request, 3)?,
@@ -820,12 +848,77 @@ impl RuntimeSession {
             } else {
                 None
             };
+            let position = if request.arguments.len() >= 8 {
+                [
+                    i32_argument_value(request, 6)?,
+                    i32_argument_value(request, 7)?,
+                ]
+            } else {
+                [0, 0]
+            };
+            let destination_size = if request.arguments.len() == 10 {
+                Some([
+                    i32_argument_value(request, 8)?,
+                    i32_argument_value(request, 9)?,
+                ])
+            } else {
+                None
+            };
             let created = self.project_snapshot.as_mut().is_some_and(|project| {
-                project
-                    .resource_graph
-                    .create_canvas_sprite(&sprite, id, rectangle)
+                project.resource_graph.create_canvas_sprite(
+                    &sprite,
+                    id,
+                    rectangle,
+                    position,
+                    destination_size,
+                )
             });
             return self.complete_graphics_result(vm, request.id, i64::from(created));
+        }
+        if name == "G_POLYGON_POINT_ADD" {
+            *status = HostDispatchStatus::Handled;
+            let canvas_id = integer_argument_value(request, 0)?;
+            let point = [
+                i32_argument_value(request, 1)?,
+                i32_argument_value(request, 2)?,
+            ];
+            let added = self.project_snapshot.as_mut().is_some_and(|project| {
+                project
+                    .resource_graph
+                    .add_canvas_polygon_point(canvas_id, point)
+            });
+            return self.complete_graphics_result(vm, request.id, i64::from(added));
+        }
+        if name == "G_POLYGON_POINT_CLEAR" {
+            *status = HostDispatchStatus::Handled;
+            let canvas_id = integer_argument_value(request, 0)?;
+            let cleared = self.project_snapshot.as_mut().is_some_and(|project| {
+                project
+                    .resource_graph
+                    .clear_canvas_polygon_points(canvas_id)
+            });
+            return self.complete_graphics_result(vm, request.id, i64::from(cleared));
+        }
+        if matches!(name.as_str(), "G_POLYGON_DRAW" | "G_POLYGON_FILL") {
+            *status = HostDispatchStatus::Handled;
+            let canvas_id = integer_argument_value(request, 0)?;
+            let result = self.project_snapshot.as_mut().map_or(Ok(false), |project| {
+                project
+                    .resource_graph
+                    .draw_canvas_polygon(canvas_id, name == "G_POLYGON_FILL")
+            });
+            let drawn = match result {
+                Ok(drawn) => drawn,
+                Err(message) => {
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Operation,
+                        format!("{name}: {message}"),
+                    );
+                }
+            };
+            return self.complete_graphics_result(vm, request.id, i64::from(drawn));
         }
         if name == "SPRITEDISPOSE" {
             *status = HostDispatchStatus::Handled;

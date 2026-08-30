@@ -20,6 +20,9 @@ pub(crate) struct SpriteDefinition {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct SpriteFrame {
     pub(crate) image_path: String,
+    /// Exact project-resource identity captured when this frame is validated or created.
+    #[serde(default)]
+    pub(crate) content_digest: Option<[u8; 32]>,
     pub(crate) canvas_id: Option<i64>,
     pub(crate) source_x: i32,
     pub(crate) source_y: i32,

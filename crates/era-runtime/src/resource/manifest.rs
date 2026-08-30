@@ -98,6 +98,7 @@ pub(super) fn parse_resource_manifest(
             .map(|(width, height)| (width.cast_unsigned(), height.cast_unsigned()));
         let frame = SpriteFrame {
             image_path,
+            content_digest: None,
             canvas_id: None,
             source_x: rect.map_or(0, |value| value.0),
             source_y: rect.map_or(0, |value| value.1),

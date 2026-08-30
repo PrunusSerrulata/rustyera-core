@@ -5,7 +5,7 @@ use super::{
     AudioState, CanvasPoint, CanvasRect, CanvasSize, PresentationHistory, PresentationSettings,
     RedrawState, SceneStateV1, TooltipSettings,
 };
-use crate::InputWait;
+use crate::{InputWait, ProtocolBytes};
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -23,6 +23,9 @@ pub struct SpriteFrameReplay {
     /// Runtime-created animation frames can reference a replay canvas instead of a file resource.
     #[n(5)]
     pub canvas_id: Option<i64>,
+    /// Exact immutable identity of a project resource. Canvas-backed frames have no digest.
+    #[n(6)]
+    pub content_digest: Option<ProtocolBytes>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -143,10 +146,21 @@ pub enum CanvasReplayCommand {
     #[n(11)]
     LoadEncodedImage {
         #[n(0)]
-        content_digest: Vec<u8>,
+        content_digest: ProtocolBytes,
         #[n(1)]
-        encoded: Vec<u8>,
+        encoded: ProtocolBytes,
     },
+    #[n(12)]
+    PolygonPointAdd {
+        #[n(0)]
+        point: CanvasPoint,
+    },
+    #[n(13)]
+    PolygonPointClear,
+    #[n(14)]
+    DrawPolygon,
+    #[n(15)]
+    FillPolygon,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

@@ -29,6 +29,7 @@ impl ResourceGraph {
                 height,
                 revision: 0,
                 commands: Vec::new(),
+                polygon_points: Vec::new(),
                 retained_command_bytes: 0,
                 brush_argb: self.canvas_defaults.brush_argb,
                 pen_argb: self.canvas_defaults.pen_argb,
@@ -83,6 +84,7 @@ impl ResourceGraph {
                 height,
                 revision: 1,
                 commands: vec![command],
+                polygon_points: Vec::new(),
                 retained_command_bytes,
                 brush_argb: self.canvas_defaults.brush_argb,
                 pen_argb: self.canvas_defaults.pen_argb,
@@ -139,6 +141,7 @@ impl ResourceGraph {
                     content_digest: digest.as_bytes().to_vec(),
                     encoded,
                 }],
+                polygon_points: Vec::new(),
                 retained_command_bytes,
                 brush_argb: self.canvas_defaults.brush_argb,
                 pen_argb: self.canvas_defaults.pen_argb,
@@ -193,7 +196,7 @@ impl ResourceGraph {
             // A full clear is a semantic checkpoint: no earlier drawing command can
             // affect the resulting pixels. Preserve the current state explicitly so
             // later drawing commands remain replayable without the discarded prefix.
-            let checkpoint = vec![
+            let mut checkpoint = vec![
                 command,
                 CanvasCommand::SetBrush {
                     argb: canvas.brush_argb,
@@ -212,6 +215,13 @@ impl ResourceGraph {
                     style_bits: canvas.font_style,
                 },
             ];
+            checkpoint.extend(
+                canvas
+                    .polygon_points
+                    .iter()
+                    .copied()
+                    .map(|point| CanvasCommand::PolygonPointAdd { point }),
+            );
             let retained = checkpoint
                 .iter()
                 .map(CanvasCommand::retained_bytes)
@@ -424,6 +434,50 @@ impl ResourceGraph {
         })
     }
 
+    pub(crate) fn add_canvas_polygon_point(&mut self, id: i64, point: [i32; 2]) -> bool {
+        if !self.push_canvas_command(id, CanvasCommand::PolygonPointAdd { point }) {
+            return false;
+        }
+        let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
+        canvas.polygon_points.push(point);
+        bump_canvas(canvas);
+        true
+    }
+
+    pub(crate) fn clear_canvas_polygon_points(&mut self, id: i64) -> bool {
+        if !self.push_canvas_command(id, CanvasCommand::PolygonPointClear) {
+            return false;
+        }
+        let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
+        canvas.polygon_points.clear();
+        bump_canvas(canvas);
+        true
+    }
+
+    pub(crate) fn draw_canvas_polygon(
+        &mut self,
+        id: i64,
+        fill: bool,
+    ) -> Result<bool, &'static str> {
+        let Some(canvas) = self.canvases.get(&id) else {
+            return Ok(false);
+        };
+        if canvas.polygon_points.is_empty() {
+            return Err("polygon point set is empty");
+        }
+        let command = if fill {
+            CanvasCommand::FillPolygon
+        } else {
+            CanvasCommand::DrawPolygon
+        };
+        if !self.push_canvas_command(id, command) {
+            return Ok(false);
+        }
+        let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
+        bump_canvas(canvas);
+        Ok(true)
+    }
+
     pub(crate) fn draw_canvas_line(&mut self, id: i64, start: [i32; 2], end: [i32; 2]) -> bool {
         self.ensure_canvas_retained_bytes();
         let Some(canvas) = self.canvases.get_mut(&id) else {
@@ -506,6 +560,8 @@ impl ResourceGraph {
         name: &str,
         canvas_id: i64,
         rectangle: Option<[i32; 4]>,
+        position: [i32; 2],
+        destination_size: Option<[i32; 2]>,
     ) -> bool {
         let key = name.to_ascii_uppercase();
         if name.is_empty() || self.sprites.contains_key(&key) {
@@ -520,21 +576,27 @@ impl ResourceGraph {
             i32::try_from(canvas.width).unwrap_or(i32::MAX),
             i32::try_from(canvas.height).unwrap_or(i32::MAX),
         ]);
-        if rectangle[2] == 0 || rectangle[3] == 0 {
+        if !rectangle_axis_intersects(rectangle[0], rectangle[2], canvas.width)
+            || !rectangle_axis_intersects(rectangle[1], rectangle[3], canvas.height)
+        {
             return false;
         }
+        let size = destination_size.map_or(
+            [rectangle[2].unsigned_abs(), rectangle[3].unsigned_abs()],
+            |size| [size[0].unsigned_abs(), size[1].unsigned_abs()],
+        );
         let revision = self.allocate_sprite_revision();
         self.sprites.insert(
             key.clone(),
             SpriteDefinition {
                 name: key,
                 revision,
-                width: rectangle[2].unsigned_abs(),
-                height: rectangle[3].unsigned_abs(),
+                width: size[0],
+                height: size[1],
                 frames: Vec::new(),
                 dynamic: true,
-                position_x: 0,
-                position_y: 0,
+                position_x: position[0],
+                position_y: position[1],
                 canvas_id: Some(canvas_id),
                 canvas_rectangle: Some(rectangle),
             },
@@ -607,6 +669,7 @@ impl ResourceGraph {
         let sprite = self.sprites.get_mut(&key).expect("sprite was checked");
         sprite.frames.push(SpriteFrame {
             image_path: String::new(),
+            content_digest: None,
             canvas_id: Some(canvas_id),
             source_x: rectangle[0],
             source_y: rectangle[1],
@@ -660,7 +723,17 @@ impl ResourceGraph {
             let _ = self.validate_image_frames(&path);
         }
         for (name, sprite) in &previous.sprites {
-            if sprite.dynamic {
+            let resources_still_match = sprite.frames.iter().all(|frame| {
+                frame.content_digest.map_or_else(
+                    || frame.image_path.is_empty(),
+                    |digest| {
+                        self.images
+                            .get(&frame.image_path.to_ascii_lowercase())
+                            .is_some_and(|image| image.digest == digest)
+                    },
+                )
+            });
+            if sprite.dynamic && resources_still_match {
                 self.sprites.insert(name.clone(), sprite.clone());
             }
         }
@@ -755,6 +828,15 @@ pub(super) fn opaque_rgb(value: i64) -> u32 {
 
 fn bump_canvas(canvas: &mut CanvasSurface) {
     canvas.revision = canvas.revision.saturating_add(1);
+}
+
+fn rectangle_axis_intersects(origin: i32, extent: i32, limit: u32) -> bool {
+    if extent == 0 {
+        return false;
+    }
+    let origin = i64::from(origin);
+    let end = origin.saturating_add(i64::from(extent));
+    origin.min(end) < i64::from(limit) && origin.max(end) > 0
 }
 
 fn push_canvas_command(

@@ -839,6 +839,11 @@ fn analyze_instruction(
             &expression_arguments,
             SourceLocation::new(source.source.id, statement.span),
         );
+        analyzer.check_graphics_call(
+            &key,
+            &expression_arguments,
+            SourceLocation::new(source.source.id, statement.span),
+        );
         analyzer.check_bit_call(
             &key,
             &expression_arguments,

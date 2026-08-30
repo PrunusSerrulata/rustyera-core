@@ -430,6 +430,7 @@ impl ExpressionAnalyzer<'_> {
             );
         }
         self.check_map_output(key, values, location);
+        self.check_graphics_call(key, values, location);
         if existvar_mode && values.first().is_some_and(Option::is_none) {
             self.diagnostic(
                 AnalyzerDiagnosticCode::InvalidArgument,
@@ -438,6 +439,38 @@ impl ExpressionAnalyzer<'_> {
             );
         }
         self.check_bit_call(key, values, location);
+    }
+
+    pub(crate) fn check_graphics_call(
+        &mut self,
+        name: &str,
+        values: &[Option<HirExpr>],
+        location: SourceLocation,
+    ) {
+        if name == "SPRITECREATEFROMFILE" && values.iter().take(2).any(Option::is_none) {
+            self.diagnostic(
+                AnalyzerDiagnosticCode::InvalidArgument,
+                location,
+                "SPRITECREATEFROMFILE name and path may not be omitted",
+            );
+        }
+        let arity = values.len();
+        if name != "SPRITECREATE" || !(2..=10).contains(&arity) {
+            return;
+        }
+        let snake = self.options.compatibility.supports_snake_display_state();
+        let valid = matches!(arity, 2 | 6) || (snake && matches!(arity, 8 | 10));
+        if !valid {
+            self.diagnostic(
+                AnalyzerDiagnosticCode::InvalidArgumentCount,
+                location,
+                if snake {
+                    format!("SPRITECREATE expects 2, 6, 8 or 10 arguments, found {arity}")
+                } else {
+                    format!("SPRITECREATE expects 2 or 6 arguments, found {arity}")
+                },
+            );
+        }
     }
 
     pub(crate) fn check_bit_call(

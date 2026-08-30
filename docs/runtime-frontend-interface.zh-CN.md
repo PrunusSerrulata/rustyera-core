@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `42.0`。源码入口：
+> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `43.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | C ABI 3.9 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
-| Runtime 协议 42.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
+| Runtime 协议 43.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
 
 破坏性变更必须提升相应版本，并同步 Schema、C 头、文档与测试。数字消息标记已经是
@@ -623,12 +623,16 @@ scene 是所有背景与独立图层的唯一权威来源：
 - `SpriteReplay {name,size,position,frames,canvas_id?,canvas_rectangle?,revision}`；scene 中的
   Sprite source 必须绑定该 revision，不得只按同名资源取“最新值”；
 - `SpriteFrameReplay {resource_id,source_rectangle[4],offset[2],delay_ms,
-  destination_size?,canvas_id?}`；
+  destination_size?,canvas_id?,content_digest?}`；文件资源必须携带精确内容摘要，canvas
+  frame 不携带摘要；前端可按摘要去重解码，但仍按 resource_id 解析项目资源；
 - `CanvasReplay {canvas_id,size,commands,revision}`；
 - canvas 命令为 Clear、DrawSprite、SetPixel、FillRectangle、SetBrush、SetPen、
-  SetDashStyle、SetFont、DrawLine、DrawText、DrawCanvas、LoadEncodedImage；字段与
+  SetDashStyle、SetFont、DrawLine、DrawText、DrawCanvas、LoadEncodedImage、
+  PolygonPointAdd、PolygonPointClear、DrawPolygon、FillPolygon；字段与
   [`presentation.rs`](../crates/era-runtime-protocol/src/presentation.rs) 同名。颜色矩阵
   是整数数组；DrawCanvas 的 5×5 值为 1/256 定点，rotation 是 millidegrees。
+  多边形点列是 canvas 重放状态：PolygonPointAdd/Clear 依次更新它，后续 DrawPolygon 与
+  FillPolygon 消费当时的完整点列；前端不得把四类命令当作彼此独立的无状态增量。
 
 `animation_timer_ms` 是 runtime 持有的逻辑重绘节拍：0 表示停用，1–9ms 规范化为 10ms。
 前端据此安排绘制，但不得用渲染帧推进游戏时间或反向覆盖该值。

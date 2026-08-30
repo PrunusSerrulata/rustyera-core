@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::mem::size_of;
 
+use era_protocol::ProtocolBytes;
 use era_runtime_protocol::{
     CanvasReplay, CanvasReplayCommand, CanvasSize, FileCategory, FilePayload,
     ImageMetadataResponse, ProjectManifest, ResourceReplay, SpriteFrameReplay, SpriteReplay,
@@ -121,6 +122,8 @@ struct CanvasSurface {
     height: u32,
     revision: u64,
     commands: Vec<CanvasCommand>,
+    #[serde(default)]
+    polygon_points: Vec<[i32; 2]>,
     #[serde(skip, default)]
     retained_command_bytes: usize,
     brush_argb: u32,
@@ -190,6 +193,12 @@ enum CanvasCommand {
         content_digest: Vec<u8>,
         encoded: Vec<u8>,
     },
+    PolygonPointAdd {
+        point: [i32; 2],
+    },
+    PolygonPointClear,
+    DrawPolygon,
+    FillPolygon,
 }
 
 impl CanvasCommand {
@@ -217,7 +226,11 @@ impl CanvasCommand {
             | Self::SetBrush { .. }
             | Self::SetPen { .. }
             | Self::SetDashStyle { .. }
-            | Self::DrawLine { .. } => 0,
+            | Self::DrawLine { .. }
+            | Self::PolygonPointAdd { .. }
+            | Self::PolygonPointClear
+            | Self::DrawPolygon
+            | Self::FillPolygon => 0,
         };
         size_of::<Self>().saturating_add(dynamic)
     }
@@ -446,7 +459,11 @@ impl ResourceGraph {
         let image = self
             .images
             .get(&relative_path.to_ascii_lowercase())
-            .and_then(|image| image.metadata.as_ref())
+            .ok_or("image resource is unavailable")?;
+        let digest = image.digest;
+        let image = image
+            .metadata
+            .as_ref()
             .ok_or("image metadata is unavailable")?;
         for sprite in self.sprites.values_mut() {
             for frame in &mut sprite.frames {
@@ -473,6 +490,7 @@ impl ResourceGraph {
                 }
                 frame.source_width = Some(width);
                 frame.source_height = Some(height);
+                frame.content_digest = Some(digest);
                 if sprite.width == 0 {
                     sprite.width = frame.destination_width.unwrap_or(width);
                 }
@@ -486,6 +504,87 @@ impl ResourceGraph {
 
     pub(crate) fn sprite(&self, name: &str) -> Option<&SpriteDefinition> {
         self.sprites.get(&name.to_ascii_uppercase())
+    }
+
+    pub(crate) fn create_file_sprite(
+        &mut self,
+        name: &str,
+        requested_path: &str,
+        declaring_source: Option<&str>,
+        relative_to_source: bool,
+    ) -> bool {
+        let key = name.to_ascii_uppercase();
+        if name.is_empty() {
+            return false;
+        }
+        if self.sprites.contains_key(&key) {
+            // The fixed snake implementation treats repeated file-backed creation
+            // as an idempotent success, unlike canvas-backed SPRITECREATE.
+            return true;
+        }
+        let Ok(requested_path) = validate_relative_path(requested_path) else {
+            return false;
+        };
+        let resolved = if relative_to_source {
+            let Some(source) = declaring_source.and_then(|path| validate_relative_path(path).ok())
+            else {
+                return false;
+            };
+            let directory = source
+                .rsplit_once('/')
+                .map_or("", |(directory, _)| directory);
+            let joined = if directory.is_empty() {
+                requested_path
+            } else {
+                format!("{directory}/{requested_path}")
+            };
+            let Ok(joined) = validate_relative_path(&joined) else {
+                return false;
+            };
+            joined
+        } else {
+            requested_path
+        };
+        let Some(image) = self.images.get(&resolved.to_ascii_lowercase()) else {
+            return false;
+        };
+        let Some(metadata) = &image.metadata else {
+            return false;
+        };
+        let image_path = image.relative_path.clone();
+        let content_digest = image.digest;
+        let width = metadata.width;
+        let height = metadata.height;
+        let revision = self.allocate_sprite_revision();
+        self.sprites.insert(
+            key.clone(),
+            SpriteDefinition {
+                name: key,
+                revision,
+                width,
+                height,
+                frames: vec![SpriteFrame {
+                    image_path,
+                    content_digest: Some(content_digest),
+                    canvas_id: None,
+                    source_x: 0,
+                    source_y: 0,
+                    source_width: Some(width),
+                    source_height: Some(height),
+                    offset_x: 0,
+                    offset_y: 0,
+                    delay_ms: 1_000,
+                    destination_width: None,
+                    destination_height: None,
+                }],
+                dynamic: true,
+                position_x: 0,
+                position_y: 0,
+                canvas_id: None,
+                canvas_rectangle: None,
+            },
+        );
+        true
     }
 
     pub(crate) fn move_sprite(&mut self, name: &str, x: i32, y: i32, relative: bool) -> bool {
@@ -623,6 +722,9 @@ impl ResourceGraph {
                             .zip(frame.destination_height)
                             .map(|(width, height)| [width, height]),
                         canvas_id: frame.canvas_id,
+                        content_digest: frame
+                            .content_digest
+                            .map(|digest| ProtocolBytes::new(digest.to_vec())),
                     })
                     .collect(),
                 canvas_id: sprite.canvas_id,
@@ -680,6 +782,7 @@ impl ResourceGraph {
                                     delay_ms: 1_000,
                                     destination_size: None,
                                     canvas_id: None,
+                                    content_digest: Some(ProtocolBytes::new(image.digest.to_vec())),
                                 }],
                                 canvas_id: None,
                                 canvas_rectangle: None,
@@ -798,9 +901,22 @@ impl ResourceGraph {
                                 content_digest,
                                 encoded,
                             } => CanvasReplayCommand::LoadEncodedImage {
-                                content_digest: content_digest.clone(),
-                                encoded: encoded.clone(),
+                                content_digest: ProtocolBytes::new(content_digest.clone()),
+                                encoded: ProtocolBytes::new(encoded.clone()),
                             },
+                            CanvasCommand::PolygonPointAdd { point } => {
+                                CanvasReplayCommand::PolygonPointAdd {
+                                    point: era_runtime_protocol::CanvasPoint {
+                                        x: point[0],
+                                        y: point[1],
+                                    },
+                                }
+                            }
+                            CanvasCommand::PolygonPointClear => {
+                                CanvasReplayCommand::PolygonPointClear
+                            }
+                            CanvasCommand::DrawPolygon => CanvasReplayCommand::DrawPolygon,
+                            CanvasCommand::FillPolygon => CanvasReplayCommand::FillPolygon,
                         }
                     })
                     .collect(),

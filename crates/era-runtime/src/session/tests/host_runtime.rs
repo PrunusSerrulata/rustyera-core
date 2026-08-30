@@ -1716,10 +1716,10 @@ fn host_scalar_and_read_failures_only_preserve_explicit_script_sources() {
 
 #[test]
 fn direct_runtime_host_uses_existing_domain_errors_and_unsupported_boundary() {
-    for (expression, faulted) in [
-        ("{HOTKEY_STATE(0,0)}", false),
-        ("{GETMEMORYUSAGE()}", true),
-        ("{SPRITECREATE(\"x\",0,0,0,1,1,1,1)}", true),
+    for (expression, checked, faulted) in [
+        ("{HOTKEY_STATE(0,0)}", 0, false),
+        ("{GETMEMORYUSAGE()}", 0, true),
+        ("{SPRITECREATE(\"x\",0,0,0,1,1,1,1)}", 1, false),
     ] {
         let source = format!(
             "@SYSTEM_TITLE\nRESULTS:0 '= \"{expression}\"\nFLAG:0 = STRFORMCHECK(RESULTS:0)\nFLAG:1 = 1\nWAIT\nRETURN\n"
@@ -1731,7 +1731,10 @@ fn direct_runtime_host_uses_existing_domain_errors_and_unsupported_boundary() {
             ),
         );
         let vm = session.vm.as_ref().unwrap();
-        assert_eq!(read_runtime_integer(vm, "FLAG", &[0], None).unwrap(), 0);
+        assert_eq!(
+            read_runtime_integer(vm, "FLAG", &[0], None).unwrap(),
+            checked
+        );
         if faulted {
             assert_eq!(session.phase(), RuntimePhase::Faulted);
             assert_eq!(read_runtime_integer(vm, "FLAG", &[1], None).unwrap(), 0);
@@ -1751,6 +1754,79 @@ fn direct_runtime_host_uses_existing_domain_errors_and_unsupported_boundary() {
                     .any(|message| matches!(message, RuntimeMessage::Fault(_)))
             );
         }
+    }
+}
+
+#[test]
+fn runtime_project_load_keeps_spritecreate_arity_profile_boundary() {
+    for (profile, arity, expected_success) in [
+        (erabasic_compat::CompatibilityProfileId::EmueraEm, 2, true),
+        (erabasic_compat::CompatibilityProfileId::EmueraEm, 6, true),
+        (erabasic_compat::CompatibilityProfileId::EmueraEm, 8, false),
+        (erabasic_compat::CompatibilityProfileId::EmueraEm, 10, false),
+        (
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            2,
+            true,
+        ),
+        (
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            6,
+            true,
+        ),
+        (
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            8,
+            true,
+        ),
+        (
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            10,
+            true,
+        ),
+    ] {
+        let arguments = match arity {
+            2 => "\"S\", 1",
+            6 => "\"S\", 1, 0, 0, 2, 1",
+            8 => "\"S\", 1, 0, 0, 2, 1, -3, 4",
+            10 => "\"S\", 1, 0, 0, 2, 1, -3, 4, 7, 9",
+            _ => unreachable!(),
+        };
+        let compatibility = erabasic_compat::CompatibilityIdentity::for_profile(profile);
+        let mut session = negotiated_session();
+        submit(
+            &mut session,
+            1,
+            RuntimeMessage::ProjectManifest(ProjectManifest {
+                compatibility,
+                project_revision: 1,
+                files: vec![
+                    profile_configuration_file(profile),
+                    SubmittedFile {
+                        relative_path: "main.erb".into(),
+                        category: FileCategory::Erb,
+                        payload: FilePayload::Utf8(format!(
+                            "@SYSTEM_TITLE\nRESULT = SPRITECREATE({arguments})\nRETURN\n"
+                        )),
+                        content_hash: None,
+                    },
+                ],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        let messages = drain(&mut session);
+        let report = messages
+            .iter()
+            .find_map(|message| match message {
+                RuntimeMessage::ProjectLoadReport(report) => Some(report),
+                _ => None,
+            })
+            .expect("project load report");
+        assert_eq!(
+            report.success, expected_success,
+            "{profile:?} arity {arity}: {:?}",
+            report.diagnostics
+        );
     }
 }
 

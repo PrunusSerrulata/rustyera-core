@@ -193,7 +193,12 @@ pub(crate) fn builtin_function_available(
 ) -> bool {
     match name.to_ascii_uppercase().as_str() {
         "SETANIMETIMER" | "BITMAP_CACHE_ENABLE" => !identity.is_experimental(),
-        "GETANIMETIMER" => identity.supports_snake_display_state(),
+        "GETANIMETIMER"
+        | "SPRITECREATEFROMFILE"
+        | "G_POLYGON_DRAW"
+        | "G_POLYGON_FILL"
+        | "G_POLYGON_POINT_ADD"
+        | "G_POLYGON_POINT_CLEAR" => identity.supports_snake_display_state(),
         _ => builtin_shared_available(name, identity),
     }
 }

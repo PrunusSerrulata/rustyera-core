@@ -722,6 +722,32 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
         2,
         false,
     );
+    add(
+        "SPRITECREATE",
+        IntType,
+        &[
+            String, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer,
+        ],
+        2,
+        false,
+    );
+    add(
+        "SPRITECREATEFROMFILE",
+        IntType,
+        &[String, String, Integer],
+        2,
+        false,
+    );
+    for name in ["G_POLYGON_DRAW", "G_POLYGON_FILL", "G_POLYGON_POINT_CLEAR"] {
+        add(name, IntType, &[Integer], 1, false);
+    }
+    add(
+        "G_POLYGON_POINT_ADD",
+        IntType,
+        &[Integer, Integer, Integer],
+        3,
+        false,
+    );
     add("MOVETEXTBOX", IntType, &[Integer; 3], 3, false);
     add("RESUMETEXTBOX", IntType, &[Integer; 3], 3, false);
     add("BITMAP_CACHE_ENABLE", IntType, &[Integer], 1, false);
@@ -737,6 +763,10 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     for name in ["BITGET", "BITTOGGLE", "BITINDEXOFFIRST"] {
         add(name, IntType, &[MutableInteger, Integer], 1, false);
     }
+    result
+        .get_mut("SPRITECREATEFROMFILE")
+        .expect("file sprite signature was inserted")
+        .allow_omitted = true;
     for name in ["BITSET", "BITGET", "BITTOGGLE", "BITINDEXOFFIRST"] {
         result
             .get_mut(name)

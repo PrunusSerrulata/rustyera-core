@@ -166,6 +166,144 @@ fn content_directory_images_create_frontend_resource_backed_canvases() {
     }));
 }
 
+#[test]
+fn file_sprites_resolve_only_submitted_safe_paths_and_bind_content_digests() {
+    let digest = vec![9; 32];
+    let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+        project_revision: 1,
+        files: [
+            ("root.png", vec![1]),
+            ("copy.png", vec![1]),
+            ("erb/sub/local.png", vec![2]),
+            ("erb/link/../../outside.png", vec![3]),
+        ]
+        .into_iter()
+        .map(|(relative_path, bytes)| SubmittedFile {
+            relative_path: relative_path.into(),
+            category: FileCategory::Resource,
+            payload: FilePayload::Bytes(ProtocolBytes::new(bytes)),
+            content_hash: matches!(relative_path, "root.png" | "copy.png")
+                .then(|| ProtocolBytes::new(digest.clone())),
+        })
+        .collect(),
+    };
+    let (mut graph, diagnostics) = ResourceGraph::from_manifest(&manifest);
+    assert!(diagnostics.is_empty());
+    for path in ["root.png", "copy.png", "erb/sub/local.png"] {
+        graph
+            .apply_metadata(
+                path,
+                ImageMetadataResponse {
+                    width: 2,
+                    height: 1,
+                    format: "png".into(),
+                    animated: false,
+                },
+            )
+            .unwrap();
+    }
+
+    assert!(graph.create_file_sprite("root", "root.png", Some("erb/main.erb"), false));
+    assert!(graph.create_file_sprite("local", "local.png", Some("erb/sub/main.erb"), true,));
+    assert!(graph.create_file_sprite("copy", "copy.png", None, false));
+    assert!(graph.create_file_sprite("root", "missing.png", None, false));
+    for path in ["/root.png", "../root.png", "erb/link/../../outside.png"] {
+        assert!(!graph.create_file_sprite("unsafe", path, Some("erb/main.erb"), false));
+    }
+    assert!(!graph.create_file_sprite("no-source", "local.png", None, true));
+
+    let replay = graph.replay();
+    let root = replay
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "ROOT")
+        .unwrap();
+    let copy = replay
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "COPY")
+        .unwrap();
+    let local = replay
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "LOCAL")
+        .unwrap();
+    assert_eq!(root.size, [2, 1]);
+    assert_eq!(local.frames[0].resource_id, "erb/sub/local.png");
+    assert_eq!(root.frames[0].content_digest, copy.frames[0].content_digest);
+    assert_eq!(
+        root.frames[0].content_digest.as_ref().unwrap().as_slice(),
+        digest
+    );
+}
+
+#[test]
+fn file_sprite_reload_inherits_only_an_identical_resource_digest() {
+    fn graph(payload: Option<Vec<u8>>, revision: u64) -> ResourceGraph {
+        let files = payload.into_iter().map(|payload| SubmittedFile {
+            relative_path: "root.png".into(),
+            category: FileCategory::Resource,
+            payload: FilePayload::Bytes(ProtocolBytes::new(payload)),
+            content_hash: None,
+        });
+        let manifest = ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+            project_revision: revision,
+            files: files.collect(),
+        };
+        let (graph, diagnostics) = ResourceGraph::from_manifest(&manifest);
+        assert!(diagnostics.is_empty());
+        graph
+    }
+
+    let mut previous = graph(Some(vec![1, 2, 3]), 1);
+    previous
+        .apply_metadata(
+            "root.png",
+            ImageMetadataResponse {
+                width: 2,
+                height: 1,
+                format: "png".into(),
+                animated: false,
+            },
+        )
+        .unwrap();
+    assert!(previous.create_file_sprite("file", "root.png", None, false));
+    let original = previous.sprite("file").unwrap();
+    let original_revision = original.revision;
+    let original_digest = original.frames[0].content_digest;
+
+    let mut identical = graph(Some(vec![1, 2, 3]), 2);
+    identical.inherit_runtime_graph(&previous);
+    let inherited = identical.sprite("file").expect("identical file sprite");
+    assert_eq!(inherited.revision, original_revision);
+    assert_eq!(inherited.frames[0].content_digest, original_digest);
+
+    let mut changed = graph(Some(vec![3, 2, 1]), 2);
+    changed.inherit_runtime_graph(&previous);
+    assert!(changed.sprite("file").is_none());
+    changed
+        .apply_metadata(
+            "root.png",
+            ImageMetadataResponse {
+                width: 2,
+                height: 1,
+                format: "png".into(),
+                animated: false,
+            },
+        )
+        .unwrap();
+    assert!(changed.create_file_sprite("file", "root.png", None, false));
+    let rebuilt = changed.sprite("file").unwrap();
+    assert!(rebuilt.revision > original_revision);
+    assert_ne!(rebuilt.frames[0].content_digest, original_digest);
+
+    let mut deleted = graph(None, 2);
+    deleted.inherit_runtime_graph(&previous);
+    assert!(deleted.sprite("file").is_none());
+}
+
 use super::*;
 
 #[test]
@@ -240,7 +378,7 @@ fn canvas_and_dynamic_sprite_mutations_form_a_deterministic_replay_graph() {
     assert_eq!(graph.create_canvas(3, 64, 32), Ok(true));
     assert_eq!(graph.create_canvas(3, 1, 1), Ok(false));
     assert!(graph.clear_canvas(3, 0x00ff_00ff, None));
-    assert!(graph.create_canvas_sprite("generated", 3, None));
+    assert!(graph.create_canvas_sprite("generated", 3, None, [0, 0], None));
     let created_revision = graph.sprite("generated").unwrap().revision;
     assert!(graph.create_animation_sprite("animated", 16, 16));
     assert!(graph.add_animation_frame("animated", 3, [0, 0, 16, 16], [2, 3], 55,));
@@ -283,6 +421,94 @@ fn canvas_and_dynamic_sprite_mutations_form_a_deterministic_replay_graph() {
     assert_eq!(replay.animation_timer_ms, 55);
     assert_eq!(graph.dispose_sprites(false), 2);
     assert!(graph.dispose_canvas(3));
+}
+
+#[test]
+fn canvas_sprite_overloads_preserve_offsets_scaling_and_source_flips() {
+    let mut graph = ResourceGraph::default();
+    graph.create_canvas(1, 4, 3).unwrap();
+    assert!(graph.create_canvas_sprite("two", 1, None, [0, 0], None));
+    assert!(graph.create_canvas_sprite("six", 1, Some([1, 1, 2, 2]), [0, 0], None,));
+    assert!(graph.create_canvas_sprite("eight", 1, Some([0, 0, 2, 1]), [-3, 4], None,));
+    assert!(graph.create_canvas_sprite("ten", 1, Some([0, 0, 2, 1]), [-3, 4], Some([-7, -9]),));
+    assert!(graph.create_canvas_sprite("flip", 1, Some([3, 2, -2, -1]), [0, 0], None,));
+    assert!(!graph.create_canvas_sprite("outside", 1, Some([5, 0, -1, 1]), [0, 0], None,));
+
+    let replay = graph.replay();
+    let sprite = |name: &str| {
+        replay
+            .sprites
+            .iter()
+            .find(|sprite| sprite.name == name)
+            .unwrap()
+    };
+    assert_eq!(sprite("TWO").size, [4, 3]);
+    assert_eq!(sprite("SIX").size, [2, 2]);
+    assert_eq!(sprite("EIGHT").position, [-3, 4]);
+    assert_eq!(sprite("TEN").size, [7, 9]);
+    assert_eq!(sprite("FLIP").size, [2, 1]);
+    assert_eq!(sprite("FLIP").canvas_rectangle.unwrap().width, -2);
+    assert_eq!(sprite("FLIP").canvas_rectangle.unwrap().height, -1);
+}
+
+#[test]
+fn polygon_point_state_replays_deterministically_and_survives_full_clear() {
+    let mut graph = ResourceGraph::default();
+    graph.create_canvas(1, 8, 8).unwrap();
+    assert_eq!(
+        graph.draw_canvas_polygon(1, false),
+        Err("polygon point set is empty")
+    );
+    assert_eq!(graph.draw_canvas_polygon(99, false), Ok(false));
+    for point in [[1, 1], [6, 1], [3, 6]] {
+        assert!(graph.add_canvas_polygon_point(1, point));
+    }
+    assert_eq!(graph.draw_canvas_polygon(1, false), Ok(true));
+    assert_eq!(graph.draw_canvas_polygon(1, true), Ok(true));
+    assert!(graph.clear_canvas(1, 0, None));
+    assert_eq!(graph.draw_canvas_polygon(1, false), Ok(true));
+    assert!(graph.clear_canvas_polygon_points(1));
+    assert_eq!(
+        graph.draw_canvas_polygon(1, true),
+        Err("polygon point set is empty")
+    );
+
+    let replay = graph.replay();
+    let canvas = replay
+        .canvases
+        .iter()
+        .find(|canvas| canvas.canvas_id == 1)
+        .unwrap();
+    assert_eq!(canvas.revision, 8);
+    assert_eq!(
+        canvas
+            .commands
+            .iter()
+            .filter(|command| matches!(command, CanvasReplayCommand::PolygonPointAdd { .. }))
+            .count(),
+        3,
+    );
+    assert!(matches!(
+        canvas.commands.as_slice(),
+        [
+            CanvasReplayCommand::Clear { rectangle: None, .. },
+            CanvasReplayCommand::SetBrush { .. },
+            CanvasReplayCommand::SetPen { .. },
+            CanvasReplayCommand::SetDashStyle { .. },
+            CanvasReplayCommand::SetFont { .. },
+            CanvasReplayCommand::PolygonPointAdd { point: first },
+            CanvasReplayCommand::PolygonPointAdd { point: second },
+            CanvasReplayCommand::PolygonPointAdd { point: third },
+            CanvasReplayCommand::DrawPolygon,
+            CanvasReplayCommand::PolygonPointClear,
+        ] if [first.x, first.y] == [1, 1]
+            && [second.x, second.y] == [6, 1]
+            && [third.x, third.y] == [3, 6]
+    ));
+    assert!(matches!(
+        canvas.commands.last(),
+        Some(CanvasReplayCommand::PolygonPointClear)
+    ));
 }
 
 #[test]

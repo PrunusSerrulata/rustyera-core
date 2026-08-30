@@ -4,7 +4,7 @@ use era_protocol::{
 };
 use era_runtime_protocol as runtime_protocol;
 use era_runtime_protocol::{
-    AdvanceTime, AudioEffect, AudioEffectAction, CanvasPixelRequest, CanvasReplay,
+    AdvanceTime, AudioEffect, AudioEffectAction, CanvasPixelRequest, CanvasPoint, CanvasReplay,
     CanvasReplayCommand, CanvasSize, CellWidthIntent, ClientPreferenceLayers, Color,
     ConfigurationApplication, ConfigurationChange, ConfigurationClientProfile,
     ConfigurationUpdateCommitted, ConfigurationUpdateOutcome, ConfigurationValueKind,
@@ -22,10 +22,10 @@ use era_runtime_protocol::{
     RuntimeMessage, RuntimeVmFault, RuntimeVmFaultCategory, RuntimeVmFaultCode,
     RuntimeVmFaultDetail, SAMPLE_CANVAS_PIXEL_OPERATION, SceneAnchorV1, SceneDeltaV1, SceneLayerV1,
     SceneOffsetV1, SceneOperationV1, SceneScrollPolicyV1, SceneSizeV1, SceneSourceV1, SceneStateV1,
-    SeparatorRole, ServiceKind, ServiceRequest, SnapshotExportPurpose, StateExportCancel,
-    StateExportChunkRequest, StateExportKind, StateExportRequest, StateImportBegin,
-    StateImportCommit, StorageNamespace, StorageOperation, StorageRequest, TextExtentRequest,
-    TextStyle, parse_document, validate_relative_path,
+    SeparatorRole, ServiceKind, ServiceRequest, SnapshotExportPurpose, SpriteFrameReplay,
+    SpriteReplay, StateExportCancel, StateExportChunkRequest, StateExportKind, StateExportRequest,
+    StateImportBegin, StateImportCommit, StorageNamespace, StorageOperation, StorageRequest,
+    TextExtentRequest, TextStyle, parse_document, validate_relative_path,
 };
 
 #[test]
@@ -133,7 +133,7 @@ fn protocol_42_scene_and_cell_intents_have_stable_json_cbor_and_cddl() {
     ] {
         assert!(schema.contains(definition));
     }
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
 }
 
 #[test]
@@ -385,7 +385,7 @@ fn protocol_40_round_trips_input_environment_wait_and_ordered_device_contracts()
         .unwrap(),
         pump
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
     let schema = include_str!("../schema/runtime.cddl");
     for definition in [
         "environment-capability",
@@ -416,7 +416,7 @@ fn protocol_24_carries_backend_authoritative_logs() {
         RuntimeMessage::decode_payload(98, &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
 }
 
 #[test]
@@ -449,7 +449,7 @@ fn protocol_38_carries_correlated_secondary_vm_faults() {
         RuntimeMessage::decode_payload(message.tag(), &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
     let schema = include_str!("../schema/runtime.cddl");
     assert!(schema.contains("runtime-vm-fault-detail"));
     assert_eq!(
@@ -484,7 +484,7 @@ fn protocol_34_carries_diagnostic_notification_guidance() {
         serde_json::to_value(&message).unwrap()["value"]["notification"],
         "log_only"
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
 }
 
 #[test]
@@ -507,7 +507,7 @@ fn protocol_35_carries_the_encoded_journal_byte_limit_at_map_key_six() {
     assert!(include_str!("../schema/runtime.cddl").contains(
         "runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint, 6: uint }"
     ));
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
 }
 
 #[test]
@@ -653,7 +653,7 @@ fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
 }
 
 #[test]
@@ -662,7 +662,7 @@ fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -828,7 +828,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -867,7 +867,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
     assert_eq!(StateExportKind::InputReplay as u8, 4);
 }
 
@@ -1052,19 +1052,59 @@ fn transient_effects_have_an_independent_idempotent_stream() {
 
 #[test]
 fn resource_replay_is_a_renderer_independent_protocol_value() {
+    let encoded_image = CanvasReplayCommand::LoadEncodedImage {
+        content_digest: ProtocolBytes::new(vec![1, 2]),
+        encoded: ProtocolBytes::new(vec![3]),
+    };
+    assert_eq!(
+        serde_json::to_value(&encoded_image).unwrap(),
+        serde_json::json!({
+            "type": "load_encoded_image",
+            "content_digest": [1, 2],
+            "encoded": [3]
+        })
+    );
+    assert_eq!(
+        encode_canonical(&encoded_image).unwrap(),
+        vec![0x82, 0x0b, 0x82, 0x42, 0x01, 0x02, 0x41, 0x03]
+    );
+
     let replay = ResourceReplay {
-        sprites: Vec::new(),
+        sprites: vec![SpriteReplay {
+            name: "FILE".into(),
+            size: [2, 1],
+            position: [0, 0],
+            frames: vec![SpriteFrameReplay {
+                resource_id: "erb/image.png".into(),
+                source_rectangle: [0, 0, 2, 1],
+                offset: [0, 0],
+                delay_ms: 1_000,
+                destination_size: None,
+                canvas_id: None,
+                content_digest: Some(ProtocolBytes::new(vec![7; 32])),
+            }],
+            canvas_id: None,
+            canvas_rectangle: None,
+            revision: 4,
+        }],
         canvases: vec![CanvasReplay {
             canvas_id: 3,
             size: CanvasSize {
                 width: 64,
                 height: 32,
             },
-            commands: vec![CanvasReplayCommand::Clear {
-                argb: 0xff00_ff00,
-                rectangle: None,
-            }],
-            revision: 1,
+            commands: vec![
+                CanvasReplayCommand::Clear {
+                    argb: 0xff00_ff00,
+                    rectangle: None,
+                },
+                CanvasReplayCommand::PolygonPointAdd {
+                    point: CanvasPoint { x: 1, y: 2 },
+                },
+                CanvasReplayCommand::DrawPolygon,
+                CanvasReplayCommand::PolygonPointClear,
+            ],
+            revision: 4,
         }],
         animation_timer_ms: 55,
     };
@@ -1275,7 +1315,7 @@ fn protocol_41_carries_safe_sql_v1_without_native_paths_or_handles() {
     );
     assert_eq!(SqlLimitsV1::FIXED.maximum_connections, 8);
     assert_eq!(SqlLimitsV1::FIXED.execution_budget_ms, 5_000);
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
     let schema = include_str!("../schema/runtime.cddl");
     assert!(schema.contains("sql-request-v1"));
     assert!(schema.contains("sql-response-v1"));
