@@ -84,20 +84,20 @@ SAVE_WINDOWS_PATH="$(winepath -w "$FIXTURE_DIR/save00.sav")"
 # inside Wine, so publish the Windows runtime beside the executable.
 if [[ "${EMUERA_REFERENCE_SKIP_BUILD:-0}" != "1" ]]; then
     command -v dotnet >/dev/null || { echo "required command not found: dotnet" >&2; exit 127; }
-    BUILD_ARGS=()
+    BUILD_ARGS=(
+        publish "$PROJECT"
+        -c Debug-NAudio
+        -p:Platform=x64
+        -r win-x64
+        --self-contained true
+        -p:PublishSingleFile=false
+        -o "$PUBLISH_DIR"
+    )
     if [[ -n "${EMUERA_REFERENCE_ARTIFACTS_PATH:-}" ]]; then
         BUILD_ARGS+=(--artifacts-path "$EMUERA_REFERENCE_ARTIFACTS_PATH")
     fi
-    dotnet publish "$PROJECT" \
-        -c Debug-NAudio \
-        -p:Platform=x64 \
-        -r win-x64 \
-        --self-contained true \
-        -p:PublishSingleFile=false \
-        -o "$PUBLISH_DIR" \
-        "${BUILD_ARGS[@]}" \
-        --nologo \
-        -clp:ErrorsOnly
+    BUILD_ARGS+=(--nologo -clp:ErrorsOnly)
+    dotnet "${BUILD_ARGS[@]}"
 fi
 if [[ ! -f "$EXECUTABLE" ]]; then
     echo "reference executable missing: $EXECUTABLE" >&2
