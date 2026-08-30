@@ -193,7 +193,7 @@ impl RuntimeSession {
             .restore_random_state(&random)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         self.emit_input_undo_state()?;
-        self.complete_ordinary_load(slot, &bytes)
+        self.complete_ordinary_load(slot, &bytes, None)
     }
 
     pub(super) fn replay_submission(
@@ -296,7 +296,7 @@ impl RuntimeSession {
             .restore_random_state(&random)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         self.emit_input_undo_state()?;
-        self.complete_ordinary_load(slot, &bytes)?;
+        self.complete_ordinary_load(slot, &bytes, None)?;
         Ok(true)
     }
 

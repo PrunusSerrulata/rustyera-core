@@ -133,6 +133,7 @@ pub(crate) enum PendingStorage {
         request: HostRequestId,
     },
     HostLoadOrdinary {
+        request: HostRequestId,
         slot: u32,
     },
     HostLoadGlobal {

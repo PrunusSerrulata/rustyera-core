@@ -22,6 +22,13 @@ impl RuntimeSession {
                 "start requires a loaded project in a replaceable state",
             );
         }
+        if self.pending_sql_snapshot_restore.is_some() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "start cannot replace a pending exact SQL restore",
+            );
+        }
         if let Some(identity) = self
             .project_snapshot
             .as_ref()
@@ -101,6 +108,22 @@ impl RuntimeSession {
                 );
             }
         };
+        let DecodedEraSave {
+            state,
+            description,
+            opaque_extensions,
+            structured_extensions,
+            owned_state,
+        } = decoded;
+        if owned_state.is_some()
+            && let Err(blocker) = self.sql.snapshot()
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                owned_start_sql_blocker_message(blocker),
+            );
+        }
         let mut vm = RuntimeVm::new(
             self.artifact
                 .clone()
@@ -111,18 +134,36 @@ impl RuntimeSession {
         vm.set_character_width_mode(configured_character_width_mode(
             self.project_snapshot.as_ref(),
         ));
-        let version = decoded.state.version;
-        let description = decoded.description.clone();
+        let version = state.version;
         let replay_digest = crate::input_replay::digest_hex(bytes);
         let replay_origin = self.prepare_input_replay(ReplayOriginDetails::TraditionalSave {
             payload_digest: replay_digest,
             description: description.clone(),
             save_version: version.to_string(),
         })?;
+        if let Some(owned) = owned_state {
+            let prepared = Self::prepare_owned_vm_candidate(
+                vm,
+                OwnedVmCandidateInput {
+                    state,
+                    description,
+                    opaque_extensions,
+                    structured_extensions,
+                    owned,
+                    last_load: OwnedLastLoad::Slot(-1),
+                },
+            )?;
+            let load = PreparedTraditionalStart {
+                vm: prepared.vm,
+                opaque_extensions: prepared.opaque_extensions,
+                replay_origin,
+            };
+            return self.begin_owned_traditional_start_sql_restore(message_id, load, prepared.sql);
+        }
         let prepared = match vm.prepare_runtime_state_with_extensions(
-            VmRuntimeStateTransaction::RestoreOrdinary(Box::new(decoded.state)),
+            VmRuntimeStateTransaction::RestoreOrdinary(Box::new(state)),
             StructuredScope::Ordinary,
-            &decoded.structured_extensions,
+            &structured_extensions,
         ) {
             Ok((prepared, _)) => prepared,
             Err(error) => {
@@ -144,8 +185,29 @@ impl RuntimeSession {
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         vm.commit_runtime_state(last_load)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        let load = PreparedTraditionalStart {
+            vm,
+            opaque_extensions,
+            replay_origin,
+        };
+        self.complete_traditional_start(load, None)
+    }
+
+    pub(in crate::session) fn complete_traditional_start(
+        &mut self,
+        load: PreparedTraditionalStart,
+        replacement_sql: Option<SqlRuntimeState>,
+    ) -> Result<(), RuntimeError> {
+        if let Some(replacement_sql) = replacement_sql {
+            return self.complete_owned_traditional_start(load, replacement_sql);
+        }
+        let PreparedTraditionalStart {
+            mut vm,
+            opaque_extensions,
+            replay_origin,
+        } = load;
         self.retained_title_program = None;
-        self.save_extensions = decoded.opaque_extensions;
+        self.save_extensions = opaque_extensions;
         if let Some(project) = &mut self.project_snapshot {
             project.resource_graph.reset_runtime_graph();
         }
@@ -171,6 +233,67 @@ impl RuntimeSession {
         self.set_phase(RuntimePhase::Running)?;
         self.install_input_replay(replay_origin);
         self.renew_debug_grant()
+    }
+
+    fn complete_owned_traditional_start(
+        &mut self,
+        load: PreparedTraditionalStart,
+        replacement_sql: SqlRuntimeState,
+    ) -> Result<(), RuntimeError> {
+        let PreparedTraditionalStart {
+            vm,
+            opaque_extensions,
+            replay_origin,
+        } = load;
+        let mut transaction = OwnedReplacementTransaction::capture(self, vm, replacement_sql);
+        self.retained_title_program = None;
+        self.save_extensions = opaque_extensions;
+        if let Some(project) = &mut self.project_snapshot {
+            project.resource_graph.reset_runtime_graph();
+        }
+        self.sync_resource_replay();
+        self.advance_epoch();
+        self.system_menu = SystemMenuState::Title;
+        self.system_menu_host_request = None;
+        self.load_slot_paths.clear();
+        self.occupied_slot_paths.clear();
+        self.slot_change_tokens.clear();
+        self.slot_labels.clear();
+        self.invalid_slot_paths.clear();
+        self.system_menu_page = 0;
+        if let Err(error) = self.set_phase(RuntimePhase::Starting) {
+            transaction.rollback(self);
+            return Err(error);
+        }
+        self.controller.flow = Some(SystemFlow::Shop);
+        self.controller.step = SystemStep::PostLoadShop;
+        let has_load_sequence = self
+            .controller
+            .prepare_load_sequence(transaction.candidate_vm().vm().artifact());
+        let flow = if has_load_sequence {
+            self.spawn_next_event(transaction.candidate_vm_mut())
+        } else {
+            self.continue_system_flow(transaction.candidate_vm_mut())
+        };
+        if let Err(error) = flow {
+            transaction.rollback(self);
+            return Err(error);
+        }
+        if let Err(error) = self.set_phase(RuntimePhase::Running) {
+            transaction.rollback(self);
+            return Err(error);
+        }
+        let candidate_generation = transaction.candidate_vm().current_generation().0;
+        if let Err(error) = self.renew_debug_grant_for_generation(candidate_generation) {
+            transaction.rollback(self);
+            return Err(error);
+        }
+        self.install_input_replay(replay_origin);
+        transaction.publish(self);
+        let (provider, handles) = transaction.old_sql_cleanup();
+        drop(transaction);
+        let _ = self.emit_sql_cleanup_for(provider, &handles);
+        Ok(())
     }
 
     #[allow(clippy::too_many_lines)]
@@ -865,6 +988,23 @@ impl RuntimeSession {
             submission_token,
             countdown_remaining_ms: None,
             viewport_policy: era_runtime_protocol::InputViewportPolicy::FollowOutput,
+        }
+    }
+}
+
+const fn owned_start_sql_blocker_message(blocker: crate::sql::SqlSnapshotBlocker) -> &'static str {
+    match blocker {
+        crate::sql::SqlSnapshotBlocker::Inflight => {
+            "owned save start cannot replace SQL while a request is pending"
+        }
+        crate::sql::SqlSnapshotBlocker::Reader => {
+            "owned save start cannot replace SQL while a reader is active"
+        }
+        crate::sql::SqlSnapshotBlocker::Transaction => {
+            "owned save start cannot replace SQL while a transaction is active"
+        }
+        crate::sql::SqlSnapshotBlocker::RevisionMissing => {
+            "owned save start cannot replace SQL with an untracked current revision"
         }
     }
 }

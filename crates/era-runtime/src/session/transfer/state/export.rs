@@ -233,8 +233,13 @@ impl RuntimeSession {
             pending.wait.stability == WaitStability::StableInput
                 && pending.wait.deadline_ns.is_none()
         });
+        let owned_traditional_save = request.kind == StateExportKind::TraditionalSave
+            && self.artifact.as_ref().is_some_and(|artifact| {
+                artifact.artifact().manifest.compatibility.profile
+                    == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake
+            });
         let mut reasons = Vec::new();
-        if request.kind == StateExportKind::VmSnapshot
+        if (request.kind == StateExportKind::VmSnapshot || owned_traditional_save)
             && let Err(blocker) = self.sql.snapshot()
         {
             reasons.push(match blocker {
@@ -282,19 +287,31 @@ impl RuntimeSession {
                 .as_ref()
                 .ok_or_else(|| RuntimeError::Internal("save export has no VM".into()))?;
             let bytes = match request.kind {
-                StateExportKind::TraditionalSave => encode_era_save(
-                    &vm.export_era_state(),
-                    vm.vm().artifact(),
-                    String::new(),
-                    merge_structured_extensions(
+                StateExportKind::TraditionalSave => {
+                    let extensions = merge_structured_extensions(
                         &self.save_extensions,
                         vm.structured_extensions(StructuredScope::Ordinary)
                             .map_err(|error| RuntimeError::Internal(error.to_string()))?,
                     )
-                    .map_err(|error| RuntimeError::Internal(error.to_string()))?,
-                    self.traditional_save_format(),
-                )
-                .map_err(|error| RuntimeError::Internal(error.to_string()))?,
+                    .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+                    if owned_traditional_save {
+                        self.encode_owned_runtime_save(
+                            vm,
+                            String::new(),
+                            extensions,
+                            self.traditional_save_format(),
+                        )
+                    } else {
+                        encode_era_save(
+                            &vm.export_era_state(),
+                            vm.vm().artifact(),
+                            String::new(),
+                            extensions,
+                            self.traditional_save_format(),
+                        )
+                    }
+                    .map_err(|error| RuntimeError::Internal(error.to_string()))?
+                }
                 StateExportKind::VmSnapshot => {
                     if !unrestricted_snapshot
                         && !matches!(vm.snapshot_eligibility(), SnapshotEligibility::Eligible)

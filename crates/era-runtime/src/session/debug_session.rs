@@ -628,6 +628,14 @@ impl RuntimeSession {
     /// creator policy and granted scope set remain unchanged, while stale tokens
     /// become unusable immediately.
     pub(super) fn renew_debug_grant(&mut self) -> Result<(), RuntimeError> {
+        let program_generation = self.vm.as_ref().map_or(0, |vm| vm.current_generation().0);
+        self.renew_debug_grant_for_generation(program_generation)
+    }
+
+    pub(in crate::session) fn renew_debug_grant_for_generation(
+        &mut self,
+        program_generation: u64,
+    ) -> Result<(), RuntimeError> {
         let Some(previous) = self.active_debug_grant.clone() else {
             return Ok(());
         };
@@ -637,7 +645,7 @@ impl RuntimeSession {
                 low: self.next_debug_grant_id,
             },
             session_epoch: self.epoch.0,
-            program_generation: self.vm.as_ref().map_or(0, |vm| vm.current_generation().0),
+            program_generation,
             issued_runtime_revision: self.revision,
         };
         self.next_debug_grant_id = self.next_debug_grant_id.saturating_add(1);

@@ -5,3 +5,5 @@ mod loads;
 mod menus;
 mod operations;
 mod resource;
+
+pub(in crate::session) use loads::OwnedReplacementTransaction;

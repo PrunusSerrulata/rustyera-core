@@ -24,6 +24,7 @@ impl RuntimeSession {
                         match decode_canonical(payload.as_slice()) {
                             Ok(response) => response,
                             Err(_) => {
+                                self.retain_sql_cleanup(*provider, *connection);
                                 self.emit_log(
                                     RuntimeLogLevel::Warning,
                                     "SQL cleanup response payload was malformed",
@@ -43,6 +44,7 @@ impl RuntimeSession {
                         database.connection == *connection && !database.connected
                     });
                     if response.provider != *provider || !valid_result || !valid_database {
+                        self.retain_sql_cleanup(*provider, *connection);
                         self.emit_log(
                             RuntimeLogLevel::Warning,
                             "SQL cleanup response did not confirm the expected disconnect",
@@ -51,6 +53,7 @@ impl RuntimeSession {
                     Ok(())
                 }
                 ServiceResult::Error { error } => {
+                    self.retain_sql_cleanup(*provider, *connection);
                     self.emit_log(
                         RuntimeLogLevel::Warning,
                         format!(
@@ -91,7 +94,7 @@ impl RuntimeSession {
                 Ok(response) => response,
                 Err(_) => {
                     self.release_sql_continuation(&continuation);
-                    self.cleanup_uncertain_sql_open(&continuation)?;
+                    self.cleanup_uncertain_sql_open(&continuation);
                     return self.fault(
                         FaultCode::ServiceFailure,
                         "SQL service response payload is malformed",
@@ -101,7 +104,7 @@ impl RuntimeSession {
             },
             ServiceResult::Error { error } => {
                 self.release_sql_continuation(&continuation);
-                self.cleanup_uncertain_sql_open(&continuation)?;
+                self.cleanup_uncertain_sql_open(&continuation);
                 return self.fault(
                     FaultCode::ServiceFailure,
                     &format!(
@@ -142,7 +145,7 @@ impl RuntimeSession {
             continuation_reader(&continuation).and_then(|(id, _)| self.sql.reader(id)),
         ) {
             self.release_sql_continuation(&continuation);
-            self.cleanup_uncertain_sql_open(&continuation)?;
+            self.cleanup_uncertain_sql_open(&continuation);
             return self.fault(FaultCode::ServiceFailure, message, None);
         }
         if let Some(database) = &response.database
@@ -182,7 +185,7 @@ impl RuntimeSession {
                 .as_ref()
                 .is_some_and(|database| database.connected)
             {
-                self.cleanup_uncertain_sql_open(&continuation)?;
+                self.cleanup_uncertain_sql_open(&continuation);
             }
             let mut context = error.context.clone();
             context
@@ -236,7 +239,7 @@ impl RuntimeSession {
                         connection,
                         identity: identity.clone(),
                         resource_digest,
-                    })?;
+                    });
                     return self.fault(
                         FaultCode::ServiceFailure,
                         "SQL open reservation is missing",
@@ -272,7 +275,7 @@ impl RuntimeSession {
                         connection,
                         identity,
                         resource_digest,
-                    })?;
+                    });
                     return self.fault(
                         FaultCode::ServiceFailure,
                         "SQL provider opened a duplicate connection",
@@ -548,15 +551,11 @@ impl RuntimeSession {
         }
     }
 
-    fn cleanup_uncertain_sql_open(
-        &mut self,
-        continuation: &SqlServiceContinuation,
-    ) -> Result<(), RuntimeError> {
+    fn cleanup_uncertain_sql_open(&mut self, continuation: &SqlServiceContinuation) {
         let SqlServiceContinuation::Open { connection, .. } = continuation else {
-            return Ok(());
+            return;
         };
-        self.emit_sql_cleanup_for(self.sql.provider(), std::slice::from_ref(connection))?;
-        Ok(())
+        let _ = self.emit_sql_cleanup_for(self.sql.provider(), std::slice::from_ref(connection));
     }
 }
 

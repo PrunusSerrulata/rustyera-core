@@ -41,16 +41,41 @@ impl RuntimeSession {
         {
             return Err(TraditionalSaveValidationError::DifferentVersion);
         }
-        let vm = RuntimeVm::new(artifact.clone(), self.options.vm_config);
-        vm.prepare_runtime_state_with_extensions(
-            VmRuntimeStateTransaction::RestoreOrdinary(Box::new(decoded.state)),
-            StructuredScope::Ordinary,
-            &decoded.structured_extensions,
-        )
-        .map_err(|error| TraditionalSaveValidationError::Incompatible(error.to_string()))?;
-        Ok(TraditionalSaveInspection {
-            description: decoded.description,
-        })
+        let DecodedEraSave {
+            state,
+            description,
+            structured_extensions,
+            owned_state,
+            ..
+        } = decoded;
+        let mut vm = RuntimeVm::new(artifact.clone(), self.options.vm_config);
+        if let Some(owned) = owned_state {
+            let prepared = Self::prepare_owned_vm_candidate(
+                vm,
+                OwnedVmCandidateInput {
+                    state,
+                    description: description.clone(),
+                    opaque_extensions: Vec::new(),
+                    structured_extensions,
+                    owned,
+                    last_load: OwnedLastLoad::None,
+                },
+            )
+            .map_err(|error| TraditionalSaveValidationError::Incompatible(error.to_string()))?;
+            self.validate_exact_sql_restore(&prepared.sql)
+                .map_err(|message| TraditionalSaveValidationError::Incompatible(message.into()))?;
+            return Ok(TraditionalSaveInspection { description });
+        }
+        let (ordinary, _) = vm
+            .prepare_runtime_state_with_extensions(
+                VmRuntimeStateTransaction::RestoreOrdinary(Box::new(state)),
+                StructuredScope::Ordinary,
+                &structured_extensions,
+            )
+            .map_err(|error| TraditionalSaveValidationError::Incompatible(error.to_string()))?;
+        vm.commit_runtime_state(ordinary)
+            .map_err(|error| TraditionalSaveValidationError::Incompatible(error.to_string()))?;
+        Ok(TraditionalSaveInspection { description })
     }
 
     #[must_use]
@@ -104,6 +129,7 @@ impl RuntimeSession {
             pending_presentation_update: false,
             operations: PendingOperations::default(),
             sql: SqlRuntimeState::default(),
+            sql_cleanup_queue: Vec::new(),
             key_toggle_state: [0; 256],
             device_input: crate::device_input::DeviceInput::default(),
             environment: crate::environment::Environment::default(),

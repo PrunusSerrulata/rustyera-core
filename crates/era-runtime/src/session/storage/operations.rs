@@ -296,9 +296,10 @@ impl RuntimeSession {
                 let writes = self.check_data_writes(&description)?;
                 self.resume_storage_host_value(request, VmValue::Integer(status), writes)
             }
-            (PendingStorage::HostLoadOrdinary { slot }, StorageResult::Read { data, .. }) => {
-                self.complete_ordinary_load(slot, data.as_slice())
-            }
+            (
+                PendingStorage::HostLoadOrdinary { request, slot },
+                StorageResult::Read { data, .. },
+            ) => self.complete_ordinary_load(slot, data.as_slice(), Some(request)),
             (PendingStorage::ListLoadSlots, StorageResult::Listed { entries }) => {
                 self.open_slot_menu(message_id, entries, false)
             }
@@ -534,8 +535,7 @@ impl RuntimeSession {
                     );
                     return self.render_slot_menu(false);
                 }
-                self.system_menu_host_request = None;
-                self.complete_decoded_ordinary_load(slot, data.as_slice(), decoded)
+                self.complete_decoded_ordinary_load(slot, data.as_slice(), decoded, None)
             }
             (pending, StorageResult::Error { error }) => {
                 if matches!(

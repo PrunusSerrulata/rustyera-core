@@ -16,19 +16,43 @@ impl RuntimeSession {
         handles: &[era_runtime_protocol::SqlConnectionHandleV1],
     ) -> Result<u32, RuntimeError> {
         for connection in handles {
+            self.retain_sql_cleanup(provider, *connection);
+        }
+        self.flush_sql_cleanup_queue()
+    }
+
+    pub(in crate::session) fn retain_sql_cleanup(
+        &mut self,
+        provider: era_runtime_protocol::SqlProviderHandleV1,
+        connection: era_runtime_protocol::SqlConnectionHandleV1,
+    ) {
+        let cleanup = PendingSqlCleanup {
+            provider,
+            connection,
+        };
+        if !self.sql_cleanup_queue.contains(&cleanup) {
+            self.sql_cleanup_queue.push(cleanup);
+        }
+    }
+
+    pub(in crate::session) fn flush_sql_cleanup_queue(&mut self) -> Result<u32, RuntimeError> {
+        let mut emitted = 0_u32;
+        while let Some(cleanup) = self.sql_cleanup_queue.first().copied() {
             self.issue_sql_service_for(
-                provider,
+                cleanup.provider,
                 SqlServiceContinuation::CleanupDisconnect {
-                    epoch: provider.service_epoch,
-                    provider,
-                    connection: *connection,
+                    epoch: cleanup.provider.service_epoch,
+                    provider: cleanup.provider,
+                    connection: cleanup.connection,
                 },
                 era_runtime_protocol::SqlOperationV1::Disconnect {
-                    connection: *connection,
+                    connection: cleanup.connection,
                 },
             )?;
+            self.sql_cleanup_queue.remove(0);
+            emitted = emitted.saturating_add(1);
         }
-        Ok(u32::try_from(handles.len()).expect("SQL cleanup handle count fits u32"))
+        Ok(emitted)
     }
 
     pub(super) fn issue_reserved_sql_service(

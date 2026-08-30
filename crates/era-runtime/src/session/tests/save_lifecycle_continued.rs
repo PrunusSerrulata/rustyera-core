@@ -650,7 +650,7 @@ fn global_fixture_at_load(
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn ordinary_save_load_restores_randdata_but_keeps_the_active_native_stream() {
+fn ordinary_save_load_preserves_reference_rng_but_restores_owned_snake_rng() {
     fn next_request(session: &mut RuntimeSession) -> StorageRequest {
         for _ in 0..32 {
             session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -748,10 +748,17 @@ fn ordinary_save_load_restores_randdata_but_keeps_the_active_native_stream() {
         }
         assert_eq!(session.phase(), RuntimePhase::WaitingInput);
         let vm = session.vm.as_ref().unwrap();
-        // Ordinary saves store RANDDATA as a variable. Loading does not INITRAND:
-        // the current native stream is retained; Ctrl-Z separately restores it.
+        // Reference saves retain the live native stream and only restore RANDDATA. Snake-owned
+        // saves restore the authenticated full SFMT snapshot together with ordinary variables.
         assert_eq!(randdata(vm), saved_randdata);
-        assert_eq!(vm.export_random_state().unwrap(), active);
+        assert_eq!(
+            vm.export_random_state().unwrap(),
+            if profile == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake {
+                saved_randdata.clone()
+            } else {
+                active.clone()
+            }
+        );
         assert_eq!(
             session.undo_checkpoint.as_ref().unwrap().random_state,
             active

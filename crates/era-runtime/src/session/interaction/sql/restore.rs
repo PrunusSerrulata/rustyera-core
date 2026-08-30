@@ -2,6 +2,7 @@
 
 #[allow(clippy::wildcard_imports)]
 use super::super::super::*;
+use sha2::{Digest as _, Sha256};
 
 impl RuntimeSession {
     pub(in crate::session) fn discard_sql_snapshot_candidates(
@@ -10,14 +11,18 @@ impl RuntimeSession {
         if let Some(pending) = self.pending_sql_snapshot_restore.take() {
             let provider = pending.candidate_sql.provider();
             let handles = pending.candidate_sql.cleanup_handles();
-            self.emit_sql_cleanup_for(provider, &handles)?;
+            for handle in handles {
+                self.retain_sql_cleanup(provider, handle);
+            }
         }
         if let Some(ready) = self.ready_sql_snapshot_restore.take() {
             let provider = ready.candidate_sql.provider();
             let handles = ready.candidate_sql.cleanup_handles();
-            self.emit_sql_cleanup_for(provider, &handles)?;
+            for handle in handles {
+                self.retain_sql_cleanup(provider, handle);
+            }
         }
-        Ok(())
+        self.flush_sql_cleanup_queue().map(|_| ())
     }
 
     pub(in crate::session) fn begin_sql_snapshot_restore(
@@ -41,8 +46,94 @@ impl RuntimeSession {
                 "SQL snapshot exceeds the fixed connection limit",
             );
         }
+        if let Err(message) = self.validate_exact_sql_restore(&connections) {
+            return self.reject(message_id, CommandErrorCode::InvalidValue, message);
+        }
+        self.install_exact_sql_restore(
+            PendingExactSqlRestoreTarget::RuntimeSnapshot { message_id, bytes },
+            connections,
+        )
+    }
+
+    pub(in crate::session) fn begin_owned_save_sql_restore(
+        &mut self,
+        slot: u32,
+        bytes: Vec<u8>,
+        load: PreparedOrdinaryLoad,
+        connections: Vec<crate::runtime_snapshot::SqlConnectionSnapshot>,
+    ) -> Result<(), RuntimeError> {
+        let host_request = load.host_request;
+        if self.pending_sql_snapshot_restore.is_some() {
+            return self.finish_owned_load_failure(
+                host_request,
+                "another exact SQL restore is already active",
+            );
+        }
+        if connections.len() > era_runtime_protocol::SqlLimitsV1::FIXED.maximum_connections as usize
+        {
+            return self.finish_owned_load_failure(
+                host_request,
+                "owned save exceeds the fixed SQL connection limit",
+            );
+        }
+        if let Err(message) = self.validate_exact_sql_restore(&connections) {
+            return self.finish_owned_load_failure(host_request, message);
+        }
+        if connections.is_empty() {
+            let mut candidate_sql = self.sql.clone();
+            candidate_sql.reset_for_project_boundary();
+            return self.complete_owned_sql_load(slot, &bytes, load, candidate_sql);
+        }
+        self.install_exact_sql_restore(
+            PendingExactSqlRestoreTarget::OwnedSave { slot, bytes, load },
+            connections,
+        )
+    }
+
+    pub(in crate::session) fn begin_owned_traditional_start_sql_restore(
+        &mut self,
+        message_id: u64,
+        load: PreparedTraditionalStart,
+        connections: Vec<crate::runtime_snapshot::SqlConnectionSnapshot>,
+    ) -> Result<(), RuntimeError> {
+        if self.pending_sql_snapshot_restore.is_some() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "another exact SQL restore is already active",
+            );
+        }
+        if connections.len() > era_runtime_protocol::SqlLimitsV1::FIXED.maximum_connections as usize
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::ResourceLimit,
+                "owned save exceeds the fixed SQL connection limit",
+            );
+        }
+        if let Err(message) = self.validate_exact_sql_restore(&connections) {
+            return self.reject(message_id, CommandErrorCode::InvalidValue, message);
+        }
+        if connections.is_empty() {
+            let mut candidate_sql = self.sql.clone();
+            candidate_sql.reset_for_project_boundary();
+            return self.complete_traditional_start(load, Some(candidate_sql));
+        }
+        self.install_exact_sql_restore(
+            PendingExactSqlRestoreTarget::OwnedTraditionalStart {
+                message_id,
+                load: Box::new(load),
+            },
+            connections,
+        )
+    }
+
+    pub(in crate::session) fn validate_exact_sql_restore(
+        &self,
+        connections: &[crate::runtime_snapshot::SqlConnectionSnapshot],
+    ) -> Result<(), &'static str> {
         let mut names = BTreeSet::new();
-        for snapshot in &connections {
+        for snapshot in connections {
             let valid_identity = snapshot.identity.sqlite_version
                 == era_runtime_protocol::SQL_SQLITE_VERSION
                 && snapshot.identity.format_version
@@ -52,36 +143,44 @@ impl RuntimeSession {
                     era_runtime_protocol::SqlDatabaseSourceV1::Memory => true,
                     era_runtime_protocol::SqlDatabaseSourceV1::ResourceSeed(seed) => {
                         seed.sha256.as_slice().len() == 32
-                            && self.project_snapshot.as_ref().is_some_and(|project| {
-                                project.resources.iter().any(|resource| {
-                                    resource.category == FileCategory::Resource
-                                        && resource
-                                            .relative_path
-                                            .eq_ignore_ascii_case(&seed.resource_id)
-                                })
-                            })
+                            && self
+                                .resource_seed_sha256(&seed.resource_id)
+                                .is_some_and(|actual| seed.sha256.as_slice() == actual.as_slice())
                     }
                 };
             let Some(key) = crate::sql::normalize_sql_name(&snapshot.logical_name) else {
-                return self.reject(
-                    message_id,
-                    CommandErrorCode::InvalidValue,
-                    "SQL snapshot contains an invalid connection name",
-                );
+                return Err("SQL state contains an invalid connection name");
             };
             if !valid_identity || !names.insert(key) {
-                return self.reject(
-                    message_id,
-                    CommandErrorCode::InvalidValue,
-                    "SQL snapshot contains an invalid or duplicate database identity",
-                );
+                return Err("SQL state contains an invalid or duplicate database identity");
             }
         }
+        Ok(())
+    }
+
+    fn resource_seed_sha256(&self, resource_id: &str) -> Option<[u8; 32]> {
+        let project = self.project_snapshot.as_ref()?;
+        let file = project.manifest.files.iter().find(|file| {
+            file.category == FileCategory::Resource
+                && file.relative_path.eq_ignore_ascii_case(resource_id)
+        })?;
+        let bytes = match &file.payload {
+            FilePayload::Utf8(value) => value.as_bytes(),
+            FilePayload::Bytes(value) => value.as_slice(),
+            FilePayload::IoError(_) | FilePayload::ExternalResource(_) => return None,
+        };
+        Some(Sha256::digest(bytes).into())
+    }
+
+    fn install_exact_sql_restore(
+        &mut self,
+        target: PendingExactSqlRestoreTarget,
+        connections: Vec<crate::runtime_snapshot::SqlConnectionSnapshot>,
+    ) -> Result<(), RuntimeError> {
         let mut candidate_sql = self.sql.clone();
         candidate_sql.reset_for_project_boundary();
         self.pending_sql_snapshot_restore = Some(PendingSqlSnapshotRestore {
-            message_id,
-            bytes,
+            target,
             candidate_sql,
             remaining: connections.into(),
         });
@@ -147,8 +246,22 @@ impl RuntimeSession {
         })?;
         let provider = pending.candidate_sql.provider();
         let handles = pending.candidate_sql.cleanup_handles();
-        self.emit_sql_cleanup_for(provider, &handles)?;
-        self.reject(pending.message_id, code, message)
+        for handle in handles {
+            self.retain_sql_cleanup(provider, handle);
+        }
+        let restored = match pending.target {
+            PendingExactSqlRestoreTarget::RuntimeSnapshot { message_id, .. }
+            | PendingExactSqlRestoreTarget::OwnedTraditionalStart { message_id, .. } => {
+                self.reject(message_id, code, message)
+            }
+            PendingExactSqlRestoreTarget::OwnedSave { load, .. } => {
+                self.finish_owned_load_failure(load.host_request, message)
+            }
+        };
+        if restored.is_ok() {
+            let _ = self.flush_sql_cleanup_queue();
+        }
+        restored
     }
 
     #[allow(clippy::too_many_lines)]
@@ -302,11 +415,26 @@ impl RuntimeSession {
             .pending_sql_snapshot_restore
             .take()
             .expect("restore candidate exists");
-        let digest = *blake3::hash(&pending.bytes).as_bytes();
-        self.ready_sql_snapshot_restore = Some(ReadySqlSnapshotRestore {
-            digest,
-            candidate_sql: pending.candidate_sql,
-        });
-        self.start_vm_snapshot(pending.message_id, &pending.bytes)
+        match pending.target {
+            PendingExactSqlRestoreTarget::RuntimeSnapshot { message_id, bytes } => {
+                let digest = *blake3::hash(&bytes).as_bytes();
+                self.ready_sql_snapshot_restore = Some(ReadySqlSnapshotRestore {
+                    digest,
+                    candidate_sql: pending.candidate_sql,
+                });
+                self.start_vm_snapshot(message_id, &bytes)
+            }
+            PendingExactSqlRestoreTarget::OwnedSave {
+                slot,
+                bytes,
+                mut load,
+            } => {
+                load.sql = None;
+                self.complete_owned_sql_load(slot, &bytes, load, pending.candidate_sql)
+            }
+            PendingExactSqlRestoreTarget::OwnedTraditionalStart { load, .. } => {
+                self.complete_traditional_start(*load, Some(pending.candidate_sql))
+            }
+        }
     }
 }

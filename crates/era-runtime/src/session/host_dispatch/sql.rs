@@ -13,6 +13,14 @@ impl RuntimeSession {
         vm: &mut RuntimeVm,
         request: &VmHostRequest,
     ) -> Result<(), RuntimeError> {
+        if self.candidate_clock.is_some() {
+            return complete_script_fault(
+                vm,
+                request,
+                erabasic_vm::ScriptFaultKind::Operation,
+                "SQL operations are not allowed while preparing an owned save",
+            );
+        }
         let name = request.import.import.name.to_ascii_uppercase();
         match name.as_str() {
             "SQL_CONNECT" => self.sql_connect(vm, request),
