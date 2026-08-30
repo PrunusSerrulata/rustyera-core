@@ -753,6 +753,43 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     add("BITMAP_CACHE_ENABLE", IntType, &[Integer], 1, false);
     add("SETANIMETIMER", IntType, &[Integer], 1, false);
     add("GETANIMETIMER", IntType, &[], 0, false);
+    for name in ["CBGCLEAR", "CBGCLEARBUTTON", "CBGREMOVEBMAP"] {
+        add(name, IntType, &[], 0, false);
+    }
+    add("CBGREMOVERANGE", IntType, &[Integer, Integer], 2, false);
+    add(
+        "CBGSETG",
+        IntType,
+        &[Integer, Integer, Integer, Integer],
+        4,
+        false,
+    );
+    add("CBGSETBMAPG", IntType, &[Integer], 1, false);
+    add(
+        "CBGSETSPRITE",
+        IntType,
+        &[
+            String,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            ReferenceAny,
+        ],
+        1,
+        false,
+    );
+    add(
+        "CBGSETBUTTONSPRITE",
+        IntType,
+        &[Integer, String, String, Integer, Integer, Integer, String],
+        6,
+        false,
+    );
+    add("EXISTSIMAGELAYER", IntType, &[Integer], 1, false);
+    add("GETLINEY", IntType, &[Integer], 1, false);
     add(
         "BITSET",
         IntType,
@@ -766,6 +803,10 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     result
         .get_mut("SPRITECREATEFROMFILE")
         .expect("file sprite signature was inserted")
+        .allow_omitted = true;
+    result
+        .get_mut("CBGSETSPRITE")
+        .expect("CBG signature was inserted")
         .allow_omitted = true;
     for name in ["BITSET", "BITGET", "BITTOGGLE", "BITINDEXOFFIRST"] {
         result

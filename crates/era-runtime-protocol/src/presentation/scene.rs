@@ -82,6 +82,15 @@ pub struct SceneInteractionV1 {
     pub value: ProtocolValue,
     #[n(2)]
     pub enabled: bool,
+    /// Optional source rendered while the pointer selects this interaction.
+    #[n(3)]
+    pub hover_source: Option<SceneSourceV1>,
+    /// Optional canvas whose pixel values select one of the sibling interactions.
+    #[n(4)]
+    pub hit_map: Option<SceneSourceV1>,
+    /// Optional hover text supplied by CBG button APIs.
+    #[n(5)]
+    pub title: Option<String>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

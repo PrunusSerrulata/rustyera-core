@@ -1,4 +1,4 @@
-; Runtime channel version: 43.0.
+; Runtime channel version: 44.0.
 ; RuntimeMessage is encoded as a minicbor enum [stable-tag, typed-body].
 runtime-message =
   [0, client-hello] /
@@ -238,7 +238,10 @@ scene-anchor-v1 = [0, []] / [1, [uint]]
 scene-scroll-policy-v1 = 0..1
 scene-offset-v1 = { 0: int, 1: int }
 scene-size-v1 = { 0: int, 1: int }
-scene-interaction-v1 = { 0: interaction-token, 1: any, 2: bool }
+scene-interaction-v1 = {
+  0: interaction-token, 1: any, 2: bool,
+  ? 3: scene-source-v1, ? 4: scene-source-v1, ? 5: tstr
+}
 scene-layer-v1 = {
   0: uint, 1: uint, 2: scene-source-v1, 3: int, 4: scene-anchor-v1,
   5: scene-offset-v1, 6: scene-size-v1, 7: 0..255,
@@ -255,6 +258,11 @@ scene-operation-v1 =
   [3, [uint]] /
   [4, [scene-state-v1]]
 scene-delta-v1 = { 0: uint, 1: uint, 2: [* scene-operation-v1] }
+projection-query-context = { 0: uint, 1: uint, 2: uint }
+get-line-geometry-v1-request = { 0: projection-query-context, 1: uint }
+get-line-geometry-v1-response = {
+  0: projection-query-context, 1: uint, 2: int, 3: int, 4: int
+}
 presentation-snapshot = {
   0: uint, 1: tstr, 2: presentation-history, 3: scene-state-v1, 4: [* any],
   5: any / null, 6: presentation-settings, 7: any, 8: resource-replay,
@@ -377,6 +385,7 @@ sql-response-v1 = {
 }
 ; Protocol 42 adds canonical scene v1 snapshots/deltas and pixel/column cell width intents.
 ; Protocol 43 adds digest-bound sprite frames and deterministic polygon canvas replay.
+; Protocol 44 adds CBG hover/hit-map scene interactions and revision-bound line geometry.
 ; It retains Protocol 41 safe SQL v1 payloads and ServiceKind 11 with the existing descriptor,
 ; digest, chunking, and cancellation flow. It retains Protocol 24 authoritative logs,
 ; Protocol 23 snapshot purposes, source-identity-first project loading,

@@ -1,5 +1,61 @@
 use super::*;
 
+fn graphics_diagnostics(
+    profile: erabasic_compat::CompatibilityProfileId,
+    statement: &str,
+) -> Vec<AnalyzerDiagnostic> {
+    analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "graphics-signature.erb",
+                &format!("@SYSTEM_TITLE\n{statement}\nRETURN\n"),
+            )],
+        },
+        &AnalyzerOptions {
+            compatibility: erabasic_compat::CompatibilityIdentity::for_profile(profile),
+            ..AnalyzerOptions::analysis_mode()
+        },
+        &ExtensionRegistry::default(),
+    )
+    .diagnostics
+}
+
+#[test]
+fn scene_graphics_omissions_and_cbg_sprite_arity_follow_the_selected_profile() {
+    use erabasic_compat::CompatibilityProfileId::{EmueraEm, EmueraSkiaSnake};
+
+    let original_short = graphics_diagnostics(EmueraEm, "RESULT = CBGSETSPRITE(\"A\")");
+    assert!(
+        original_short
+            .iter()
+            .any(|diagnostic| { diagnostic.code == AnalyzerDiagnosticCode::InvalidArgumentCount })
+    );
+    let original_exact = graphics_diagnostics(EmueraEm, "RESULT = CBGSETSPRITE(\"A\", 0, 0, 1)");
+    assert!(!original_exact.iter().any(|diagnostic| matches!(
+        diagnostic.code,
+        AnalyzerDiagnosticCode::InvalidArgumentCount | AnalyzerDiagnosticCode::InvalidArgument
+    )));
+    let snake_short = graphics_diagnostics(EmueraSkiaSnake, "RESULT = CBGSETSPRITE(\"A\")");
+    assert!(!snake_short.iter().any(|diagnostic| matches!(
+        diagnostic.code,
+        AnalyzerDiagnosticCode::InvalidArgumentCount | AnalyzerDiagnosticCode::InvalidArgument
+    )));
+    for statement in [
+        "SETIMAGELAYER , 1",
+        "SETIMAGELAYERL \"A\",",
+        "RESULT = CBGSETBUTTONSPRITE(1, , \"H\", 0, 0, 1)",
+    ] {
+        let diagnostics = graphics_diagnostics(EmueraSkiaSnake, statement);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.code == AnalyzerDiagnosticCode::InvalidArgument }),
+            "{statement}: {diagnostics:#?}"
+        );
+    }
+}
+
 #[test]
 fn snake_static_user_calls_report_excess_arguments_without_dropping_hir() {
     let text = "@SYSTEM_TITLE\nCALL TAKE, 1, SIDE()\nRESULT = METH(2, SIDE(), 9223372036854775807 + 1)\nRETURN\n@TAKE(ARG)\nRETURN\n@METH(ARG)\n#FUNCTION\nRETURNF ARG\n@SIDE\n#FUNCTION\nFLAG:0 += 1\nRETURNF 9\n";

@@ -778,6 +778,11 @@ fn analyze_instruction(
                 HirArgument::Omitted | HirArgument::Raw(_) => None,
             })
             .collect();
+        analyzer.check_graphics_call(
+            &key,
+            &expression_arguments,
+            SourceLocation::new(source.source.id, statement.span),
+        );
         if !matches!(
             signature.argument_style,
             erabasic_parser::ArgumentStyle::Formatted

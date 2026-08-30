@@ -66,6 +66,7 @@ pub fn builtin_callable_portability(name: &str) -> CallablePortability {
             | "ENV_HAS_CAPABILITY"
             | "CLIENTWIDTH"
             | "CLIENTHEIGHT"
+            | "GETLINEY"
             | "GETLINESTR"
             | "GETDISPLAYLINE"
             | "HTML_GETPRINTEDSTR"
@@ -182,7 +183,11 @@ pub(crate) fn builtin_instruction_available(
         | "TEXT_BGC_ON"
         | "TEXT_BGC_OFF"
         | "HTML_PRINTC"
-        | "HTML_PRINTLC" => identity.supports_snake_display_state(),
+        | "HTML_PRINTLC"
+        | "SETIMAGELAYER"
+        | "SETIMAGELAYERL"
+        | "CLEARIMAGELAYER"
+        | "CLEARIMAGELAYER_ALL" => identity.supports_snake_display_state(),
         _ => builtin_shared_available(name, identity),
     }
 }
@@ -198,7 +203,9 @@ pub(crate) fn builtin_function_available(
         | "G_POLYGON_DRAW"
         | "G_POLYGON_FILL"
         | "G_POLYGON_POINT_ADD"
-        | "G_POLYGON_POINT_CLEAR" => identity.supports_snake_display_state(),
+        | "G_POLYGON_POINT_CLEAR"
+        | "EXISTSIMAGELAYER"
+        | "GETLINEY" => identity.supports_snake_display_state(),
         _ => builtin_shared_available(name, identity),
     }
 }
@@ -336,6 +343,42 @@ mod tests {
             assert!(!builtin_instruction_available(name, &original));
             assert!(builtin_instruction_available(name, &snake));
         }
+        for name in [
+            "SETIMAGELAYER",
+            "SETIMAGELAYERL",
+            "CLEARIMAGELAYER",
+            "CLEARIMAGELAYER_ALL",
+        ] {
+            assert!(!builtin_instruction_available(name, &original));
+            assert!(builtin_instruction_available(name, &snake));
+        }
+        for name in ["EXISTSIMAGELAYER", "GETLINEY"] {
+            assert!(!builtin_function_available(name, &original));
+            assert!(builtin_function_available(name, &snake));
+        }
+        for name in [
+            "CBGCLEAR",
+            "CBGCLEARBUTTON",
+            "CBGREMOVEBMAP",
+            "CBGREMOVERANGE",
+            "CBGSETG",
+            "CBGSETBMAPG",
+            "CBGSETSPRITE",
+            "CBGSETBUTTONSPRITE",
+        ] {
+            assert!(builtin_function_available(name, &original));
+            assert!(builtin_function_available(name, &snake));
+        }
+
+        let catalog = Catalog::build(&ExtensionRegistry::default());
+        let set_image = catalog.instructions.get("SETIMAGELAYER").unwrap();
+        assert_eq!(set_image.minimum_arguments, 2);
+        assert_eq!(set_image.arguments.len(), 9);
+        assert!(set_image.allow_omitted);
+        let set_button = catalog.functions.get("CBGSETBUTTONSPRITE").unwrap();
+        assert_eq!(set_button.minimum_arguments, 6);
+        assert_eq!(set_button.arguments.len(), 7);
+        assert!(!set_button.allow_omitted);
     }
 
     #[test]

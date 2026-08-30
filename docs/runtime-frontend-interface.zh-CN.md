@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `43.0`。源码入口：
+> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `44.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | C ABI 3.9 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
-| Runtime 协议 43.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
+| Runtime 协议 44.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
 
 破坏性变更必须提升相应版本，并同步 Schema、C 头、文档与测试。数字消息标记已经是
@@ -610,6 +610,8 @@ scene 是所有背景与独立图层的唯一权威来源：
 - `SceneStateV1 {revision,layers}`；图层按 depth 降序、再按不可变 sequence 升序投影；
 - `SceneLayerV1` 固定携带 layer_id、sequence、source、depth、anchor、offset、size、
   opacity、可选 5×5 color_matrix、scroll_policy、interaction? 和 scene_revision；
+- `SceneInteractionV1` 除 token、value、enabled 外，可携带 hover_source、hit_map 与 title；
+  CBG 按钮映射只影响 runtime 已发出的交互能力，前端不得从 canvas 像素自行构造脚本值；
 - source 是 Resource、Sprite 或 Canvas，并携带其精确 `resource_revision`；
 - `SceneDeltaV1 {base_revision,new_revision,operations}` 只在 base 与本地 scene revision
   相等且 new 严格递增时原子应用；operation 固定为 UpsertLayer、RemoveLayer、
@@ -735,6 +737,7 @@ Error{code,message}。不要返回 JSON、平台对象或错误栈。
 | Network | `update_check` | URL → remote version/download URL |
 | OpenUrl | `open_url` | URL → opened bool |
 | PresentationQuery | `get_display_line` | context + index → context + string |
+| PresentationQuery | `get_line_geometry_v1` | context + stable line_id → context + line_id + top/height/viewport_height |
 | PresentationQuery | `html_get_printed_str` | context + index → context + string |
 | PresentationQuery | `html_string_len` | context + markup + argument → context + integer |
 | PresentationQuery | `html_substring` | 同上 → context + head/tail |
@@ -748,6 +751,10 @@ Error{code,message}。不要返回 JSON、平台对象或错误栈。
 | Extension | 动态声明的 operation | `ExtensionInvocation` → `ExtensionResult` |
 
 presentation query 的 `context` 是 presentation/environment/projection-space 三个 revision；
+`get_line_geometry_v1@1.0` 只接受 runtime 已解析的稳定 line_id。`GETLINEY` 的脚本 display
+index 不跨边界，runtime 验证响应的三个 revision 与 line_id 后计算
+`top + height - viewport_height`；任一 revision 过期、行消失、负尺寸或算术溢出都令查询失败，
+不得写回 VM。
 响应必须原样带回，runtime 用它拒绝已过时的物理观察。普通 service 错误通常成为终止
 `ServiceFailure`；少数宿主路径有源码明确的兼容降级，因此前端仍应返回真实 Error，
 不能自行伪造成功。

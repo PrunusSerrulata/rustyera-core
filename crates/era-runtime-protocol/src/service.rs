@@ -261,6 +261,8 @@ pub const ENCODE_CANVAS_PNG_OPERATION_VERSION: ProtocolVersion = ProtocolVersion
 pub const SERIALIZE_PHYSICAL_HISTORY_OPERATION: &str = "serialize_physical_history";
 pub const SERIALIZE_PHYSICAL_HISTORY_OPERATION_VERSION: ProtocolVersion =
     ProtocolVersion::new(1, 0);
+pub const GET_LINE_GEOMETRY_OPERATION: &str = "get_line_geometry_v1";
+pub const GET_LINE_GEOMETRY_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
 
 /// Causal identity shared by every query of realized frontend presentation.
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -290,6 +292,32 @@ pub struct ProjectionStringResponse {
     pub context: ProjectionQueryContext,
     #[n(1)]
     pub value: String,
+}
+
+/// Resolve one runtime-owned line identity in the current realized projection.
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct GetLineGeometryV1Request {
+    #[n(0)]
+    pub context: ProjectionQueryContext,
+    #[n(1)]
+    pub line_id: u64,
+}
+
+/// Geometry needed to reproduce snake `GETLINEY` without exposing a frontend index.
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct GetLineGeometryV1Response {
+    #[n(0)]
+    pub context: ProjectionQueryContext,
+    #[n(1)]
+    pub line_id: u64,
+    #[n(2)]
+    pub top: ProjectionLength,
+    #[n(3)]
+    pub height: ProjectionLength,
+    #[n(4)]
+    pub viewport_height: ProjectionLength,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

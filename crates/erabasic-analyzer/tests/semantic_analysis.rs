@@ -1,6 +1,7 @@
 use erabasic_analyzer::{
-    AnalysisInput, AnalyzerDiagnosticCode, AnalyzerOptions, ArgumentConstraint, CallableSignature,
-    ExtensionRegistry, InstructionSignature, ProjectSource, SourcePayload, analyze_project,
+    AnalysisInput, AnalyzerDiagnostic, AnalyzerDiagnosticCode, AnalyzerOptions, ArgumentConstraint,
+    CallableSignature, ExtensionRegistry, InstructionSignature, ProjectSource, SourcePayload,
+    analyze_project,
 };
 use erabasic_csv::{
     CsvLoadOptions, FilePayload as CsvFilePayload, FrontendFile, ProjectFiles, load_project,

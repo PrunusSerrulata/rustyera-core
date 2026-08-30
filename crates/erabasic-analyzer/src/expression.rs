@@ -454,6 +454,56 @@ impl ExpressionAnalyzer<'_> {
                 "SPRITECREATEFROMFILE name and path may not be omitted",
             );
         }
+        if matches!(name, "SETIMAGELAYER" | "SETIMAGELAYERL")
+            && values.iter().take(2).any(Option::is_none)
+        {
+            self.diagnostic(
+                AnalyzerDiagnosticCode::InvalidArgument,
+                location,
+                format!("{name} sprite name and depth may not be omitted"),
+            );
+        }
+        if name == "CBGSETSPRITE" {
+            let snake = self.options.compatibility.supports_snake_display_state();
+            let valid_arity = if snake {
+                (1..=8).contains(&values.len())
+            } else {
+                values.len() == 4
+            };
+            let invalid_omission = if snake {
+                values.first().is_none_or(Option::is_none)
+            } else {
+                values.iter().any(Option::is_none)
+            };
+            if !valid_arity {
+                self.diagnostic(
+                    AnalyzerDiagnosticCode::InvalidArgumentCount,
+                    location,
+                    if snake {
+                        format!(
+                            "CBGSETSPRITE expects 1 to 8 arguments, found {}",
+                            values.len()
+                        )
+                    } else {
+                        format!(
+                            "CBGSETSPRITE expects exactly 4 arguments, found {}",
+                            values.len()
+                        )
+                    },
+                );
+            }
+            if invalid_omission {
+                self.diagnostic(
+                    AnalyzerDiagnosticCode::InvalidArgument,
+                    location,
+                    if snake {
+                        "CBGSETSPRITE sprite name may not be omitted"
+                    } else {
+                        "CBGSETSPRITE arguments may not be omitted in the original profile"
+                    },
+                );
+            }
+        }
         let arity = values.len();
         if name != "SPRITECREATE" || !(2..=10).contains(&arity) {
             return;

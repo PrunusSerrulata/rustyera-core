@@ -11,16 +11,18 @@ use era_runtime_protocol::{
     DiagnosticNotification, DisplayRun, EffectAcknowledgement, EffectBatch, EffectEvent,
     EffectKind, EffectOutcome, EffectOutcomeStatus, ExitReason, ExitRequested,
     FinalizeConfigurationUpdate, FrontendInput, FullProjectManifest, GET_KEY_STATE_OPERATION,
-    GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse, HtmlColorMatrix,
-    InputIntent, InputUndoRequest, InputUndoState, InteractionToken, KeyMacroCommand,
-    POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION, PointerStateRequest,
-    PointerStateResponse, PrepareConfigurationUpdate, PresentationDelta, PresentationOperation,
-    PrimitiveInput, ProjectConfigurationEntry, ProjectConfigurationSnapshot, ProjectLoadRequest,
-    ProjectManifest, ProjectionLength, ProjectionObservation, ProjectionQueryContext,
-    ProjectionSize, ProjectionTransform, ProtocolDiagnostic, RUNTIME_PROTOCOL_VERSION, RedrawState,
-    ResourceReplay, ReturnToTitleRequest, RuntimeFault, RuntimeLimits, RuntimeLog, RuntimeLogLevel,
-    RuntimeMessage, RuntimeVmFault, RuntimeVmFaultCategory, RuntimeVmFaultCode,
-    RuntimeVmFaultDetail, SAMPLE_CANVAS_PIXEL_OPERATION, SceneAnchorV1, SceneDeltaV1, SceneLayerV1,
+    GET_KEY_STATE_OPERATION_VERSION, GET_LINE_GEOMETRY_OPERATION,
+    GET_LINE_GEOMETRY_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse,
+    GetLineGeometryV1Request, GetLineGeometryV1Response, HtmlColorMatrix, InputIntent,
+    InputUndoRequest, InputUndoState, InteractionToken, KeyMacroCommand, POINTER_STATE_OPERATION,
+    POINTER_STATE_OPERATION_VERSION, PointerStateRequest, PointerStateResponse,
+    PrepareConfigurationUpdate, PresentationDelta, PresentationOperation, PrimitiveInput,
+    ProjectConfigurationEntry, ProjectConfigurationSnapshot, ProjectLoadRequest, ProjectManifest,
+    ProjectionLength, ProjectionObservation, ProjectionQueryContext, ProjectionSize,
+    ProjectionTransform, ProtocolDiagnostic, RUNTIME_PROTOCOL_VERSION, RedrawState, ResourceReplay,
+    ReturnToTitleRequest, RuntimeFault, RuntimeLimits, RuntimeLog, RuntimeLogLevel, RuntimeMessage,
+    RuntimeVmFault, RuntimeVmFaultCategory, RuntimeVmFaultCode, RuntimeVmFaultDetail,
+    SAMPLE_CANVAS_PIXEL_OPERATION, SceneAnchorV1, SceneDeltaV1, SceneInteractionV1, SceneLayerV1,
     SceneOffsetV1, SceneOperationV1, SceneScrollPolicyV1, SceneSizeV1, SceneSourceV1, SceneStateV1,
     SeparatorRole, ServiceKind, ServiceRequest, SnapshotExportPurpose, SpriteFrameReplay,
     SpriteReplay, StateExportCancel, StateExportChunkRequest, StateExportKind, StateExportRequest,
@@ -133,7 +135,7 @@ fn protocol_42_scene_and_cell_intents_have_stable_json_cbor_and_cddl() {
     ] {
         assert!(schema.contains(definition));
     }
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
 }
 
 #[test]
@@ -297,6 +299,86 @@ fn projection_queries_use_typed_revision_bound_payloads() {
 }
 
 #[test]
+fn protocol_44_scene_interactions_and_line_geometry_have_stable_contracts() {
+    let interaction = SceneInteractionV1 {
+        token: InteractionToken { epoch: 7, id: 9 },
+        value: runtime_protocol::ProtocolValue::Integer(42),
+        enabled: true,
+        hover_source: Some(SceneSourceV1::Sprite {
+            sprite_name: "H".into(),
+            resource_revision: 5,
+        }),
+        hit_map: Some(SceneSourceV1::Canvas {
+            canvas_id: 4,
+            resource_revision: 6,
+        }),
+        title: Some("t".into()),
+    };
+    assert_eq!(
+        serde_json::to_value(&interaction).unwrap(),
+        serde_json::json!({
+            "token":{"epoch":7,"id":9},
+            "value":{"type":"integer","value":42},
+            "enabled":true,
+            "hover_source":{"type":"sprite","sprite_name":"H","resource_revision":5},
+            "hit_map":{"type":"canvas","canvas_id":4,"resource_revision":6},
+            "title":"t"
+        })
+    );
+    assert_eq!(
+        encode_canonical(&interaction).unwrap(),
+        vec![
+            0xa6, 0x00, 0xa2, 0x00, 0x07, 0x01, 0x09, 0x01, 0x82, 0x00, 0x81, 0x18, 0x2a, 0x02,
+            0xf5, 0x03, 0x82, 0x01, 0x82, 0x61, b'H', 0x05, 0x04, 0x82, 0x02, 0x82, 0x04, 0x06,
+            0x05, 0x61, b't',
+        ]
+    );
+
+    let context = ProjectionQueryContext {
+        presentation_revision: 1,
+        environment_revision: 2,
+        projection_space_revision: 3,
+    };
+    let request = GetLineGeometryV1Request {
+        context,
+        line_id: 9,
+    };
+    assert_eq!(
+        encode_canonical(&request).unwrap(),
+        vec![
+            0xa2, 0x00, 0xa3, 0x00, 0x01, 0x01, 0x02, 0x02, 0x03, 0x01, 0x09
+        ]
+    );
+    let response = GetLineGeometryV1Response {
+        context,
+        line_id: 9,
+        top: ProjectionLength(-4),
+        height: ProjectionLength(5),
+        viewport_height: ProjectionLength(6),
+    };
+    assert_eq!(
+        encode_canonical(&response).unwrap(),
+        vec![
+            0xa5, 0x00, 0xa3, 0x00, 0x01, 0x01, 0x02, 0x02, 0x03, 0x01, 0x09, 0x02, 0x23, 0x03,
+            0x05, 0x04, 0x06,
+        ]
+    );
+    assert_eq!(
+        decode_canonical::<GetLineGeometryV1Response>(&encode_canonical(&response).unwrap()),
+        Ok(response)
+    );
+    assert_eq!(GET_LINE_GEOMETRY_OPERATION, "get_line_geometry_v1");
+    assert_eq!(
+        GET_LINE_GEOMETRY_OPERATION_VERSION,
+        ProtocolVersion::new(1, 0)
+    );
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
+    let schema = include_str!("../schema/runtime.cddl");
+    assert!(schema.contains("get-line-geometry-v1-request"));
+    assert!(schema.contains("get-line-geometry-v1-response"));
+}
+
+#[test]
 fn runtime_payload_and_envelope_tags_agree() {
     let message = RuntimeMessage::AdvanceTime(AdvanceTime {
         monotonic_time_ns: 42,
@@ -385,7 +467,7 @@ fn protocol_40_round_trips_input_environment_wait_and_ordered_device_contracts()
         .unwrap(),
         pump
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
     let schema = include_str!("../schema/runtime.cddl");
     for definition in [
         "environment-capability",
@@ -416,7 +498,7 @@ fn protocol_24_carries_backend_authoritative_logs() {
         RuntimeMessage::decode_payload(98, &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
 }
 
 #[test]
@@ -449,7 +531,7 @@ fn protocol_38_carries_correlated_secondary_vm_faults() {
         RuntimeMessage::decode_payload(message.tag(), &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
     let schema = include_str!("../schema/runtime.cddl");
     assert!(schema.contains("runtime-vm-fault-detail"));
     assert_eq!(
@@ -484,7 +566,7 @@ fn protocol_34_carries_diagnostic_notification_guidance() {
         serde_json::to_value(&message).unwrap()["value"]["notification"],
         "log_only"
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
 }
 
 #[test]
@@ -507,7 +589,7 @@ fn protocol_35_carries_the_encoded_journal_byte_limit_at_map_key_six() {
     assert!(include_str!("../schema/runtime.cddl").contains(
         "runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint, 6: uint }"
     ));
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
 }
 
 #[test]
@@ -653,7 +735,7 @@ fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
 }
 
 #[test]
@@ -662,7 +744,7 @@ fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -828,7 +910,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -867,7 +949,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
     assert_eq!(StateExportKind::InputReplay as u8, 4);
 }
 
@@ -1315,7 +1397,7 @@ fn protocol_41_carries_safe_sql_v1_without_native_paths_or_handles() {
     );
     assert_eq!(SqlLimitsV1::FIXED.maximum_connections, 8);
     assert_eq!(SqlLimitsV1::FIXED.execution_budget_ms, 5_000);
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(43, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(44, 0));
     let schema = include_str!("../schema/runtime.cddl");
     assert!(schema.contains("sql-request-v1"));
     assert!(schema.contains("sql-response-v1"));

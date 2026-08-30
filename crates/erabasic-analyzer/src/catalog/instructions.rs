@@ -447,6 +447,43 @@ pub(super) fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     add("SETFONT", Expressions, &[String], 0, false, true);
     add("SETANIMETIMER", Expressions, &[Integer], 1, false, false);
     add(
+        "SETIMAGELAYER",
+        Expressions,
+        &[
+            String,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            ReferenceAny,
+            Integer,
+        ],
+        2,
+        false,
+        true,
+    );
+    add(
+        "SETIMAGELAYERL",
+        Expressions,
+        &[
+            String,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            ReferenceAny,
+        ],
+        2,
+        false,
+        true,
+    );
+    add("CLEARIMAGELAYER", Expressions, &[Integer], 1, false, false);
+    add("CLEARIMAGELAYER_ALL", NoArgs, &[], 0, false, false);
+    add(
         "BITMAP_CACHE_ENABLE",
         Expressions,
         &[Integer],
