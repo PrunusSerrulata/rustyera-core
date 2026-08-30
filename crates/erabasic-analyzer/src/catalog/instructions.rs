@@ -30,6 +30,9 @@ pub(super) fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         false,
         false,
     );
+    for name in ["HTML_PRINTC", "HTML_PRINTLC"] {
+        add(name, Expressions, &[String, Integer], 1, false, true);
+    }
 
     for name in [
         "ELSE",
@@ -514,6 +517,8 @@ pub(super) fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         "FORCE_QUIT_AND_RESTART",
         "GETTIME",
         "HTML_PRINT",
+        "HTML_PRINTC",
+        "HTML_PRINTLC",
         "HTML_PRINT_ISLAND",
         "HTML_PRINT_ISLAND_CLEAR",
         "HTML_TAGSPLIT",

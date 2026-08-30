@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `41.0`。源码入口：
+> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `42.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | C ABI 3.9 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
-| Runtime 协议 41.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
+| Runtime 协议 42.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
 
 破坏性变更必须提升相应版本，并同步 Schema、C 头、文档与测试。数字消息标记已经是
@@ -552,10 +552,10 @@ optional`。调用通过 `ServiceKind::Extension`；payload 是
 `delta.base_revision == local_revision` 时应用 `PresentationDelta`。不相等时停止应用并
 请求 resync，不能“尽力合并”。
 
-`PresentationSnapshot` 字段：`revision, title, history, backgrounds, audio, input_wait?,
+`PresentationSnapshot` 字段：`revision, title, history, scene, audio, input_wait?,
 settings, tooltip, resources, html_island, redraw`。`PresentationDelta` 字段：
 `base_revision, new_revision, operations[]`；operation 为 AppendLine、DeleteLines、
-Clear、SetTitle、SetBackgrounds、SetAudio、SetInputWait、ReplaceLine、
+Clear、SetTitle、ApplySceneDelta、SetAudio、SetInputWait、ReplaceLine、
 SetSettings、SetTooltip、SetResources、SetHtmlIsland、SetRedraw、
 SetButtonGeneration、TrimLines。
 
@@ -564,7 +564,7 @@ SetButtonGeneration、TrimLines。
 | 类型 | 字段/变体与单位 |
 | --- | --- |
 | `Color` | RGBA `u8`；派生默认值全 0（透明黑） |
-| `TextStyle` | foreground、background?、bold、italic、underline、strikeout、font_family?、font_millipoints（1/1000 point） |
+| `TextStyle` | foreground、background?、bold、italic、underline、strikeout、font_family?、font_millipixels（1/1000 logical pixel） |
 | `LogicalLength(i64)` | 1 个脚本逻辑单位 = 1000 milliunits；不是像素 |
 | `PresentationLength` | `Logical` 或 `FontHeightHundredths` |
 | `LogicalRect` | x/y/width/height；均为 LogicalLength |
@@ -585,7 +585,9 @@ SetButtonGeneration、TrimLines。
 - `Button{runs,token,title?,hover_style?,value,generation,enabled}`；disabled 不得提交；
 - `HtmlDocument{document}`；
 - `Image{placement,alt_text?}`、`Shape{shape}`；
-- `ColumnCell{content,alignment,preferred_columns}`；
+- `ColumnCell{content,alignment,width}`；`width` 是 `ProjectColumns(u32)` 或
+  `LogicalPixels(u32)`。前者由 runtime 按项目列宽投影，后者保留 HTML_PRINTC/LC 的
+  逻辑像素宽度，前端不得把它换算回列数；两者均不截断超宽内容；
 - `Separator{pattern,role=Rule}`；
 - `Space{width}`。
 
@@ -603,10 +605,23 @@ SetButtonGeneration、TrimPhysical。`TrimPhysical`/`TrimLines` 只裁掉最旧�
 重绘已保留和虚拟化历史行。Browser/Tauri 保留 RGBA，TUI 将其按 8-bit sRGB 通道合成到
 不透明 console 背景。
 
+scene 是所有背景与独立图层的唯一权威来源：
+
+- `SceneStateV1 {revision,layers}`；图层按 depth 降序、再按不可变 sequence 升序投影；
+- `SceneLayerV1` 固定携带 layer_id、sequence、source、depth、anchor、offset、size、
+  opacity、可选 5×5 color_matrix、scroll_policy、interaction? 和 scene_revision；
+- source 是 Resource、Sprite 或 Canvas，并携带其精确 `resource_revision`；
+- `SceneDeltaV1 {base_revision,new_revision,operations}` 只在 base 与本地 scene revision
+  相等且 new 严格递增时原子应用；operation 固定为 UpsertLayer、RemoveLayer、
+  ClearDepth、ClearAnchoredLine、ReplaceScene。失败不得留下部分修改；
+- Upsert 不得改变已有 layer 的 sequence，也不得回退 scene_revision；空 operation 列表
+  仍是有效 revision 变更。断线重放与实时 delta 必须产生相同 SceneStateV1。
+
 资源重放字段：
 
 - `ResourceReplay {sprites, canvases, animation_timer_ms}`；
-- `SpriteReplay {name,size,position,frames,canvas_id?,canvas_rectangle?}`；
+- `SpriteReplay {name,size,position,frames,canvas_id?,canvas_rectangle?,revision}`；scene 中的
+  Sprite source 必须绑定该 revision，不得只按同名资源取“最新值”；
 - `SpriteFrameReplay {resource_id,source_rectangle[4],offset[2],delay_ms,
   destination_size?,canvas_id?}`；
 - `CanvasReplay {canvas_id,size,commands,revision}`；
@@ -636,6 +651,14 @@ Shape、Division 或 Break；其公开字段逐一见
 [`HtmlElementSemantic`](../crates/erabasic-html/src/markup.rs)。`HtmlLength` 是 Pixels
 或 FontHeightHundredths；box model 的 border/radius/margin/padding 和 border_colors
 按四边数组传递。前端只投影 semantic，不应通过原始 attribute 猜出另一套含义。
+
+蛇版 profile 额外把 font 的 size/valign/render/edging/hinting、img 的 xpos/ypos/
+width/height/display/cm，以及 div 的 position/size/depth/display/border/padding/radius
+规范化为上述 typed semantic。颜色矩阵在线上只允许 runtime 已解析的 25 个 1/256
+定点整数；VM 变量名和索引不得发送给前端。原版 profile 对这些蛇版专属属性在打印与
+HTML 查询中都先拒绝，provider 不会看到它们。HTML_PRINTC 右对齐、HTML_PRINTLC
+左对齐；显式正宽度和默认 `PrintCLength × FontSize / 2` 都以 LogicalPixels 保留，空串
+不产生 cell，超宽内容不截断并按当前行剩余宽度决定换行。
 
 ### 8.3 投影反馈
 

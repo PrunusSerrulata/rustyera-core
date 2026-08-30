@@ -292,7 +292,7 @@ pub enum DisplayRun {
         #[n(1)]
         alignment: CellAlignment,
         #[n(2)]
-        preferred_columns: u32,
+        width: CellWidthIntent,
     },
     /// A width-independent DRAWLINE intent.
     #[n(6)]

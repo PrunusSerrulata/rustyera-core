@@ -42,8 +42,10 @@ pub use erabasic_compat::{
     CompatibilityIdentity, CompatibilityProfileId, CompatibilityServiceContract,
 };
 pub use erabasic_html::{
-    HtmlAlignment, HtmlAttribute, HtmlBoxModel, HtmlDocument, HtmlElementKind, HtmlElementSemantic,
-    HtmlInteraction, HtmlLength, HtmlNode, parse_document,
+    HtmlAlignment, HtmlAttribute, HtmlBoxModel, HtmlColorMatrix, HtmlDisplayMode, HtmlDocument,
+    HtmlElementKind, HtmlElementSemantic, HtmlFontEdging, HtmlFontHinting, HtmlInteraction,
+    HtmlLength, HtmlNode, HtmlTextRenderIntent, HtmlTextRenderer, HtmlVerticalAlignment,
+    parse_document,
 };
 pub use extension::{
     ExtensionArgument, ExtensionArgumentStyle, ExtensionCallableKind, ExtensionDeclaration,

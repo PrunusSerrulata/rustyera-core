@@ -1,9 +1,10 @@
 #[cfg(test)]
 use era_runtime_protocol::PresentationHistoryOperation;
 use era_runtime_protocol::{
-    CellAlignment, Color, DisplayLine, DisplayRun, InteractionToken, LineAlignment, LogicalLength,
-    MediaPlacement, PresentationLength, ProtocolValue, RationalOpacity, SeparatorRole, Shape,
-    SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle,
+    CellAlignment, CellWidthIntent, Color, DisplayLine, DisplayRun, InteractionToken,
+    LineAlignment, LogicalLength, MediaPlacement, PresentationLength, ProtocolValue,
+    RationalOpacity, SeparatorRole, Shape, SystemTextArgument, SystemTextKey, SystemTextRef,
+    TextStyle,
 };
 use erabasic_vm::{CharacterWidthMode, VmValue};
 use std::collections::{BTreeMap, BTreeSet};
@@ -338,7 +339,29 @@ impl PresentationModel {
             content,
             alignment,
             // The configured PrintCLength is layout intent, not padding.
-            preferred_columns: self.print_c_length,
+            width: CellWidthIntent::ProjectColumns(self.print_c_length),
+        });
+        self.bump();
+    }
+
+    pub(crate) fn append_html_column_cell(
+        &mut self,
+        document: erabasic_html::HtmlDocument,
+        alignment: CellAlignment,
+        requested_pixels: i64,
+    ) {
+        let default_pixels = u64::from(self.print_c_length)
+            .saturating_mul(u64::from(self.default_style.font_millipixels))
+            / 2_000;
+        let pixels = if requested_pixels > 0 {
+            u32::try_from(requested_pixels).unwrap_or(u32::MAX)
+        } else {
+            u32::try_from(default_pixels).unwrap_or(u32::MAX)
+        };
+        self.pending_runs.push(DisplayRun::ColumnCell {
+            content: vec![DisplayRun::HtmlDocument { document }],
+            alignment,
+            width: CellWidthIntent::LogicalPixels(pixels),
         });
         self.bump();
     }
@@ -809,7 +832,7 @@ impl PresentationModel {
             self.pending_runs.push(DisplayRun::ColumnCell {
                 content: vec![button],
                 alignment,
-                preferred_columns: self.print_c_length,
+                width: CellWidthIntent::ProjectColumns(self.print_c_length),
             });
         } else {
             self.pending_runs.push(button);

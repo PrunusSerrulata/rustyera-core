@@ -5,25 +5,27 @@ use era_protocol::{
 use era_runtime_protocol as runtime_protocol;
 use era_runtime_protocol::{
     AdvanceTime, AudioEffect, AudioEffectAction, CanvasPixelRequest, CanvasReplay,
-    CanvasReplayCommand, CanvasSize, ClientPreferenceLayers, Color, ConfigurationApplication,
-    ConfigurationChange, ConfigurationClientProfile, ConfigurationUpdateCommitted,
-    ConfigurationUpdateOutcome, ConfigurationValueKind, DiagnosticNotification, DisplayRun,
-    EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind, EffectOutcome,
-    EffectOutcomeStatus, ExitReason, ExitRequested, FinalizeConfigurationUpdate, FrontendInput,
-    FullProjectManifest, GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION,
-    GetKeyStateRequest, GetKeyStateResponse, InputIntent, InputUndoRequest, InputUndoState,
-    InteractionToken, KeyMacroCommand, POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION,
-    PointerStateRequest, PointerStateResponse, PrepareConfigurationUpdate, PresentationDelta,
-    PresentationOperation, PrimitiveInput, ProjectConfigurationEntry, ProjectConfigurationSnapshot,
-    ProjectLoadRequest, ProjectManifest, ProjectionLength, ProjectionObservation,
-    ProjectionQueryContext, ProjectionSize, ProjectionTransform, ProtocolDiagnostic,
-    RUNTIME_PROTOCOL_VERSION, RedrawState, ResourceReplay, ReturnToTitleRequest, RuntimeFault,
-    RuntimeLimits, RuntimeLog, RuntimeLogLevel, RuntimeMessage, RuntimeVmFault,
-    RuntimeVmFaultCategory, RuntimeVmFaultCode, RuntimeVmFaultDetail,
-    SAMPLE_CANVAS_PIXEL_OPERATION, SeparatorRole, ServiceKind, ServiceRequest,
-    SnapshotExportPurpose, StateExportCancel, StateExportChunkRequest, StateExportKind,
-    StateExportRequest, StateImportBegin, StateImportCommit, StorageNamespace, StorageOperation,
-    StorageRequest, TextExtentRequest, TextStyle, parse_document, validate_relative_path,
+    CanvasReplayCommand, CanvasSize, CellWidthIntent, ClientPreferenceLayers, Color,
+    ConfigurationApplication, ConfigurationChange, ConfigurationClientProfile,
+    ConfigurationUpdateCommitted, ConfigurationUpdateOutcome, ConfigurationValueKind,
+    DiagnosticNotification, DisplayRun, EffectAcknowledgement, EffectBatch, EffectEvent,
+    EffectKind, EffectOutcome, EffectOutcomeStatus, ExitReason, ExitRequested,
+    FinalizeConfigurationUpdate, FrontendInput, FullProjectManifest, GET_KEY_STATE_OPERATION,
+    GET_KEY_STATE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse, HtmlColorMatrix,
+    InputIntent, InputUndoRequest, InputUndoState, InteractionToken, KeyMacroCommand,
+    POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION, PointerStateRequest,
+    PointerStateResponse, PrepareConfigurationUpdate, PresentationDelta, PresentationOperation,
+    PrimitiveInput, ProjectConfigurationEntry, ProjectConfigurationSnapshot, ProjectLoadRequest,
+    ProjectManifest, ProjectionLength, ProjectionObservation, ProjectionQueryContext,
+    ProjectionSize, ProjectionTransform, ProtocolDiagnostic, RUNTIME_PROTOCOL_VERSION, RedrawState,
+    ResourceReplay, ReturnToTitleRequest, RuntimeFault, RuntimeLimits, RuntimeLog, RuntimeLogLevel,
+    RuntimeMessage, RuntimeVmFault, RuntimeVmFaultCategory, RuntimeVmFaultCode,
+    RuntimeVmFaultDetail, SAMPLE_CANVAS_PIXEL_OPERATION, SceneAnchorV1, SceneDeltaV1, SceneLayerV1,
+    SceneOffsetV1, SceneOperationV1, SceneScrollPolicyV1, SceneSizeV1, SceneSourceV1, SceneStateV1,
+    SeparatorRole, ServiceKind, ServiceRequest, SnapshotExportPurpose, StateExportCancel,
+    StateExportChunkRequest, StateExportKind, StateExportRequest, StateImportBegin,
+    StateImportCommit, StorageNamespace, StorageOperation, StorageRequest, TextExtentRequest,
+    TextStyle, parse_document, validate_relative_path,
 };
 
 #[test]
@@ -33,6 +35,176 @@ fn protocol_21_carries_parsed_html_instead_of_opaque_markup() {
     };
     let bytes = encode_canonical(&run).unwrap();
     assert_eq!(decode_canonical::<DisplayRun>(&bytes), Ok(run));
+}
+
+fn scene_golden_layer() -> SceneLayerV1 {
+    SceneLayerV1 {
+        layer_id: 1,
+        sequence: 2,
+        source: SceneSourceV1::Resource {
+            resource_id: "R".into(),
+            resource_revision: 3,
+        },
+        depth: 0,
+        anchor: SceneAnchorV1::Viewport,
+        offset: SceneOffsetV1 {
+            x: runtime_protocol::LogicalLength(0),
+            y: runtime_protocol::LogicalLength(0),
+        },
+        size: SceneSizeV1 {
+            width: runtime_protocol::LogicalLength(0),
+            height: runtime_protocol::LogicalLength(0),
+        },
+        opacity: 255,
+        color_matrix: None,
+        scroll_policy: SceneScrollPolicyV1::Fixed,
+        interaction: None,
+        scene_revision: 4,
+    }
+}
+
+#[test]
+fn protocol_42_scene_and_cell_intents_have_stable_json_cbor_and_cddl() {
+    let empty_scene = SceneStateV1 {
+        revision: 3,
+        layers: Vec::new(),
+    };
+    assert_eq!(
+        serde_json::to_value(&empty_scene).unwrap(),
+        serde_json::json!({"revision": 3, "layers": []})
+    );
+    assert_eq!(
+        encode_canonical(&empty_scene).unwrap(),
+        vec![0xa2, 0, 3, 1, 0x80]
+    );
+
+    let layer = scene_golden_layer();
+    let mut replayed = empty_scene;
+    replayed
+        .apply_delta(&SceneDeltaV1 {
+            base_revision: 3,
+            new_revision: 4,
+            operations: vec![SceneOperationV1::UpsertLayer {
+                layer: Box::new(layer.clone()),
+            }],
+        })
+        .unwrap();
+    assert_eq!(replayed.layers, [layer]);
+    assert_eq!(
+        decode_canonical::<SceneStateV1>(&encode_canonical(&replayed).unwrap()),
+        Ok(replayed.clone())
+    );
+
+    let project_width = CellWidthIntent::ProjectColumns(12);
+    assert_eq!(
+        serde_json::to_value(project_width).unwrap(),
+        serde_json::json!({"type": "project_columns", "value": 12})
+    );
+    assert_eq!(
+        encode_canonical(&project_width).unwrap(),
+        vec![0x82, 0, 0x81, 12]
+    );
+
+    let width = CellWidthIntent::LogicalPixels(40);
+    assert_eq!(
+        serde_json::to_value(width).unwrap(),
+        serde_json::json!({"type": "logical_pixels", "value": 40})
+    );
+    assert_eq!(
+        encode_canonical(&width).unwrap(),
+        vec![0x82, 1, 0x81, 0x18, 40]
+    );
+
+    let matrix = HtmlColorMatrix::Fixed(Box::new([256; 25]));
+    assert_eq!(
+        decode_canonical::<HtmlColorMatrix>(&encode_canonical(&matrix).unwrap()),
+        Ok(matrix)
+    );
+
+    let schema = include_str!("../schema/runtime.cddl");
+    for definition in [
+        "cell-width-intent = [0, [uint]] / [1, [uint]]",
+        "html-color-matrix",
+        "5: [* display-run]",
+        "7: 0..255",
+        "6: uint",
+        "scene-state-v1",
+        "scene-delta-v1",
+    ] {
+        assert!(schema.contains(definition));
+    }
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
+}
+
+#[test]
+fn protocol_42_scene_operations_and_delta_have_exact_json_and_cbor() {
+    let operations = [
+        (
+            SceneOperationV1::UpsertLayer {
+                layer: Box::new(scene_golden_layer()),
+            },
+            serde_json::json!({"type":"upsert_layer","layer":{
+                "layer_id":1,"sequence":2,
+                "source":{"type":"resource","resource_id":"R","resource_revision":3},
+                "depth":0,"anchor":{"type":"viewport"},
+                "offset":{"x":0,"y":0},"size":{"width":0,"height":0},
+                "opacity":255,"color_matrix":null,"scroll_policy":"fixed",
+                "interaction":null,"scene_revision":4
+            }}),
+            vec![
+                0x82, 0x00, 0x81, 0xaa, 0x00, 0x01, 0x01, 0x02, 0x02, 0x82, 0x00, 0x82, 0x61, b'R',
+                0x03, 0x03, 0x00, 0x04, 0x82, 0x00, 0x80, 0x05, 0xa2, 0x00, 0x00, 0x01, 0x00, 0x06,
+                0xa2, 0x00, 0x00, 0x01, 0x00, 0x07, 0x18, 0xff, 0x09, 0x00, 0x0b, 0x04,
+            ],
+        ),
+        (
+            SceneOperationV1::RemoveLayer { layer_id: 1 },
+            serde_json::json!({"type":"remove_layer","layer_id":1}),
+            vec![0x82, 0x01, 0x81, 0x01],
+        ),
+        (
+            SceneOperationV1::ClearDepth { depth: -1 },
+            serde_json::json!({"type":"clear_depth","depth":-1}),
+            vec![0x82, 0x02, 0x81, 0x20],
+        ),
+        (
+            SceneOperationV1::ClearAnchoredLine { line_id: 2 },
+            serde_json::json!({"type":"clear_anchored_line","line_id":2}),
+            vec![0x82, 0x03, 0x81, 0x02],
+        ),
+        (
+            SceneOperationV1::ReplaceScene {
+                scene: SceneStateV1 {
+                    revision: 4,
+                    layers: Vec::new(),
+                },
+            },
+            serde_json::json!({"type":"replace_scene","scene":{"revision":4,"layers":[]}}),
+            vec![0x82, 0x04, 0x81, 0xa2, 0x00, 0x04, 0x01, 0x80],
+        ),
+    ];
+    for (operation, json, cbor) in operations {
+        assert_eq!(serde_json::to_value(&operation).unwrap(), json);
+        assert_eq!(encode_canonical(&operation).unwrap(), cbor);
+    }
+
+    let delta = SceneDeltaV1 {
+        base_revision: 3,
+        new_revision: 4,
+        operations: vec![SceneOperationV1::RemoveLayer { layer_id: 1 }],
+    };
+    assert_eq!(
+        serde_json::to_value(&delta).unwrap(),
+        serde_json::json!({"base_revision":3,"new_revision":4,"operations":[{
+            "type":"remove_layer","layer_id":1
+        }]})
+    );
+    assert_eq!(
+        encode_canonical(&delta).unwrap(),
+        vec![
+            0xa3, 0x00, 0x03, 0x01, 0x04, 0x02, 0x81, 0x82, 0x01, 0x81, 0x01
+        ]
+    );
 }
 
 #[test]
@@ -213,7 +385,7 @@ fn protocol_40_round_trips_input_environment_wait_and_ordered_device_contracts()
         .unwrap(),
         pump
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
     let schema = include_str!("../schema/runtime.cddl");
     for definition in [
         "environment-capability",
@@ -244,7 +416,7 @@ fn protocol_24_carries_backend_authoritative_logs() {
         RuntimeMessage::decode_payload(98, &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
 }
 
 #[test]
@@ -277,7 +449,7 @@ fn protocol_38_carries_correlated_secondary_vm_faults() {
         RuntimeMessage::decode_payload(message.tag(), &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
     let schema = include_str!("../schema/runtime.cddl");
     assert!(schema.contains("runtime-vm-fault-detail"));
     assert_eq!(
@@ -312,7 +484,7 @@ fn protocol_34_carries_diagnostic_notification_guidance() {
         serde_json::to_value(&message).unwrap()["value"]["notification"],
         "log_only"
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
 }
 
 #[test]
@@ -335,7 +507,7 @@ fn protocol_35_carries_the_encoded_journal_byte_limit_at_map_key_six() {
     assert!(include_str!("../schema/runtime.cddl").contains(
         "runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint, 6: uint }"
     ));
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
 }
 
 #[test]
@@ -481,7 +653,7 @@ fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
 }
 
 #[test]
@@ -490,7 +662,7 @@ fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -656,7 +828,7 @@ fn storage_write_is_correlated_and_idempotent() {
 
 #[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -695,7 +867,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
     assert_eq!(StateExportKind::InputReplay as u8, 4);
 }
 
@@ -715,7 +887,7 @@ fn protocol_21_round_trips_complete_presentation_deltas() {
     assert_eq!(RuntimeMessage::decode_payload(41, &encoded), Ok(message));
 
     let schema = include_str!("../schema/runtime.cddl");
-    for tag in 0..=13 {
+    for tag in 0..=14 {
         assert!(
             schema.contains(&format!("[{tag}")),
             "runtime CDDL is missing presentation operation {tag}"
@@ -1103,7 +1275,7 @@ fn protocol_41_carries_safe_sql_v1_without_native_paths_or_handles() {
     );
     assert_eq!(SqlLimitsV1::FIXED.maximum_connections, 8);
     assert_eq!(SqlLimitsV1::FIXED.execution_budget_ms, 5_000);
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(41, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(42, 0));
     let schema = include_str!("../schema/runtime.cddl");
     assert!(schema.contains("sql-request-v1"));
     assert!(schema.contains("sql-response-v1"));

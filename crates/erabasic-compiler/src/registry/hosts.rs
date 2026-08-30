@@ -118,6 +118,8 @@ pub(super) const TEXT: &[&str] = &[
     "PRINTDATAL",
     "PRINTDATAW",
     "HTML_PRINT",
+    "HTML_PRINTC",
+    "HTML_PRINTLC",
     "HTML_PRINT_ISLAND",
     "HTML_PRINT_ISLAND_CLEAR",
     "HTML_TAGSPLIT",

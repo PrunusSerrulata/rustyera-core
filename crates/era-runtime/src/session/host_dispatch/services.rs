@@ -93,6 +93,11 @@ impl VmHost for ImmediateRuntimeHost<'_> {
         {
             return ImmediateHostCallResult::Ready(ready);
         }
+        if matches!(name, "HTML_PRINTC" | "HTML_PRINTLC")
+            && let Some(ready) = self.immediate_html_column_print(name, request.arguments)
+        {
+            return ImmediateHostCallResult::Ready(ready);
+        }
         let commits_line = is_immediate_committed_text_print(name);
         if !is_immediate_text_print(name) && !commits_line {
             return ImmediateHostCallResult::Unsupported;
@@ -470,7 +475,11 @@ impl ImmediateRuntimeHost<'_> {
         let Ok(mut prepared) = PreparedHtmlPrint::prepare(arguments) else {
             return None;
         };
-        if !prepared.warnings.is_empty() {
+        if (!self.query_state.snake_display_state
+            && erabasic_html::snake_extension_range(&prepared.document).is_some())
+            || !prepared.warnings.is_empty()
+            || document_has_unresolved_color_matrix(&prepared.document)
+        {
             return None;
         }
         let mut bindings = HtmlInteractionBindings {
@@ -482,6 +491,34 @@ impl ImmediateRuntimeHost<'_> {
         bind_html_document(&mut bindings, &mut prepared.document);
         prepared.apply(self.presentation);
         *self.pending_presentation_update = true;
+        Some(self.complete_line_count())
+    }
+
+    fn immediate_html_column_print(
+        &mut self,
+        name: &str,
+        arguments: &[VmValue],
+    ) -> Option<HostReady> {
+        if !self.query_state.snake_display_state {
+            return None;
+        }
+        let Ok(mut prepared) = PreparedHtmlColumnPrint::prepare(name, arguments) else {
+            return None;
+        };
+        if !prepared.warnings.is_empty() || document_has_unresolved_color_matrix(&prepared.document)
+        {
+            return None;
+        }
+        let mut bindings = HtmlInteractionBindings {
+            epoch: self.epoch,
+            next_interaction_id: self.next_interaction_id,
+            button_generation: self.button_generation,
+            command_intents: self.command_intents,
+        };
+        bind_html_document(&mut bindings, &mut prepared.document);
+        if prepared.apply(self.presentation) {
+            *self.pending_presentation_update = true;
+        }
         Some(self.complete_line_count())
     }
 

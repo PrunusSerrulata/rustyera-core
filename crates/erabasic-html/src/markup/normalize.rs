@@ -1,6 +1,7 @@
 use super::{
-    HtmlAlignment, HtmlAttribute, HtmlBoxModel, HtmlElementKind, HtmlElementSemantic, HtmlError,
-    HtmlErrorKind, HtmlLength, error,
+    HtmlAlignment, HtmlAttribute, HtmlBoxModel, HtmlColorMatrix, HtmlDisplayMode, HtmlElementKind,
+    HtmlElementSemantic, HtmlError, HtmlErrorKind, HtmlFontEdging, HtmlFontHinting, HtmlLength,
+    HtmlTextRenderIntent, HtmlTextRenderer, HtmlVerticalAlignment, error,
 };
 #[allow(clippy::too_many_lines)]
 pub(super) fn normalize_element(
@@ -63,7 +64,11 @@ pub(super) fn normalize_element(
             HtmlElementSemantic::Paragraph { alignment }
         }
         HtmlElementKind::Font => {
-            if attributes.is_empty() || !allowed(&["face", "color", "bcolor"]) {
+            if attributes.is_empty()
+                || !allowed(&[
+                    "face", "color", "bcolor", "size", "valign", "render", "edging", "hinting",
+                ])
+            {
                 return Err(error(HtmlErrorKind::InvalidAttribute, start, end));
             }
             HtmlElementSemantic::Font {
@@ -76,6 +81,28 @@ pub(super) fn normalize_element(
                     .map(parse_color)
                     .transpose()
                     .map_err(|()| invalid())?,
+                size_millipixels: value("size")
+                    .map(parse_positive_millipixels)
+                    .transpose()
+                    .map_err(|()| invalid())?,
+                vertical_alignment: value("valign")
+                    .map(parse_vertical_alignment)
+                    .transpose()
+                    .map_err(|()| invalid())?,
+                render_intent: HtmlTextRenderIntent {
+                    renderer: value("render")
+                        .map(parse_text_renderer)
+                        .transpose()
+                        .map_err(|()| invalid())?,
+                    edging: value("edging")
+                        .map(parse_font_edging)
+                        .transpose()
+                        .map_err(|()| invalid())?,
+                    hinting: value("hinting")
+                        .map(parse_font_hinting)
+                        .transpose()
+                        .map_err(|()| invalid())?,
+                },
             }
         }
         HtmlElementKind::Button => {
@@ -115,7 +142,9 @@ pub(super) fn normalize_element(
             HtmlElementSemantic::ClearButton { suppress_tooltip }
         }
         HtmlElementKind::Image => {
-            if !allowed(&["src", "srcb", "srcm", "height", "width", "ypos"]) {
+            if !allowed(&[
+                "src", "srcb", "srcm", "height", "width", "ypos", "xpos", "display", "cm",
+            ]) {
                 return Err(error(HtmlErrorKind::InvalidAttribute, start, end));
             }
             HtmlElementSemantic::Image {
@@ -132,6 +161,19 @@ pub(super) fn normalize_element(
                     .map_err(|()| invalid())?,
                 y: value("ypos")
                     .map(parse_length)
+                    .transpose()
+                    .map_err(|()| invalid())?,
+                x: value("xpos")
+                    .map(parse_length)
+                    .transpose()
+                    .map_err(|()| invalid())?,
+                display: value("display")
+                    .map(parse_display_mode)
+                    .transpose()
+                    .map_err(|()| invalid())?
+                    .unwrap_or(HtmlDisplayMode::Relative),
+                color_matrix: value("cm")
+                    .map(parse_color_matrix_reference)
                     .transpose()
                     .map_err(|()| invalid())?,
             }
@@ -175,7 +217,7 @@ fn normalize_division(
     let mut height = None;
     let mut depth = 0;
     let mut color = None;
-    let mut relative = true;
+    let mut display = HtmlDisplayMode::Relative;
     let mut box_model = HtmlBoxModel::default();
     for attribute in attributes {
         match attribute.name.as_str() {
@@ -186,11 +228,7 @@ fn normalize_division(
             "depth" => depth = attribute.value.parse().map_err(|_| invalid())?,
             "color" => color = Some(parse_color(&attribute.value).map_err(|()| invalid())?),
             "display" => {
-                relative = match attribute.value.to_ascii_lowercase().as_str() {
-                    "relative" => true,
-                    "absolute" => false,
-                    _ => return Err(invalid()),
-                };
+                display = parse_division_display_mode(&attribute.value).map_err(|()| invalid())?;
             }
             "size" => {
                 let values = parse_lengths::<2>(&attribute.value).map_err(|()| invalid())?;
@@ -231,10 +269,10 @@ fn normalize_division(
         x,
         y,
         width: width.ok_or_else(|| error(HtmlErrorKind::MissingAttribute, start, end))?,
-        height: height.ok_or_else(|| error(HtmlErrorKind::MissingAttribute, start, end))?,
+        height,
         depth,
         color,
-        relative,
+        display,
         box_model,
     })
 }
@@ -252,6 +290,133 @@ fn parse_length(value: &str) -> Result<HtmlLength, ()> {
             .parse()
             .map(HtmlLength::FontHeightHundredths)
             .map_err(|_| ())
+    }
+}
+
+fn strip_ascii_case_suffix<'a>(value: &'a str, suffix: &str) -> &'a str {
+    value
+        .get(value.len().saturating_sub(suffix.len())..)
+        .filter(|tail| tail.eq_ignore_ascii_case(suffix))
+        .and_then(|_| value.get(..value.len().saturating_sub(suffix.len())))
+        .unwrap_or(value)
+}
+
+fn parse_positive_millipixels(value: &str) -> Result<u32, ()> {
+    let value = strip_ascii_case_suffix(value.trim(), "px");
+    let value = value.strip_prefix('+').unwrap_or(value);
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if whole.is_empty() && fraction.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(());
+    }
+    let whole = if whole.is_empty() {
+        0
+    } else {
+        whole.parse::<u64>().map_err(|_| ())?
+    };
+    let round = u64::from(
+        fraction
+            .as_bytes()
+            .get(3)
+            .is_some_and(|digit| *digit >= b'5'),
+    );
+    let mut fraction_digits = fraction.bytes().take(3).collect::<Vec<_>>();
+    while fraction_digits.len() < 3 {
+        fraction_digits.push(b'0');
+    }
+    let fraction_millipixels = fraction_digits
+        .into_iter()
+        .fold(0_u64, |value, digit| value * 10 + u64::from(digit - b'0'));
+    let millipixels = whole
+        .checked_mul(1_000)
+        .and_then(|whole| whole.checked_add(fraction_millipixels))
+        .and_then(|value| value.checked_add(round))
+        .ok_or(())?;
+    u32::try_from(millipixels)
+        .map_err(|_| ())
+        .and_then(|value| if value == 0 { Err(()) } else { Ok(value) })
+}
+
+fn parse_vertical_alignment(value: &str) -> Result<HtmlVerticalAlignment, ()> {
+    match value.to_ascii_lowercase().as_str() {
+        "top" => Ok(HtmlVerticalAlignment::Top),
+        "middle" => Ok(HtmlVerticalAlignment::Middle),
+        "bottom" => Ok(HtmlVerticalAlignment::Bottom),
+        _ => Err(()),
+    }
+}
+
+fn parse_text_renderer(value: &str) -> Result<HtmlTextRenderer, ()> {
+    match value.to_ascii_lowercase().as_str() {
+        "gdi" => Ok(HtmlTextRenderer::Gdi),
+        "skia" => Ok(HtmlTextRenderer::Skia),
+        _ => Err(()),
+    }
+}
+
+fn parse_font_edging(value: &str) -> Result<HtmlFontEdging, ()> {
+    match value.to_ascii_lowercase().as_str() {
+        "alias" => Ok(HtmlFontEdging::Alias),
+        "antialias" => Ok(HtmlFontEdging::AntiAlias),
+        "subpixel" => Ok(HtmlFontEdging::SubpixelAntiAlias),
+        _ => Err(()),
+    }
+}
+
+fn parse_font_hinting(value: &str) -> Result<HtmlFontHinting, ()> {
+    match value.to_ascii_lowercase().as_str() {
+        "none" => Ok(HtmlFontHinting::None),
+        "slight" => Ok(HtmlFontHinting::Slight),
+        "normal" => Ok(HtmlFontHinting::Normal),
+        "full" => Ok(HtmlFontHinting::Full),
+        _ => Err(()),
+    }
+}
+
+fn parse_display_mode(value: &str) -> Result<HtmlDisplayMode, ()> {
+    match value.to_ascii_lowercase().as_str() {
+        "relative" => Ok(HtmlDisplayMode::Relative),
+        "absolute-lefttop" => Ok(HtmlDisplayMode::AbsoluteLeftTop),
+        "absolute-leftbottom" => Ok(HtmlDisplayMode::AbsoluteLeftBottom),
+        _ => Err(()),
+    }
+}
+
+fn parse_color_matrix_reference(value: &str) -> Result<HtmlColorMatrix, ()> {
+    let mut parts = value.trim().split(':');
+    let name = parts.next().filter(|name| {
+        let mut characters = name.chars();
+        characters
+            .next()
+            .is_some_and(|first| first == '_' || first.is_alphabetic())
+            && characters.all(|character| character == '_' || character.is_alphanumeric())
+    });
+    let Some(name) = name else {
+        return Err(());
+    };
+    let mut indices = [0_u64; 3];
+    for index in &mut indices {
+        let Some(value) = parts.next() else {
+            break;
+        };
+        *index = value.parse().map_err(|_| ())?;
+    }
+    if parts.next().is_some() {
+        return Err(());
+    }
+    Ok(HtmlColorMatrix::Variable {
+        name: name.to_owned(),
+        indices,
+    })
+}
+
+fn parse_division_display_mode(value: &str) -> Result<HtmlDisplayMode, ()> {
+    match value.to_ascii_lowercase().as_str() {
+        "absolute" => Ok(HtmlDisplayMode::Absolute),
+        "absolute-lefttop" => Ok(HtmlDisplayMode::AbsoluteLeftTop),
+        other => parse_display_mode(other),
     }
 }
 

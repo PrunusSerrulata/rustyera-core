@@ -124,7 +124,7 @@ impl HtmlQueryError {
         self.origin
     }
 
-    fn input(kind: HtmlQueryErrorKind, start: usize, end: usize, message: &str) -> Self {
+    pub(super) fn input(kind: HtmlQueryErrorKind, start: usize, end: usize, message: &str) -> Self {
         Self {
             origin: HtmlQueryErrorOrigin::ScriptInput,
             ..Self::new(kind, start, end, message)

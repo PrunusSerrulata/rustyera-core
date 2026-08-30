@@ -3,8 +3,10 @@
 mod model;
 
 pub use model::{
-    HtmlAlignment, HtmlAttribute, HtmlBoxModel, HtmlDocument, HtmlElementKind, HtmlElementSemantic,
-    HtmlError, HtmlErrorKind, HtmlInteraction, HtmlLength, HtmlNode, HtmlWarning, HtmlWarningKind,
+    HtmlAlignment, HtmlAttribute, HtmlBoxModel, HtmlColorMatrix, HtmlDisplayMode, HtmlDocument,
+    HtmlElementKind, HtmlElementSemantic, HtmlError, HtmlErrorKind, HtmlFontEdging,
+    HtmlFontHinting, HtmlInteraction, HtmlLength, HtmlNode, HtmlTextRenderIntent, HtmlTextRenderer,
+    HtmlVerticalAlignment, HtmlWarning, HtmlWarningKind,
 };
 
 mod attributes;
@@ -22,6 +24,79 @@ pub use query::{
     HtmlStringLinesPlan, HtmlSubstringPlan, HtmlSubstringPoll, HtmlSubstringResult,
     decode_query_entities, html_string_length_units, parse_document_with_source_map,
 };
+
+/// Locate the first AST node that uses a snake-only HTML extension.
+///
+/// Runtime entry points use this after parsing so the original profile keeps
+/// its previous attribute surface while both profiles share one canonical AST.
+#[must_use]
+pub fn snake_extension_range(document: &HtmlDocument) -> Option<HtmlSourceRange> {
+    fn node_extension_range(node: &HtmlNode) -> Option<HtmlSourceRange> {
+        let HtmlNode::Element {
+            attributes,
+            children,
+            semantic,
+            start,
+            end,
+            ..
+        } = node
+        else {
+            return None;
+        };
+        let extension = match semantic {
+            HtmlElementSemantic::Font { .. } => attributes.iter().any(|attribute| {
+                matches!(
+                    attribute.name.as_str(),
+                    "size" | "valign" | "render" | "edging" | "hinting"
+                )
+            }),
+            HtmlElementSemantic::Image { .. } => attributes
+                .iter()
+                .any(|attribute| matches!(attribute.name.as_str(), "xpos" | "display" | "cm")),
+            HtmlElementSemantic::Division { height, .. } => {
+                height.is_none()
+                    || attributes.iter().any(|attribute| {
+                        attribute.name == "display"
+                            && !matches!(
+                                attribute.value.to_ascii_lowercase().as_str(),
+                                "relative" | "absolute"
+                            )
+                    })
+            }
+            _ => false,
+        };
+        if extension {
+            return Some(HtmlSourceRange {
+                start: usize::try_from(*start).unwrap_or(usize::MAX),
+                end: usize::try_from(*end).unwrap_or(usize::MAX),
+            });
+        }
+        children.iter().find_map(node_extension_range)
+    }
+
+    document.nodes.iter().find_map(node_extension_range)
+}
+
+/// Reject snake-only attributes as a source-owned profile error.
+///
+/// This is shared by print and query entry points so profile routing cannot
+/// diverge as new AST consumers are added.
+///
+/// # Errors
+///
+/// Returns `InvalidMarkup` with the source range of the first snake-only
+/// attribute when the document is not valid for the reference profile.
+pub fn reject_snake_extensions(document: &HtmlDocument) -> Result<(), HtmlQueryError> {
+    let Some(range) = snake_extension_range(document) else {
+        return Ok(());
+    };
+    Err(HtmlQueryError::input(
+        HtmlQueryErrorKind::InvalidMarkup,
+        range.start,
+        range.end,
+        "HTML attribute is unavailable for this compatibility profile",
+    ))
+}
 
 use attributes::{error, find_tag_end, parse_attributes};
 use normalize::{decode_entities, normalize_element};
@@ -446,7 +521,7 @@ mod tests {
             semantic,
             HtmlElementSemantic::Division {
                 width: HtmlLength::Pixels(30),
-                height: HtmlLength::FontHeightHundredths(40),
+                height: Some(HtmlLength::FontHeightHundredths(40)),
                 ..
             }
         ));
@@ -460,6 +535,60 @@ mod tests {
                 },
                 ..
             } if value == "42"
+        ));
+    }
+
+    #[test]
+    fn normalizes_snake_font_image_and_positioned_division_intents() {
+        let document = parse_document(
+            "<font size='12.5px' valign='middle' render='skia' edging='subpixel' hinting='full'>x</font><img src='face' xpos='3px' ypos='4' width='5px' height='6' display='absolute-leftbottom' cm='MATRIX:1'><div width='80px' display='absolute-lefttop' padding='1px,2px' radius='3px' />",
+        )
+        .unwrap();
+        let HtmlNode::Element {
+            semantic:
+                HtmlElementSemantic::Font {
+                    size_millipixels,
+                    vertical_alignment,
+                    render_intent,
+                    ..
+                },
+            ..
+        } = &document.nodes[0]
+        else {
+            panic!("expected font");
+        };
+        assert_eq!(*size_millipixels, Some(12_500));
+        assert_eq!(*vertical_alignment, Some(HtmlVerticalAlignment::Middle));
+        assert_eq!(render_intent.renderer, Some(HtmlTextRenderer::Skia));
+        assert_eq!(
+            render_intent.edging,
+            Some(HtmlFontEdging::SubpixelAntiAlias)
+        );
+        assert_eq!(render_intent.hinting, Some(HtmlFontHinting::Full));
+
+        assert!(matches!(
+            &document.nodes[1],
+            HtmlNode::Element {
+                semantic: HtmlElementSemantic::Image {
+                    x: Some(HtmlLength::Pixels(3)),
+                    y: Some(HtmlLength::FontHeightHundredths(4)),
+                    display: HtmlDisplayMode::AbsoluteLeftBottom,
+                    color_matrix: Some(HtmlColorMatrix::Variable { name, indices }),
+                    ..
+                },
+                ..
+            } if name == "MATRIX" && *indices == [1, 0, 0]
+        ));
+        assert!(matches!(
+            &document.nodes[2],
+            HtmlNode::Element {
+                semantic: HtmlElementSemantic::Division {
+                    height: None,
+                    display: HtmlDisplayMode::AbsoluteLeftTop,
+                    ..
+                },
+                ..
+            }
         ));
     }
 
@@ -481,5 +610,12 @@ mod tests {
         ));
         assert!(parse_document("<clearbutton>x</clearbutton>").is_ok());
         assert!(parse_document("<clearbutton>").is_err());
+        assert!(matches!(
+            parse_document("<img src='x' arbitrary='raw'>"),
+            Err(HtmlError {
+                kind: HtmlErrorKind::InvalidAttribute,
+                ..
+            })
+        ));
     }
 }

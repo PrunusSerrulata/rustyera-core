@@ -288,7 +288,7 @@ fn rich_projected_runs() -> Vec<DisplayRun> {
         DisplayRun::ColumnCell {
             content: vec![plain_text("cell".into(), 18_000)],
             alignment: CellAlignment::Left,
-            preferred_columns: 4,
+            width: CellWidthIntent::ProjectColumns(4),
         },
     ]
 }
@@ -621,7 +621,7 @@ fn projection_attaches_runtime_columns_to_nested_and_fallback_text() {
             DisplayRun::ColumnCell {
                 content: vec![plain_text("……".into(), 19_000)],
                 alignment: CellAlignment::Left,
-                preferred_columns: 4,
+                width: CellWidthIntent::ProjectColumns(4),
             },
             DisplayRun::HtmlDocument {
                 document: erabasic_html::parse_document("<b>■……■</b>").unwrap(),

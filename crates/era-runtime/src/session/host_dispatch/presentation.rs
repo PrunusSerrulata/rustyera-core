@@ -242,11 +242,74 @@ impl RuntimeSession {
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
+        if matches!(name.as_str(), "HTML_PRINTC" | "HTML_PRINTLC") {
+            *status = HostDispatchStatus::Handled;
+            if !vm
+                .vm()
+                .artifact()
+                .manifest
+                .compatibility
+                .supports_snake_display_state()
+            {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Operation,
+                    format!("{name} is unavailable for this compatibility profile"),
+                );
+            }
+            let mut prepared = match PreparedHtmlColumnPrint::prepare(name, &request.arguments) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    emit_html_profile_error(
+                        self,
+                        name,
+                        &error,
+                        &request.origin,
+                        &vm.vm().artifact().manifest.compatibility,
+                    )?;
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Parse,
+                        format!(
+                            "{name} {:?} at UTF-8 bytes {}..{}",
+                            error.kind, error.start, error.end
+                        ),
+                    );
+                }
+            };
+            resolve_document_color_matrices(vm, request.fiber, &mut prepared.document);
+            emit_html_warnings(self, name, &prepared.warnings, &request.origin)?;
+            {
+                let mut bindings = HtmlInteractionBindings {
+                    epoch: self.epoch.0,
+                    next_interaction_id: &mut self.next_interaction_id,
+                    button_generation: self.button_generation,
+                    command_intents: &mut self.command_intents,
+                };
+                bind_html_document(&mut bindings, &mut prepared.document);
+            }
+            let changed = prepared.apply(&mut self.presentation);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return if changed {
+                self.emit_presentation()
+            } else {
+                Ok(())
+            };
+        }
         if name == "HTML_PRINT" {
             *status = HostDispatchStatus::Handled;
             let mut prepared = match PreparedHtmlPrint::prepare(&request.arguments) {
                 Ok(prepared) => prepared,
                 Err(error) => {
+                    emit_html_profile_error(
+                        self,
+                        "HTML_PRINT",
+                        &error,
+                        &request.origin,
+                        &vm.vm().artifact().manifest.compatibility,
+                    )?;
                     if error.origin() != erabasic_html::HtmlQueryErrorOrigin::ScriptInput {
                         return self.fault(
                             FaultCode::VmFault,
@@ -268,6 +331,35 @@ impl RuntimeSession {
                     );
                 }
             };
+            if !vm
+                .vm()
+                .artifact()
+                .manifest
+                .compatibility
+                .supports_snake_display_state()
+                && let Some(range) = erabasic_html::snake_extension_range(&prepared.document)
+            {
+                let (start, end) = (range.start, range.end);
+                let error = erabasic_html::HtmlError::new(
+                    erabasic_html::HtmlErrorKind::InvalidAttribute,
+                    start,
+                    end,
+                );
+                emit_html_profile_error(
+                    self,
+                    "HTML_PRINT",
+                    &error,
+                    &request.origin,
+                    &vm.vm().artifact().manifest.compatibility,
+                )?;
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Parse,
+                    format!("HTML_PRINT profile attribute at UTF-8 bytes {start}..{end}"),
+                );
+            }
+            resolve_document_color_matrices(vm, request.fiber, &mut prepared.document);
             emit_html_warnings(self, "HTML_PRINT", &prepared.warnings, &request.origin)?;
             {
                 let mut bindings = HtmlInteractionBindings {
@@ -289,6 +381,13 @@ impl RuntimeSession {
                 match erabasic_html::parse_document_with_warnings(&markup) {
                     Ok(parsed) => parsed,
                     Err(error) => {
+                        emit_html_profile_error(
+                            self,
+                            "HTML_PRINT_ISLAND",
+                            &error,
+                            &request.origin,
+                            &vm.vm().artifact().manifest.compatibility,
+                        )?;
                         if error.origin() != erabasic_html::HtmlQueryErrorOrigin::ScriptInput {
                             return self.fault(
                                 FaultCode::VmFault,
@@ -310,6 +409,35 @@ impl RuntimeSession {
                         );
                     }
                 };
+            if !vm
+                .vm()
+                .artifact()
+                .manifest
+                .compatibility
+                .supports_snake_display_state()
+                && let Some(range) = erabasic_html::snake_extension_range(&document)
+            {
+                let (start, end) = (range.start, range.end);
+                let error = erabasic_html::HtmlError::new(
+                    erabasic_html::HtmlErrorKind::InvalidAttribute,
+                    start,
+                    end,
+                );
+                emit_html_profile_error(
+                    self,
+                    "HTML_PRINT_ISLAND",
+                    &error,
+                    &request.origin,
+                    &vm.vm().artifact().manifest.compatibility,
+                )?;
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Parse,
+                    format!("HTML_PRINT_ISLAND profile attribute at UTF-8 bytes {start}..{end}"),
+                );
+            }
+            resolve_document_color_matrices(vm, request.fiber, &mut document);
             emit_html_warnings(self, "HTML_PRINT_ISLAND", &warnings, &request.origin)?;
             let mut bindings = HtmlInteractionBindings {
                 epoch: self.epoch.0,

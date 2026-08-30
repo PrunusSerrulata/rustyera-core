@@ -495,15 +495,17 @@ fn printform_and_printc_family_preserve_reference_semantics() {
             DisplayRun::ColumnCell {
                 content,
                 alignment,
-                preferred_columns,
-            } => Some((content, alignment, preferred_columns)),
+                width,
+            } => Some((content, alignment, width)),
             _ => None,
         })
         .collect::<Vec<_>>();
     assert_eq!(cells.len(), 4);
     assert_eq!(*cells[0].1, era_runtime_protocol::CellAlignment::Right);
     assert_eq!(*cells[1].1, era_runtime_protocol::CellAlignment::Left);
-    assert!(cells.iter().all(|cell| *cell.2 == 24));
+    assert!(cells.iter().all(|cell| {
+        *cell.2 == era_runtime_protocol::CellWidthIntent::ProjectColumns(24)
+    }));
     assert!(
         cells
             .iter()

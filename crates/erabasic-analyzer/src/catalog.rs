@@ -177,9 +177,12 @@ pub(crate) fn builtin_instruction_available(
     identity: &erabasic_compat::CompatibilityIdentity,
 ) -> bool {
     match name.to_ascii_uppercase().as_str() {
-        "SETANIMETIMER" | "BITMAP_CACHE_ENABLE" | "TEXT_BGC_ON" | "TEXT_BGC_OFF" => {
-            identity.supports_snake_display_state()
-        }
+        "SETANIMETIMER"
+        | "BITMAP_CACHE_ENABLE"
+        | "TEXT_BGC_ON"
+        | "TEXT_BGC_OFF"
+        | "HTML_PRINTC"
+        | "HTML_PRINTLC" => identity.supports_snake_display_state(),
         _ => builtin_shared_available(name, identity),
     }
 }
@@ -324,7 +327,7 @@ mod tests {
         }
         assert!(!builtin_function_available("GETANIMETIMER", &original));
         assert!(builtin_function_available("GETANIMETIMER", &snake));
-        for name in ["TEXT_BGC_ON", "TEXT_BGC_OFF"] {
+        for name in ["TEXT_BGC_ON", "TEXT_BGC_OFF", "HTML_PRINTC", "HTML_PRINTLC"] {
             assert!(!builtin_instruction_available(name, &original));
             assert!(builtin_instruction_available(name, &snake));
         }

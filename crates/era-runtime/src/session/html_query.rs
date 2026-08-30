@@ -245,12 +245,12 @@ impl RuntimeSession {
             .map(|value| PreparedQuery::Ready(VmValue::Integer(value)));
         }
         if name == "HTML__LINES_BEGIN" {
-            let ticket = self.operations.html_lines.begin(
-                self.epoch.0,
-                vm,
-                request,
-                string(request, 0)?.into(),
-            )?;
+            let source = string(request, 0)?;
+            self.validate_html_query_profile(source)?;
+            let ticket =
+                self.operations
+                    .html_lines
+                    .begin(self.epoch.0, vm, request, source.into())?;
             return Ok(PreparedQuery::Ready(VmValue::String(ticket)));
         }
         let mut budget = QueryBudget::default();
@@ -289,6 +289,7 @@ impl RuntimeSession {
                 _ => return Err(invalid_arguments()),
             }
         } else {
+            self.validate_html_query_profile(string(request, 0)?)?;
             initial_html_plan(request, name, settings, &mut budget)?
         };
         let depth = vm
@@ -317,6 +318,23 @@ impl RuntimeSession {
             next_probe: 0,
             line_ticket,
         })))
+    }
+
+    fn validate_html_query_profile(&self, source: &str) -> Result<(), HtmlQueryError> {
+        if self.project_snapshot.as_ref().is_some_and(|project| {
+            project
+                .manifest
+                .compatibility
+                .supports_snake_display_state()
+        }) {
+            return Ok(());
+        }
+        let mapped = erabasic_html::parse_document_with_source_map(
+            source,
+            erabasic_html::HtmlQueryEntityPolicy::ReferenceQuery,
+            plan::limits(),
+        )?;
+        erabasic_html::reject_snake_extensions(&mapped.document)
     }
 
     pub(in crate::session) fn complete_html_query(

@@ -534,6 +534,260 @@ fn start_html_execution(session: &mut RuntimeSession) -> (u64, Vec<RuntimeMessag
     (sequence, messages)
 }
 
+#[test]
+fn snake_html_pixel_columns_preserve_alignment_width_and_normalized_markup() {
+    let source = "@SYSTEM_TITLE\nHTML_PRINTC \"\", 40\nHTML_PRINTLC \"\"\nHTML_PRINTC \"<b>R</b>\", 40\nHTML_PRINTLC \"<i>L</i>\", 40\nHTML_PRINTC \"D\"\nHTML_PRINTLC \"wide\", 999\nPRINTL\nWAIT\nRETURN\n";
+    let mut session = prepare_html_execution_with_profile(
+        source,
+        None,
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    let (_, messages) = start_html_execution(&mut session);
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:#?}");
+    let project = session.project_snapshot.as_ref().unwrap();
+    let default_pixel_width = project.print_c_length.saturating_mul(project.font_size) / 2;
+    let snapshot = session.presentation.snapshot();
+    let line = snapshot
+        .history
+        .logical_lines
+        .iter()
+        .find(|line| {
+            line.runs
+                .iter()
+                .filter(|run| matches!(run, DisplayRun::ColumnCell { .. }))
+                .count()
+                == 4
+        })
+        .expect("HTML pixel cells share the current logical line");
+    let cells = line
+        .runs
+        .iter()
+        .filter_map(|run| match run {
+            DisplayRun::ColumnCell {
+                content,
+                alignment,
+                width,
+            } => Some((content, *alignment, *width)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(cells[0].1, era_runtime_protocol::CellAlignment::Right);
+    assert_eq!(cells[1].1, era_runtime_protocol::CellAlignment::Left);
+    assert_eq!(
+        cells.iter().map(|cell| cell.2).collect::<Vec<_>>(),
+        [
+            era_runtime_protocol::CellWidthIntent::LogicalPixels(40),
+            era_runtime_protocol::CellWidthIntent::LogicalPixels(40),
+            era_runtime_protocol::CellWidthIntent::LogicalPixels(default_pixel_width),
+            era_runtime_protocol::CellWidthIntent::LogicalPixels(999),
+        ]
+    );
+    assert!(matches!(
+        cells[0].0.as_slice(),
+        [DisplayRun::HtmlDocument { document }]
+            if erabasic_html::serialize_document(document) == "<b>R</b>"
+    ));
+}
+
+#[test]
+fn rejected_html_attribute_emits_identity_scoped_diagnostic_without_raw_markup() {
+    let source = "@SYSTEM_TITLE\nHTML_PRINT \"<img src='x' arbitrary='secret'>\"\nWAIT\nRETURN\n";
+    let identity = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let mut session = prepare_html_execution_with_profile(source, None, identity.clone());
+    let (_, messages) = start_html_execution(&mut session);
+    assert_eq!(session.phase(), RuntimePhase::Faulted);
+    let diagnostic = messages
+        .iter()
+        .find_map(|message| match message {
+            RuntimeMessage::Diagnostic(diagnostic)
+                if diagnostic.code == "runtime.html.profile_attribute_rejected" =>
+            {
+                Some(diagnostic)
+            }
+            _ => None,
+        })
+        .expect("profile-scoped HTML diagnostic");
+    assert_eq!(
+        diagnostic
+            .context
+            .as_ref()
+            .and_then(|context| context.identity.as_ref()),
+        Some(&identity)
+    );
+    assert!(!diagnostic.message.contains("secret"));
+    assert!(session.presentation.snapshot().history.logical_lines.is_empty());
+}
+
+#[test]
+fn snake_html_image_matrix_is_resolved_to_fixed_protocol_values() {
+    let source = "@SYSTEM_TITLE\n#DIM MATRIX, 5, 5\nMATRIX:0:0 = 256\nMATRIX:4:4 = -7\nHTML_PRINT \"<img src='face' cm='MATRIX'>\"\nPRINTL\nWAIT\nRETURN\n";
+    let mut session = prepare_html_execution_with_profile(
+        source,
+        None,
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    let (_, messages) = start_html_execution(&mut session);
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:#?}");
+    let snapshot = session.presentation.snapshot();
+    let matrix = snapshot
+        .history
+        .logical_lines
+        .iter()
+        .flat_map(|line| &line.runs)
+        .find_map(|run| {
+            let DisplayRun::HtmlDocument { document } = run else {
+                return None;
+            };
+            let erabasic_html::HtmlNode::Element {
+                semantic:
+                    erabasic_html::HtmlElementSemantic::Image {
+                        color_matrix: Some(erabasic_html::HtmlColorMatrix::Fixed(matrix)),
+                        ..
+                    },
+                ..
+            } = document.nodes.first()?
+            else {
+                return None;
+            };
+            Some(matrix)
+        })
+        .expect("resolved image color matrix");
+    assert_eq!(matrix[0], 256);
+    assert_eq!(matrix[24], -7);
+}
+
+#[test]
+fn original_profile_keeps_rejecting_snake_only_html_attributes() {
+    let source = "@SYSTEM_TITLE\nHTML_PRINT \"<font size='12'>x</font>\"\nWAIT\nRETURN\n";
+    let identity = erabasic_compat::CompatibilityIdentity::reference();
+    let mut session = prepare_html_execution_with_profile(source, None, identity.clone());
+    let (_, messages) = start_html_execution(&mut session);
+    assert_eq!(session.phase(), RuntimePhase::Faulted, "{messages:#?}");
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::Diagnostic(diagnostic)
+            if diagnostic.code == "runtime.html.profile_attribute_rejected"
+                && diagnostic.context.as_ref().and_then(|context| context.identity.as_ref())
+                    == Some(&identity)
+    )));
+}
+
+#[test]
+fn original_profile_rejects_snake_html_query_before_provider_observes_it() {
+    let source = "@SYSTEM_TITLE\nRESULT = HTML_STRINGLEN(\"<font size='12'>x</font>\", 1)\nWAIT\nRETURN\n";
+    let mut session = prepare_html_execution_with_profile(
+        source,
+        Some(ProtocolVersion::new(2, 0)),
+        erabasic_compat::CompatibilityIdentity::reference(),
+    );
+    let (_, messages) = start_html_execution(&mut session);
+    assert_eq!(session.phase(), RuntimePhase::Faulted, "{messages:#?}");
+    assert!(!messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::ServiceRequest(request)
+            if request.kind == ServiceKind::PresentationQuery
+    )));
+}
+
+#[test]
+fn snake_html_query_preserves_nested_font_render_intent_in_provider_probe() {
+    let source = "@SYSTEM_TITLE\nRESULT = HTML_STRINGLEN(\"<font size='12' valign='middle' render='skia' edging='subpixel' hinting='full'><b>x</b></font>\", 1)\nWAIT\nRETURN\n";
+    let mut session = prepare_html_execution_with_profile(
+        source,
+        Some(ProtocolVersion::new(2, 0)),
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    let (_, messages) = start_html_execution(&mut session);
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:#?}");
+    let payload = messages
+        .iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ServiceRequest(request)
+                if request.kind == ServiceKind::PresentationQuery =>
+            {
+                decode_canonical::<era_runtime_protocol::HtmlMeasureRequestV2>(
+                    request.payload.as_slice(),
+                )
+                .ok()
+            }
+            _ => None,
+        })
+        .expect("presentation query probe");
+    let font = payload.probes.iter().find_map(|probe| {
+        fn find_font(
+            nodes: &[erabasic_html::HtmlNode],
+        ) -> Option<&erabasic_html::HtmlElementSemantic> {
+            nodes.iter().find_map(|node| match node {
+                erabasic_html::HtmlNode::Text { .. } => None,
+                erabasic_html::HtmlNode::Element {
+                    semantic, children, ..
+                } => matches!(semantic, erabasic_html::HtmlElementSemantic::Font { .. })
+                    .then_some(semantic)
+                    .or_else(|| find_font(children)),
+            })
+        }
+        find_font(&probe.document.nodes)
+    });
+    assert!(matches!(
+        font,
+        Some(erabasic_html::HtmlElementSemantic::Font {
+            size_millipixels: Some(12_000),
+            vertical_alignment: Some(erabasic_html::HtmlVerticalAlignment::Middle),
+            render_intent: erabasic_html::HtmlTextRenderIntent {
+                renderer: Some(erabasic_html::HtmlTextRenderer::Skia),
+                edging: Some(erabasic_html::HtmlFontEdging::SubpixelAntiAlias),
+                hinting: Some(erabasic_html::HtmlFontHinting::Full),
+            },
+            ..
+        })
+    ));
+}
+
+#[test]
+fn snake_html_query_never_exposes_color_matrix_variable_addresses() {
+    let source = "@SYSTEM_TITLE\n#DIM MATRIX, 5, 5\nRESULT = HTML_STRINGLEN(\"<img src='missing' cm='MATRIX'>\", 1)\nWAIT\nRETURN\n";
+    let mut session = prepare_html_execution_with_profile(
+        source,
+        Some(ProtocolVersion::new(2, 0)),
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    let (_, messages) = start_html_execution(&mut session);
+    let payload = messages
+        .iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ServiceRequest(request)
+                if request.kind == ServiceKind::PresentationQuery =>
+            {
+                decode_canonical::<era_runtime_protocol::HtmlMeasureRequestV2>(
+                    request.payload.as_slice(),
+                )
+                .ok()
+            }
+            _ => None,
+        })
+        .expect("image measurement probe");
+    let erabasic_html::HtmlNode::Element {
+        attributes,
+        semantic: erabasic_html::HtmlElementSemantic::Image { color_matrix, .. },
+        ..
+    } = &payload.probes[0].document.nodes[0]
+    else {
+        panic!("image probe root");
+    };
+    assert!(attributes.iter().all(|attribute| attribute.name != "cm"));
+    assert!(color_matrix.is_none());
+}
+
 fn html_flag(session: &RuntimeSession, index: u64) -> i64 {
     read_runtime_integer(session.vm.as_ref().unwrap(), "FLAG", &[index], None).unwrap()
 }

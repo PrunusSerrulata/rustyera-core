@@ -52,6 +52,93 @@ struct PreparedHtmlPrint {
     inline: bool,
 }
 
+struct PreparedHtmlColumnPrint {
+    document: erabasic_html::HtmlDocument,
+    warnings: Vec<erabasic_html::HtmlWarning>,
+    alignment: CellAlignment,
+    requested_pixels: i64,
+    empty: bool,
+}
+
+fn document_has_unresolved_color_matrix(document: &erabasic_html::HtmlDocument) -> bool {
+    fn node_has_unresolved_color_matrix(node: &erabasic_html::HtmlNode) -> bool {
+        match node {
+            erabasic_html::HtmlNode::Text { .. } => false,
+            erabasic_html::HtmlNode::Element {
+                semantic, children, ..
+            } => {
+                matches!(
+                    semantic,
+                    erabasic_html::HtmlElementSemantic::Image {
+                        color_matrix: Some(erabasic_html::HtmlColorMatrix::Variable { .. }),
+                        ..
+                    }
+                ) || children.iter().any(node_has_unresolved_color_matrix)
+            }
+        }
+    }
+
+    document.nodes.iter().any(node_has_unresolved_color_matrix)
+}
+
+fn resolve_document_color_matrices(
+    vm: &RuntimeVm,
+    fiber: erabasic_vm::FiberId,
+    document: &mut erabasic_html::HtmlDocument,
+) {
+    fn resolve_node(
+        vm: &RuntimeVm,
+        fiber: erabasic_vm::FiberId,
+        node: &mut erabasic_html::HtmlNode,
+    ) {
+        let erabasic_html::HtmlNode::Element {
+            semantic, children, ..
+        } = node
+        else {
+            return;
+        };
+        if let erabasic_html::HtmlElementSemantic::Image { color_matrix, .. } = semantic
+            && let Some(erabasic_html::HtmlColorMatrix::Variable { name, indices }) = color_matrix
+        {
+            *color_matrix = read_named_color_matrix(vm, fiber, name, *indices)
+                .map(erabasic_html::HtmlColorMatrix::Fixed);
+        }
+        for child in children {
+            resolve_node(vm, fiber, child);
+        }
+    }
+
+    for node in &mut document.nodes {
+        resolve_node(vm, fiber, node);
+    }
+}
+
+impl PreparedHtmlColumnPrint {
+    fn prepare(name: &str, arguments: &[VmValue]) -> Result<Self, erabasic_html::HtmlError> {
+        let markup = arguments.first().map_or_else(String::new, display_value);
+        let (document, warnings) = erabasic_html::parse_document_with_warnings(&markup)?;
+        Ok(Self {
+            document,
+            warnings,
+            alignment: if name == "HTML_PRINTC" {
+                CellAlignment::Right
+            } else {
+                CellAlignment::Left
+            },
+            requested_pixels: arguments.get(1).map_or(0, integer_value_or_zero),
+            empty: markup.is_empty(),
+        })
+    }
+
+    fn apply(self, presentation: &mut PresentationModel) -> bool {
+        if self.empty {
+            return false;
+        }
+        presentation.append_html_column_cell(self.document, self.alignment, self.requested_pixels);
+        true
+    }
+}
+
 impl PreparedHtmlPrint {
     fn prepare(arguments: &[VmValue]) -> Result<Self, erabasic_html::HtmlError> {
         let markup = arguments.first().map_or_else(String::new, display_value);
@@ -904,6 +991,51 @@ fn emit_html_warnings(
         )?;
     }
     Ok(())
+}
+
+fn emit_html_profile_error(
+    session: &mut RuntimeSession,
+    command: &str,
+    error: &erabasic_html::HtmlError,
+    origin: &erabasic_vm::VmExecutionOrigin,
+    identity: &erabasic_compat::CompatibilityIdentity,
+) -> Result<(), RuntimeError> {
+    let attribute_error = matches!(
+        error.kind,
+        erabasic_html::HtmlErrorKind::InvalidAttribute
+            | erabasic_html::HtmlErrorKind::DuplicateAttribute
+            | erabasic_html::HtmlErrorKind::InvalidAttributeValue
+    );
+    session.emit(
+        RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+            context: Some(Box::new(
+                era_runtime_protocol::CompatibilityDiagnosticContext {
+                    identity: Some(identity.clone()),
+                    artifact: None,
+                    project_load_id: None,
+                    runtime_epoch: Some(session.epoch.0),
+                    generation: Some(origin.generation.0),
+                    stage: "runtime.html".into(),
+                    api: Some(command.into()),
+                    required_capability: None,
+                },
+            )),
+            code: if attribute_error {
+                "runtime.html.profile_attribute_rejected"
+            } else {
+                "runtime.html.profile_markup_rejected"
+            }
+            .into(),
+            level: RuntimeLogLevel::Error,
+            message: format!(
+                "{command} rejected {:?} for profile {} at UTF-8 bytes {}..{}",
+                error.kind, identity.profile, error.start, error.end
+            ),
+            source: protocol_execution_origin(origin.clone()).source,
+            notification: DiagnosticNotification::default(),
+        }),
+        None,
+    )
 }
 
 fn bind_last_output_buttons(session: &mut RuntimeSession) {

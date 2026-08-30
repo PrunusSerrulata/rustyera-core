@@ -234,6 +234,8 @@ pub(in super::super) fn is_runtime_print_command(name: &str) -> bool {
                 | "DRAWLINE"
                 | "CLEARLINE"
                 | "HTML_PRINT"
+                | "HTML_PRINTC"
+                | "HTML_PRINTLC"
                 | "HTML_PRINT_ISLAND"
                 | "HTML_PRINT_ISLAND_CLEAR"
                 | "PRINT_IMG"
