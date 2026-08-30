@@ -1,8 +1,9 @@
+use super::model::{CbgLayerIndex, ImageLayerIndex};
 use super::{PresentationModel, rgb_color};
 use era_runtime_protocol::{
-    AudioState, LogicalLength, ResourceReplay, SceneAnchorV1, SceneDeltaV1, SceneLayerV1,
-    SceneOffsetV1, SceneOperationV1, SceneScrollPolicyV1, SceneSizeV1, SceneSourceV1, SceneStateV1,
-    TooltipFormat,
+    AudioState, InteractionToken, LogicalLength, ProtocolValue, ResourceReplay, SceneAnchorV1,
+    SceneDeltaV1, SceneInteractionV1, SceneLayerV1, SceneOffsetV1, SceneOperationV1,
+    SceneScrollPolicyV1, SceneSizeV1, SceneSourceV1, SceneStateV1, TooltipFormat,
 };
 
 impl PresentationModel {
@@ -129,10 +130,312 @@ impl PresentationModel {
         self.apply_scene_operations(operations);
     }
 
-    /// CBG layers join the same scene in Batch 4.3. Until then an empty delta
-    /// still records the observable clear command and advances scene identity.
-    pub(crate) fn clear_client_backgrounds(&mut self) {
-        self.apply_scene_operations(Vec::new());
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn add_client_background(
+        &mut self,
+        source: SceneSourceV1,
+        depth: i64,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        opacity: u8,
+        color_matrix: Option<[i64; 25]>,
+        button: Option<(InteractionToken, i64, Option<SceneSourceV1>, Option<String>)>,
+    ) {
+        let layer_id = self.allocate_scene_layer_id();
+        let sequence = self.allocate_scene_sequence();
+        let interaction =
+            button
+                .as_ref()
+                .map(|(token, value, hover_source, title)| SceneInteractionV1 {
+                    token: *token,
+                    value: ProtocolValue::Integer(*value),
+                    enabled: true,
+                    hover_source: hover_source.clone(),
+                    hit_map: self.cbg_button_map.clone(),
+                    title: title.clone(),
+                });
+        self.apply_scene_operations(vec![SceneOperationV1::UpsertLayer {
+            layer: Box::new(SceneLayerV1 {
+                layer_id,
+                sequence,
+                source,
+                depth,
+                anchor: SceneAnchorV1::Viewport,
+                offset: scene_offset(x, y),
+                size: scene_size(width, height),
+                opacity,
+                color_matrix,
+                scroll_policy: SceneScrollPolicyV1::Fixed,
+                interaction,
+                scene_revision: self.scene.revision.saturating_add(1),
+            }),
+        }]);
+        self.cbg_layers.push(CbgLayerIndex {
+            layer_id,
+            depth,
+            interaction: button.map(|(token, _, _, _)| token),
+        });
+    }
+
+    pub(crate) fn clear_client_backgrounds(&mut self) -> Vec<InteractionToken> {
+        let tokens = self
+            .cbg_layers
+            .iter()
+            .filter_map(|entry| entry.interaction)
+            .collect();
+        let operations = self
+            .cbg_layers
+            .drain(..)
+            .map(|entry| SceneOperationV1::RemoveLayer {
+                layer_id: entry.layer_id,
+            })
+            .collect();
+        self.cbg_button_map = None;
+        self.apply_scene_operations(operations);
+        tokens
+    }
+
+    pub(crate) fn clear_client_background_range(
+        &mut self,
+        minimum: i64,
+        maximum: i64,
+    ) -> Vec<InteractionToken> {
+        if minimum > maximum {
+            return Vec::new();
+        }
+        let mut operations = Vec::new();
+        let mut tokens = Vec::new();
+        self.cbg_layers.retain(|entry| {
+            if (minimum..=maximum).contains(&entry.depth) {
+                operations.push(SceneOperationV1::RemoveLayer {
+                    layer_id: entry.layer_id,
+                });
+                tokens.extend(entry.interaction);
+                false
+            } else {
+                true
+            }
+        });
+        self.apply_scene_operations(operations);
+        tokens
+    }
+
+    pub(crate) fn clear_client_background_buttons(&mut self) -> Vec<InteractionToken> {
+        let mut operations = Vec::new();
+        let mut tokens = Vec::new();
+        self.cbg_layers.retain(|entry| {
+            if let Some(token) = entry.interaction {
+                operations.push(SceneOperationV1::RemoveLayer {
+                    layer_id: entry.layer_id,
+                });
+                tokens.push(token);
+                false
+            } else {
+                true
+            }
+        });
+        self.cbg_button_map = None;
+        self.apply_scene_operations(operations);
+        tokens
+    }
+
+    pub(crate) fn set_client_background_button_map(&mut self, source: SceneSourceV1) -> bool {
+        if self.cbg_button_map.as_ref() == Some(&source) {
+            return false;
+        }
+        self.cbg_button_map = Some(source);
+        self.refresh_client_background_interactions();
+        true
+    }
+
+    pub(crate) fn clear_client_background_button_map(&mut self) {
+        self.cbg_button_map = None;
+        self.refresh_client_background_interactions();
+    }
+
+    fn refresh_client_background_interactions(&mut self) {
+        let next_revision = self.scene.revision.saturating_add(1);
+        let mut operations = Vec::new();
+        for entry in self
+            .cbg_layers
+            .iter()
+            .filter(|entry| entry.interaction.is_some())
+        {
+            let Some(mut layer) = self
+                .scene
+                .layers
+                .iter()
+                .find(|layer| layer.layer_id == entry.layer_id)
+                .cloned()
+            else {
+                continue;
+            };
+            if let Some(interaction) = &mut layer.interaction {
+                interaction.hit_map.clone_from(&self.cbg_button_map);
+            }
+            layer.scene_revision = next_revision;
+            operations.push(SceneOperationV1::UpsertLayer {
+                layer: Box::new(layer),
+            });
+        }
+        if !operations.is_empty() {
+            self.apply_scene_operations(operations);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn add_image_layer(
+        &mut self,
+        source: SceneSourceV1,
+        depth: i64,
+        anchor: SceneAnchorV1,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        opacity: u8,
+        color_matrix: Option<[i64; 25]>,
+        follow_content: bool,
+    ) {
+        let layer_id = self.allocate_scene_layer_id();
+        let sequence = self.allocate_scene_sequence();
+        self.apply_scene_operations(vec![SceneOperationV1::UpsertLayer {
+            layer: Box::new(SceneLayerV1 {
+                layer_id,
+                sequence,
+                source,
+                depth,
+                anchor,
+                offset: scene_offset(x, y),
+                size: scene_size(width, height),
+                opacity,
+                color_matrix,
+                scroll_policy: if follow_content {
+                    SceneScrollPolicyV1::FollowContent
+                } else {
+                    SceneScrollPolicyV1::Fixed
+                },
+                interaction: None,
+                scene_revision: self.scene.revision.saturating_add(1),
+            }),
+        }]);
+        self.image_layers.push(ImageLayerIndex { layer_id, depth });
+    }
+
+    pub(crate) fn clear_image_layer(&mut self, depth: i64) {
+        let mut operations = Vec::new();
+        self.image_layers.retain(|entry| {
+            if entry.depth == depth {
+                operations.push(SceneOperationV1::RemoveLayer {
+                    layer_id: entry.layer_id,
+                });
+                false
+            } else {
+                true
+            }
+        });
+        self.apply_scene_operations(operations);
+    }
+
+    pub(crate) fn clear_image_layers(&mut self) {
+        let operations = self
+            .image_layers
+            .drain(..)
+            .map(|entry| SceneOperationV1::RemoveLayer {
+                layer_id: entry.layer_id,
+            })
+            .collect();
+        self.apply_scene_operations(operations);
+    }
+
+    pub(crate) fn image_layer_exists(&self, depth: i64) -> bool {
+        self.image_layers.iter().any(|entry| {
+            entry.depth == depth
+                && self
+                    .scene
+                    .layers
+                    .iter()
+                    .any(|layer| layer.layer_id == entry.layer_id)
+        })
+    }
+
+    pub(crate) const fn current_line_id(&self) -> u64 {
+        self.next_line
+    }
+
+    pub(crate) fn clear_anchored_scene_lines(&mut self, line_ids: &[u64]) {
+        if line_ids.is_empty() {
+            return;
+        }
+        let anchored_line_ids = self
+            .scene
+            .layers
+            .iter()
+            .filter_map(|layer| match layer.anchor {
+                SceneAnchorV1::DisplayLine { line_id } if line_ids.contains(&line_id) => {
+                    Some(line_id)
+                }
+                SceneAnchorV1::Viewport | SceneAnchorV1::DisplayLine { .. } => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        if anchored_line_ids.is_empty() {
+            return;
+        }
+        let removed_layer_ids = self
+            .scene
+            .layers
+            .iter()
+            .filter_map(|layer| match layer.anchor {
+                SceneAnchorV1::DisplayLine { line_id } if line_ids.contains(&line_id) => {
+                    Some(layer.layer_id)
+                }
+                SceneAnchorV1::Viewport | SceneAnchorV1::DisplayLine { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        self.image_layers
+            .retain(|entry| !removed_layer_ids.contains(&entry.layer_id));
+        let operations = anchored_line_ids
+            .into_iter()
+            .map(|line_id| SceneOperationV1::ClearAnchoredLine { line_id })
+            .collect();
+        self.apply_scene_operations(operations);
+    }
+
+    pub(crate) fn rebind_scene_interactions(
+        &mut self,
+        tokens: &std::collections::BTreeMap<InteractionToken, InteractionToken>,
+    ) {
+        for entry in &mut self.cbg_layers {
+            if let Some(token) = entry.interaction
+                && let Some(rebound) = tokens.get(&token)
+            {
+                entry.interaction = Some(*rebound);
+            }
+        }
+        let next_revision = self.scene.revision.saturating_add(1);
+        let operations = self
+            .scene
+            .layers
+            .iter()
+            .filter_map(|layer| {
+                let interaction = layer.interaction.as_ref()?;
+                let rebound = tokens.get(&interaction.token)?;
+                if *rebound == interaction.token {
+                    return None;
+                }
+                let mut layer = layer.clone();
+                layer.interaction.as_mut()?.token = *rebound;
+                layer.scene_revision = next_revision;
+                Some(SceneOperationV1::UpsertLayer {
+                    layer: Box::new(layer),
+                })
+            })
+            .collect::<Vec<_>>();
+        if !operations.is_empty() {
+            self.apply_scene_operations(operations);
+        }
     }
 
     fn apply_scene_operations(&mut self, operations: Vec<SceneOperationV1>) {
@@ -346,5 +649,19 @@ impl PresentationModel {
         self.trim_physical_history();
         self.delivery.dirty.settings = true;
         self.bump();
+    }
+}
+
+fn scene_offset(x: i32, y: i32) -> SceneOffsetV1 {
+    SceneOffsetV1 {
+        x: LogicalLength(i64::from(x).saturating_mul(1_000)),
+        y: LogicalLength(i64::from(y).saturating_mul(1_000)),
+    }
+}
+
+fn scene_size(width: i32, height: i32) -> SceneSizeV1 {
+    SceneSizeV1 {
+        width: LogicalLength(i64::from(width.max(0)).saturating_mul(1_000)),
+        height: LogicalLength(i64::from(height.max(0)).saturating_mul(1_000)),
     }
 }

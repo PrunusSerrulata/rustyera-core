@@ -78,6 +78,20 @@ impl PresentationModel {
                         .find_map(|run| enabled_button_value(run, token, self.button_generation))
                 })
             })
+            .or_else(|| {
+                self.scene.layers.iter().rev().find_map(|layer| {
+                    let interaction = layer.interaction.as_ref()?;
+                    if !interaction.enabled || interaction.token != token {
+                        return None;
+                    }
+                    Some(match &interaction.value {
+                        ProtocolValue::Integer(value) => VmValue::Integer(*value),
+                        ProtocolValue::String(value) => VmValue::String(value.clone()),
+                        ProtocolValue::Boolean(value) => VmValue::Integer(i64::from(*value)),
+                        ProtocolValue::Bytes(_) => VmValue::String(String::new()),
+                    })
+                })
+            })
     }
 
     pub(crate) fn replay_button(
@@ -177,6 +191,7 @@ impl PresentationModel {
             rebind_runs(&mut Arc::make_mut(line).runs, tokens);
         }
         rebind_runs(&mut self.pending_runs, tokens);
+        self.rebind_scene_interactions(tokens);
         self.delivery.dirty.force_snapshot = true;
         self.bump();
     }
@@ -229,10 +244,12 @@ impl PresentationModel {
     /// Delete canonical logical lines, including an uncommitted current line first.
     /// This models the small console-editing subset used by reference system flows.
     pub(crate) fn delete_last_lines(&mut self, mut count: usize) {
+        let mut removed_line_ids = Vec::new();
         let mut delivered_pending_deletion = 0;
         if count != 0 && !self.pending_runs.is_empty() {
             delivered_pending_deletion =
                 usize::from(self.delivery.pending_line_id == Some(self.next_line));
+            removed_line_ids.push(self.next_line);
             self.pending_runs.clear();
             self.pending_temporary = false;
             count -= 1;
@@ -241,10 +258,12 @@ impl PresentationModel {
         self.logical_line_count = self.logical_line_count.wrapping_sub(logical_deletions);
         self.line_count_dirty = true;
         let keep = self.lines.len().saturating_sub(count);
+        removed_line_ids.extend(self.lines.iter().skip(keep).map(|line| line.line_id));
         self.lines.truncate(keep);
         let physical_count =
             u32::try_from(count.saturating_add(delivered_pending_deletion)).unwrap_or(u32::MAX);
         self.record_history_delete(physical_count);
+        self.clear_anchored_scene_lines(&removed_line_ids);
         self.bump();
     }
 
@@ -258,9 +277,12 @@ impl PresentationModel {
             self.pending_runs.clear();
             false
         } else if self.lines.back().is_some_and(|line| line.temporary) {
-            self.lines.pop_back();
+            let line_id = self.lines.pop_back().map(|line| line.line_id);
             self.logical_line_count = self.logical_line_count.wrapping_sub(1);
             self.line_count_dirty = true;
+            if let Some(line_id) = line_id {
+                self.clear_anchored_scene_lines(&[line_id]);
+            }
             true
         } else {
             false
@@ -881,7 +903,14 @@ impl PresentationModel {
         if excess == 0 {
             return;
         }
+        let removed_line_ids = self
+            .lines
+            .iter()
+            .take(excess)
+            .map(|line| line.line_id)
+            .collect::<Vec<_>>();
         self.lines.drain(..excess);
+        self.clear_anchored_scene_lines(&removed_line_ids);
         let count = u32::try_from(excess).unwrap_or(u32::MAX);
         if let Some(PresentationHistoryEdit::TrimPhysical { count: previous }) =
             self.history_edits.last_mut()

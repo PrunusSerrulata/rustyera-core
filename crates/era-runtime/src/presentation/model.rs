@@ -4,9 +4,9 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use era_runtime_protocol::{
-    AudioState, Color, DisplayLine, DisplayRun, InputWait, LineAlignment, PresentationDelta,
-    PresentationHistoryOperation, PresentationSettings, PresentationSnapshot, ResourceReplay,
-    SceneOperationV1, SceneStateV1, TextStyle, TooltipSettings,
+    AudioState, Color, DisplayLine, DisplayRun, InputWait, InteractionToken, LineAlignment,
+    PresentationDelta, PresentationHistoryOperation, PresentationSettings, PresentationSnapshot,
+    ResourceReplay, SceneOperationV1, SceneSourceV1, SceneStateV1, TextStyle, TooltipSettings,
 };
 use erabasic_vm::CharacterWidthMode;
 use serde::{Deserialize, Serialize};
@@ -56,6 +56,12 @@ pub(crate) struct PresentationModel {
     /// Non-visual SETBGIMAGE lookup index; `scene` remains the sole rendered authority.
     #[serde(default)]
     pub(super) background_layers: Vec<(String, u64)>,
+    #[serde(default)]
+    pub(super) cbg_layers: Vec<CbgLayerIndex>,
+    #[serde(default)]
+    pub(super) cbg_button_map: Option<SceneSourceV1>,
+    #[serde(default)]
+    pub(super) image_layers: Vec<ImageLayerIndex>,
     #[serde(default = "first_scene_identifier")]
     pub(super) next_scene_layer_id: u64,
     #[serde(default = "first_scene_identifier")]
@@ -70,6 +76,19 @@ pub(crate) struct PresentationModel {
     pub(super) character_width_mode: CharacterWidthMode,
     #[serde(skip)]
     pub(super) delivery: PresentationDelivery,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(super) struct CbgLayerIndex {
+    pub(super) layer_id: u64,
+    pub(super) depth: i64,
+    pub(super) interaction: Option<InteractionToken>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(super) struct ImageLayerIndex {
+    pub(super) layer_id: u64,
+    pub(super) depth: i64,
 }
 
 #[derive(Clone, Debug, Default)]

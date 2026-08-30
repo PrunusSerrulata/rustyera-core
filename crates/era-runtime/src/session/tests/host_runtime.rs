@@ -1949,6 +1949,90 @@ fn animation_timer_preserves_profile_forms_and_snake_command_result() {
 }
 
 #[test]
+fn snake_cbg_and_image_layer_calls_project_one_ordered_scene_authority() {
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let source = "@SYSTEM_TITLE\n\
+        FLAG:0 = GCREATE(1, 4, 4)\n\
+        FLAG:1 = SPRITECREATE(\"ONE\", 1)\n\
+        FLAG:2 = SPRITECREATE(\"HOVER\", 1)\n\
+        FLAG:3 = CBGSETG(1, 10, 20, 5)\n\
+        FLAG:4 = CBGSETSPRITE(\"ONE\")\n\
+        FLAG:5 = CBGSETBUTTONSPRITE(33, \"ONE\", \"HOVER\", 1, 2, 6, \"tip\")\n\
+        FLAG:6 = CBGSETBMAPG(1)\n\
+        SETIMAGELAYER \"ONE\", 7\n\
+        FLAG:7 = EXISTSIMAGELAYER(7)\n\
+        SETIMAGELAYER \"ONE\", 7, 3, 4, 5, 6, 128\n\
+        SETIMAGELAYERL \"ONE\", 8\n\
+        CLEARIMAGELAYER 7\n\
+        FLAG:8 = EXISTSIMAGELAYER(7)\n\
+        CLEARIMAGELAYER_ALL\n\
+        FLAG:9 = CBGREMOVERANGE(5, 5)\n\
+        FLAG:10 = CBGCLEARBUTTON()\n\
+        FLAG:11 = CBGSETG(1, 30, 40, 6)\n\
+        FLAG:12 = CBGSETBUTTONSPRITE(44, \"MISSING\", \"HOVER\", 1, 2, 9)\n\
+        WAIT\n\
+        RETURN\n";
+    let (mut session, _, messages) = run_immediate_query_project_with_profile(source, snake);
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:#?}");
+    let vm = session.vm.as_ref().unwrap();
+    for index in 0..=7 {
+        assert_eq!(
+            read_runtime_integer(vm, "FLAG", &[index], None).unwrap(),
+            1,
+            "FLAG:{index}"
+        );
+    }
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[8], None).unwrap(), 0);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[9], None).unwrap(), 1);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[10], None).unwrap(), 1);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[11], None).unwrap(), 1);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[12], None).unwrap(), 1);
+
+    session
+        .presentation
+        .set_projection(true, true, false, true, false);
+    let snapshot = session.presentation.snapshot();
+    assert_eq!(snapshot.scene.layers.len(), 2);
+    assert_eq!(snapshot.scene.layers[0].depth, 6);
+    assert_eq!(
+        snapshot.scene.layers[0].offset.x,
+        era_runtime_protocol::LogicalLength(30_000)
+    );
+    assert_eq!(
+        snapshot.scene.layers[0].offset.y,
+        era_runtime_protocol::LogicalLength(40_000)
+    );
+    assert_eq!(snapshot.scene.layers[1].depth, 1);
+    assert!(matches!(
+        &snapshot.scene.layers[1].source,
+        era_runtime_protocol::SceneSourceV1::Sprite { sprite_name, .. }
+            if sprite_name == "ONE"
+    ));
+    assert!(
+        snapshot
+            .scene
+            .layers
+            .iter()
+            .all(|layer| layer.interaction.is_none())
+    );
+}
+
+#[test]
+fn snake_cbg_rejects_reserved_zero_depth_without_mutating_the_scene() {
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let (session, _, messages) = run_immediate_query_project_with_profile(
+        "@SYSTEM_TITLE\nFLAG:0 = GCREATE(1, 1, 1)\nFLAG:1 = CBGSETG(1, 0, 0, 0)\nWAIT\nRETURN\n",
+        snake,
+    );
+    assert_eq!(session.phase(), RuntimePhase::Faulted, "{messages:#?}");
+    assert!(session.presentation.snapshot().scene.layers.is_empty());
+}
+
+#[test]
 fn snake_display_queries_and_whole_line_background_use_canonical_history() {
     let snake = erabasic_compat::CompatibilityIdentity::for_profile(
         erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,

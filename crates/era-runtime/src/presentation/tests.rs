@@ -1,7 +1,8 @@
 use super::projection::plain_text;
 use super::*;
 use era_runtime_protocol::{
-    CellWidthIntent, Color, PresentationDelta, PresentationSnapshot, ResourceReplay, SceneSourceV1,
+    CellWidthIntent, Color, PresentationDelta, PresentationSnapshot, ResourceReplay, SceneAnchorV1,
+    SceneScrollPolicyV1, SceneSourceV1,
 };
 use serde::Serialize;
 
@@ -75,6 +76,13 @@ fn runtime_projection_queries_use_physical_and_logical_history_order() {
 
     model.set_alignment(LineAlignment::Right);
     model.append_print_text("pending".into(), false, false);
+    assert_eq!(model.line_id_at_display_index(0), Some(1));
+    assert_eq!(
+        model.line_id_at_display_index(3),
+        Some(model.current_line_id())
+    );
+    assert_eq!(model.line_id_at_display_index(-1), None);
+    assert_eq!(model.line_id_at_display_index(4), None);
     assert_eq!(model.display_line(3, false), "pending");
     assert_eq!(
         model.printed_html_line(0),
@@ -100,6 +108,173 @@ fn runtime_projection_queries_use_physical_and_logical_history_order() {
     assert_eq!(model.display_line(-1, true), "trim-b");
     assert_eq!(model.display_line(-2, true), "trim-a");
     assert_eq!(model.display_line(-3, true), "");
+}
+
+fn test_scene_source(name: &str, revision: u64) -> SceneSourceV1 {
+    SceneSourceV1::Sprite {
+        sprite_name: name.into(),
+        resource_revision: revision,
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn snake_cbg_and_image_layers_keep_stable_order_and_type_scoped_clear_rules() {
+    let mut model = PresentationModel::default();
+    model.add_client_background(
+        test_scene_source("low", 1),
+        2,
+        0,
+        0,
+        10,
+        10,
+        255,
+        None,
+        None,
+    );
+    let token = InteractionToken { epoch: 3, id: 4 };
+    model.add_client_background(
+        test_scene_source("button", 2),
+        5,
+        1,
+        2,
+        3,
+        4,
+        127,
+        None,
+        Some((
+            token,
+            42,
+            Some(test_scene_source("hover", 3)),
+            Some("tip".into()),
+        )),
+    );
+    model.add_image_layer(
+        test_scene_source("image", 4),
+        5,
+        SceneAnchorV1::Viewport,
+        5,
+        6,
+        7,
+        8,
+        255,
+        None,
+        false,
+    );
+
+    assert_eq!(
+        model
+            .scene
+            .layers
+            .iter()
+            .map(|layer| (layer.depth, layer.sequence))
+            .collect::<Vec<_>>(),
+        [(5, 2), (5, 3), (2, 1)]
+    );
+    assert!(model.image_layer_exists(5));
+    let map = SceneSourceV1::Canvas {
+        canvas_id: 9,
+        resource_revision: 10,
+    };
+    assert!(model.set_client_background_button_map(map.clone()));
+    assert!(!model.set_client_background_button_map(map.clone()));
+    let button = model
+        .scene
+        .layers
+        .iter()
+        .find(|layer| layer.source == test_scene_source("button", 2))
+        .unwrap();
+    let interaction = button.interaction.as_ref().unwrap();
+    assert_eq!(interaction.token, token);
+    assert_eq!(interaction.value, ProtocolValue::Integer(42));
+    assert_eq!(interaction.hit_map, Some(map));
+    assert_eq!(interaction.title.as_deref(), Some("tip"));
+    assert_eq!(
+        model.enabled_button_value(token),
+        Some(VmValue::Integer(42))
+    );
+    assert_eq!(
+        model.enabled_button_value(token),
+        Some(VmValue::Integer(42)),
+        "scene buttons remain authoritative across waits"
+    );
+
+    let rebound = InteractionToken { epoch: 8, id: 9 };
+    let revision = model.scene.revision;
+    model.rebind_scene_interactions(&std::collections::BTreeMap::from([(token, rebound)]));
+    assert_eq!(model.scene.revision, revision + 1);
+    assert_eq!(model.enabled_button_value(token), None);
+    assert_eq!(
+        model.enabled_button_value(rebound),
+        Some(VmValue::Integer(42))
+    );
+
+    model.clear_image_layer(5);
+    assert!(!model.image_layer_exists(5));
+    assert!(
+        model
+            .scene
+            .layers
+            .iter()
+            .any(|layer| layer.source == test_scene_source("button", 2))
+    );
+    assert_eq!(model.clear_client_background_range(5, 5), [rebound]);
+    assert_eq!(model.enabled_button_value(rebound), None);
+    assert_eq!(model.scene.layers.len(), 1);
+    assert_eq!(model.scene.layers[0].source, test_scene_source("low", 1));
+    assert!(model.clear_client_backgrounds().is_empty());
+    assert!(model.scene.layers.is_empty());
+}
+
+#[test]
+fn line_anchored_image_layers_follow_content_and_expire_with_stable_lines() {
+    let mut model = PresentationModel::default();
+    let first_line_id = model.current_line_id();
+    model.add_image_layer(
+        test_scene_source("line-image", 1),
+        3,
+        SceneAnchorV1::DisplayLine {
+            line_id: first_line_id,
+        },
+        0,
+        0,
+        1,
+        1,
+        255,
+        None,
+        true,
+    );
+    assert_eq!(
+        model.scene.layers[0].scroll_policy,
+        SceneScrollPolicyV1::FollowContent
+    );
+    model.append_print_text("line".into(), false, true);
+    assert_eq!(model.line_id_at_display_index(0), Some(first_line_id));
+    model.delete_last_lines(1);
+    assert!(!model.image_layer_exists(3));
+    assert!(model.scene.layers.is_empty());
+
+    model.settings.maximum_physical_lines = 1;
+    let trimmed_line_id = model.current_line_id();
+    model.add_image_layer(
+        test_scene_source("trimmed-image", 2),
+        4,
+        SceneAnchorV1::DisplayLine {
+            line_id: trimmed_line_id,
+        },
+        0,
+        0,
+        1,
+        1,
+        255,
+        None,
+        true,
+    );
+    model.append_print_text("trimmed".into(), false, true);
+    model.append_print_text("survivor".into(), false, true);
+    assert_eq!(model.line_id_at_display_index(0), Some(trimmed_line_id + 1));
+    assert!(!model.image_layer_exists(4));
+    assert!(model.scene.layers.is_empty());
 }
 
 #[test]
