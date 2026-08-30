@@ -12,7 +12,7 @@ use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
 use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 27;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 28;
 #[cfg(test)]
 const LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 20;
 pub(crate) const CULTURE_TABLE_VERSION: u32 = 1;

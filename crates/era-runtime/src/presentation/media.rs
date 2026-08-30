@@ -1,6 +1,8 @@
 use super::{PresentationModel, rgb_color};
 use era_runtime_protocol::{
-    AudioState, LogicalLength, MediaPlacement, RationalOpacity, ResourceReplay, TooltipFormat,
+    AudioState, LogicalLength, ResourceReplay, SceneAnchorV1, SceneDeltaV1, SceneLayerV1,
+    SceneOffsetV1, SceneOperationV1, SceneScrollPolicyV1, SceneSizeV1, SceneSourceV1, SceneStateV1,
+    TooltipFormat,
 };
 
 impl PresentationModel {
@@ -67,66 +69,121 @@ impl PresentationModel {
             && (self.input_wait.is_some() || (self.redraw_enabled && self.delivery.dirty.redraw))
     }
 
-    pub(crate) fn add_background(&mut self, resource_id: String, depth: i64, opacity: i64) {
-        self.backgrounds.push(MediaPlacement {
-            resource_id,
-            x: LogicalLength(0),
-            y: LogicalLength(0),
-            width: self.settings.drawable_width,
-            height: LogicalLength(0),
-            depth,
-            opacity: RationalOpacity {
-                numerator: opacity,
-                denominator: 255,
-            },
-            revision: self.revision.saturating_add(1),
-            hover_resource_id: None,
-            mask_resource_id: None,
-            requested_width: None,
-            requested_height: None,
-            requested_y: None,
-        });
-        // Stable descending sort matches List.Sort's intended depth layering
-        // while retaining insertion order for equal-depth portable replay.
-        self.backgrounds
-            .sort_by_key(|placement| std::cmp::Reverse(placement.depth));
-        self.delivery.dirty.backgrounds = true;
-        self.bump();
+    pub(crate) fn add_background(
+        &mut self,
+        resource_id: String,
+        resource_revision: u64,
+        depth: i64,
+        opacity: i64,
+    ) {
+        let layer_id = self.allocate_scene_layer_id();
+        let sequence = self.allocate_scene_sequence();
+        let operation = SceneOperationV1::UpsertLayer {
+            layer: Box::new(SceneLayerV1 {
+                layer_id,
+                sequence,
+                source: SceneSourceV1::Sprite {
+                    sprite_name: resource_id.clone(),
+                    resource_revision,
+                },
+                depth,
+                anchor: SceneAnchorV1::Viewport,
+                offset: SceneOffsetV1 {
+                    x: LogicalLength(0),
+                    y: LogicalLength(0),
+                },
+                size: SceneSizeV1 {
+                    width: self.settings.drawable_width,
+                    height: LogicalLength(0),
+                },
+                opacity: u8::try_from(opacity).unwrap_or(if opacity < 0 { 0 } else { u8::MAX }),
+                color_matrix: None,
+                scroll_policy: SceneScrollPolicyV1::Fixed,
+                interaction: None,
+                scene_revision: self.scene.revision.saturating_add(1),
+            }),
+        };
+        self.apply_scene_operations(vec![operation]);
+        self.background_layers.push((resource_id, layer_id));
     }
 
     pub(crate) fn remove_background(&mut self, resource_id: &str) -> bool {
         let Some(index) = self
-            .backgrounds
+            .background_layers
             .iter()
-            .position(|item| item.resource_id == resource_id)
+            .position(|(current, _)| current == resource_id)
         else {
             return false;
         };
-        self.backgrounds.remove(index);
-        self.delivery.dirty.backgrounds = true;
-        self.bump();
+        let (_, layer_id) = self.background_layers.remove(index);
+        self.apply_scene_operations(vec![SceneOperationV1::RemoveLayer { layer_id }]);
         true
     }
 
     pub(crate) fn clear_backgrounds(&mut self) {
-        self.backgrounds.clear();
-        self.delivery.dirty.backgrounds = true;
-        self.bump();
+        let operations = self
+            .background_layers
+            .drain(..)
+            .map(|(_, layer_id)| SceneOperationV1::RemoveLayer { layer_id })
+            .collect::<Vec<_>>();
+        self.apply_scene_operations(operations);
     }
 
+    /// CBG layers join the same scene in Batch 4.3. Until then an empty delta
+    /// still records the observable clear command and advances scene identity.
     pub(crate) fn clear_client_backgrounds(&mut self) {
-        self.client_backgrounds.clear();
-        self.delivery.dirty.backgrounds = true;
+        self.apply_scene_operations(Vec::new());
+    }
+
+    fn apply_scene_operations(&mut self, operations: Vec<SceneOperationV1>) {
+        let delta = SceneDeltaV1 {
+            base_revision: self.scene.revision,
+            new_revision: self.scene.revision.saturating_add(1),
+            operations: operations.clone(),
+        };
+        self.scene
+            .apply_delta(&delta)
+            .expect("runtime-created scene deltas satisfy the public contract");
+        self.scene_operations.extend(operations);
+        self.delivery.dirty.scene = true;
         self.bump();
     }
 
-    pub(super) fn projected_backgrounds(&self) -> Vec<MediaPlacement> {
-        let mut backgrounds =
-            Vec::with_capacity(self.backgrounds.len() + self.client_backgrounds.len());
-        backgrounds.extend(self.backgrounds.iter().cloned());
-        backgrounds.extend(self.client_backgrounds.iter().cloned());
-        backgrounds.sort_by_key(|placement| std::cmp::Reverse(placement.depth));
-        backgrounds
+    fn allocate_scene_layer_id(&mut self) -> u64 {
+        let layer_id = self.next_scene_layer_id;
+        self.next_scene_layer_id = self.next_scene_layer_id.saturating_add(1);
+        layer_id
+    }
+
+    fn allocate_scene_sequence(&mut self) -> u64 {
+        let sequence = self.next_scene_sequence;
+        self.next_scene_sequence = self.next_scene_sequence.saturating_add(1);
+        sequence
+    }
+
+    pub(super) fn projected_scene(&self) -> SceneStateV1 {
+        if self.project_graphics {
+            self.scene.clone()
+        } else {
+            SceneStateV1 {
+                revision: self.scene.revision,
+                layers: Vec::new(),
+            }
+        }
+    }
+
+    pub(super) fn projected_scene_delta(&self, base_revision: u64) -> SceneDeltaV1 {
+        SceneDeltaV1 {
+            base_revision,
+            new_revision: self.scene.revision,
+            operations: if self.project_graphics {
+                self.scene_operations.clone()
+            } else {
+                vec![SceneOperationV1::ReplaceScene {
+                    scene: self.projected_scene(),
+                }]
+            },
+        }
     }
 
     pub(crate) fn set_tooltip_colors(&mut self, foreground: i64, background: i64) {

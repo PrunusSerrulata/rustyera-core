@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct SpriteDefinition {
     pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) revision: u64,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) frames: Vec<SpriteFrame>,

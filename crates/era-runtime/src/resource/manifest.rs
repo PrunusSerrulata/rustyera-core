@@ -47,6 +47,7 @@ pub(super) fn parse_resource_manifest(
                 name.clone(),
                 SpriteDefinition {
                     name: name.clone(),
+                    revision: graph.static_sprite_revision,
                     width: width.cast_unsigned(),
                     height: height.cast_unsigned(),
                     frames: Vec::new(),
@@ -128,6 +129,7 @@ pub(super) fn parse_resource_manifest(
             name.clone(),
             SpriteDefinition {
                 name,
+                revision: graph.static_sprite_revision,
                 width: destination.map_or(0, |value| value.0),
                 height: destination.map_or(0, |value| value.1),
                 frames: vec![frame],

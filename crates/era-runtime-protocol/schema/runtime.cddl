@@ -1,4 +1,4 @@
-; Runtime channel version: 41.0.
+; Runtime channel version: 42.0.
 ; RuntimeMessage is encoded as a minicbor enum [stable-tag, typed-body].
 runtime-message =
   [0, client-hello] /
@@ -181,20 +181,105 @@ presentation-settings = {
   0: int, 1: int, 2: color, 3: color, 4: uint, 5: bool, 6: bool, 7: int,
   8: color / null
 }
+cell-width-intent = [0, [uint]] / [1, [uint]]
+html-length = [0, [int]] / [1, [int]]
+html-attribute = { 0: tstr, 1: tstr }
+html-interaction = {
+  0: uint, 1: uint, ? 2: int, ? 3: tstr, 4: uint, 5: bool
+}
+html-text-render-intent = { ? 0: 0..1, ? 1: 0..2, ? 2: 0..3 }
+html-color-matrix =
+  [0, [tstr, [uint, uint, uint]]] /
+  [1, [[int, int, int, int, int, int, int, int, int, int,
+        int, int, int, int, int, int, int, int, int, int,
+        int, int, int, int, int]]]
+html-box-model = {
+  ? 0: [html-length, html-length, html-length, html-length],
+  ? 1: [html-length, html-length, html-length, html-length],
+  ? 2: [html-length, html-length, html-length, html-length],
+  ? 3: [html-length, html-length, html-length, html-length],
+  ? 4: [uint, uint, uint, uint]
+}
+html-semantic =
+  [0, []] / ; Style
+  [1, [tstr / null, uint / null, uint / null, uint / null, 0..2 / null,
+       html-text-render-intent]] / ; Font
+  [2, [0..2]] / ; Paragraph
+  [3, []] / ; NoBreak
+  [4, [tstr / null, tstr / null, int / null]] / ; Button
+  [5, [tstr / null, int / null]] / ; NonButton
+  [6, [bool]] / ; ClearButton
+  [7, [tstr, tstr / null, tstr / null, html-length / null, html-length / null,
+       html-length / null, html-length / null, 0..3, html-color-matrix / null]] / ; Image
+  [8, [tstr, [* html-length], uint / null, uint / null]] / ; Shape
+  [9, [html-length / null, html-length / null, html-length, html-length / null,
+       int, uint / null, 0..3, html-box-model]] / ; Division
+  [10, []] ; Break
+html-node =
+  [0, [tstr, uint, uint]] /
+  [1, [0..13, [* html-attribute], [* html-node], html-interaction / null,
+       uint, uint, html-semantic]]
+html-document = { 0: [* html-node] }
+display-run =
+  [0, any] /
+  [1, any] /
+  [2, [html-document]] /
+  [3, any] /
+  [4, any] /
+  [5, [[* display-run], 0..1, cell-width-intent]] /
+  [6, any] /
+  [7, any] /
+  [8, any]
+scene-source-v1 =
+  [0, [tstr, uint]] / ; Resource
+  [1, [tstr, uint]] / ; Sprite
+  [2, [int, uint]]    ; Canvas
+scene-anchor-v1 = [0, []] / [1, [uint]]
+scene-scroll-policy-v1 = 0..1
+scene-offset-v1 = { 0: int, 1: int }
+scene-size-v1 = { 0: int, 1: int }
+scene-interaction-v1 = { 0: interaction-token, 1: any, 2: bool }
+scene-layer-v1 = {
+  0: uint, 1: uint, 2: scene-source-v1, 3: int, 4: scene-anchor-v1,
+  5: scene-offset-v1, 6: scene-size-v1, 7: 0..255,
+  ? 8: [int, int, int, int, int, int, int, int, int, int,
+      int, int, int, int, int, int, int, int, int, int,
+      int, int, int, int, int],
+  9: scene-scroll-policy-v1, ? 10: scene-interaction-v1, 11: uint
+}
+scene-state-v1 = { 0: uint, 1: [* scene-layer-v1] }
+scene-operation-v1 =
+  [0, [scene-layer-v1]] /
+  [1, [uint]] /
+  [2, [int]] /
+  [3, [uint]] /
+  [4, [scene-state-v1]]
+scene-delta-v1 = { 0: uint, 1: uint, 2: [* scene-operation-v1] }
 presentation-snapshot = {
-  0: uint, 1: tstr, 2: presentation-history, 3: [* any], 4: [* any],
-  5: any / null, 6: presentation-settings, 7: any, 8: any, 9: [* any], 10: redraw-state
+  0: uint, 1: tstr, 2: presentation-history, 3: scene-state-v1, 4: [* any],
+  5: any / null, 6: presentation-settings, 7: any, 8: resource-replay,
+  9: [* html-document], 10: redraw-state
 }
 display-line = {
-  0: uint, 1: bool, 2: bool, 3: bool, 4: uint, 5: [* any], 6: bool
+  0: uint, 1: bool, 2: bool, 3: bool, 4: uint, 5: [* display-run], 6: bool
 }
+sprite-frame-replay = {
+  0: tstr, 1: [int, int, int, int], 2: [int, int], 3: uint,
+  ? 4: [uint, uint], ? 5: int
+}
+canvas-rect = { 0: int, 1: int, 2: int, 3: int }
+sprite-replay = {
+  0: tstr, 1: [uint, uint], 2: [int, int], 3: [* sprite-frame-replay],
+  ? 4: int, ? 5: canvas-rect, 6: uint
+}
+resource-replay = { 0: [* sprite-replay], 1: [* any], 2: int }
 presentation-delta = { 0: uint, 1: uint, 2: [* presentation-operation] }
 presentation-operation =
   [0, [display-line]] /
   [1, [uint]] /
   [2, []] /
   [3, [tstr]] /
-  [4, [[* any]]] /
+  [4, [scene-delta-v1]] /
   [5, [[* any]]] /
   [6, [any / null]] /
   [7, [uint, display-line]] /
@@ -267,7 +352,8 @@ sql-response-v1 = {
   0: sql-provider-handle-v1, 1: sql-database-state-v1 / null,
   2: sql-reader-state-v1 / null, 3: sql-result-v1
 }
-; Protocol 41 adds safe SQL v1 payloads and ServiceKind 11 while retaining the existing descriptor,
+; Protocol 42 adds canonical scene v1 snapshots/deltas and pixel/column cell width intents.
+; It retains Protocol 41 safe SQL v1 payloads and ServiceKind 11 with the existing descriptor,
 ; digest, chunking, and cancellation flow. It retains Protocol 24 authoritative logs,
 ; Protocol 23 snapshot purposes, source-identity-first project loading,
 ; bounded storage range reads,

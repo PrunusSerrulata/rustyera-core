@@ -1,6 +1,8 @@
 use super::projection::plain_text;
 use super::*;
-use era_runtime_protocol::{Color, PresentationDelta, PresentationSnapshot, ResourceReplay};
+use era_runtime_protocol::{
+    CellWidthIntent, Color, PresentationDelta, PresentationSnapshot, ResourceReplay, SceneSourceV1,
+};
 use serde::Serialize;
 
 fn display_text(run: &DisplayRun) -> Option<&str> {
@@ -404,8 +406,8 @@ fn apply_delta(snapshot: &mut PresentationSnapshot, delta: PresentationDelta) {
                 snapshot.history.logical_lines.drain(..count);
             }
             PresentationOperation::SetTitle { title } => snapshot.title = title,
-            PresentationOperation::SetBackgrounds { backgrounds } => {
-                snapshot.backgrounds = backgrounds;
+            PresentationOperation::ApplySceneDelta { delta } => {
+                snapshot.scene.apply_delta(&delta).unwrap();
             }
             PresentationOperation::SetAudio { audio } => snapshot.audio = audio,
             PresentationOperation::SetInputWait { input_wait } => {
@@ -443,7 +445,7 @@ fn assert_visible_snapshot_eq(left: &PresentationSnapshot, right: &PresentationS
     assert_eq!(left.revision, right.revision);
     assert_eq!(left.title, right.title);
     assert_eq!(left.history.logical_lines, right.history.logical_lines);
-    assert_eq!(left.backgrounds, right.backgrounds);
+    assert_eq!(left.scene, right.scene);
     assert_eq!(left.audio, right.audio);
     assert_eq!(left.input_wait, right.input_wait);
     assert_eq!(left.settings, right.settings);
@@ -478,7 +480,7 @@ fn presentation_deltas_replay_to_the_same_visible_state_as_a_snapshot() {
     model.set_redraw(false);
     model.set_tooltip_delay(250).unwrap();
     model.set_resource_replay(ResourceReplay::default());
-    model.add_background("background".into(), 2, 128);
+    model.add_background("background".into(), 7, 2, 128);
     model.play_bgm("sound".into());
     model.append_html_island(erabasic_html::parse_document("<b>top</b>").unwrap());
     model.set_button_generation(1);
@@ -1513,15 +1515,19 @@ fn html_pop_serializes_semantic_button_values_and_consumes_pending_runs() {
 fn backgrounds_and_tooltips_are_recoverable_canonical_state() {
     let mut model = PresentationModel::default();
     model.set_projection(true, true, true, true, true);
-    model.add_background("BACK".into(), 2, 128);
+    model.add_background("BACK".into(), 8, 2, 128);
     model.set_tooltip_colors(0x0011_2233, 0x0044_5566);
     model.set_tooltip_delay(250).unwrap();
     model.set_tooltip_duration(100_000).unwrap();
     let snapshot = model.snapshot();
-    assert_eq!(snapshot.backgrounds.len(), 1);
-    assert_eq!(snapshot.backgrounds[0].depth, 2);
-    assert_eq!(snapshot.backgrounds[0].opacity.numerator, 128);
-    assert_eq!(snapshot.backgrounds[0].opacity.denominator, 255);
+    assert_eq!(snapshot.scene.layers.len(), 1);
+    assert_eq!(snapshot.scene.layers[0].depth, 2);
+    assert_eq!(snapshot.scene.layers[0].opacity, 128);
+    assert!(matches!(
+        &snapshot.scene.layers[0].source,
+        SceneSourceV1::Sprite { sprite_name, resource_revision }
+            if sprite_name == "BACK" && *resource_revision == 8
+    ));
     assert_eq!(snapshot.tooltip.delay_ms, 250);
     assert_eq!(snapshot.tooltip.duration_ms, i16::MAX as u32);
 }
@@ -1530,31 +1536,29 @@ fn backgrounds_and_tooltips_are_recoverable_canonical_state() {
 fn clearing_client_backgrounds_preserves_set_bg_image_state() {
     let mut model = PresentationModel::default();
     model.set_projection(true, true, true, true, true);
-    model.add_background("PERSISTENT".into(), 2, 255);
-    model.client_backgrounds.push(MediaPlacement {
-        resource_id: "CBG".into(),
-        x: LogicalLength(0),
-        y: LogicalLength(0),
-        width: LogicalLength(1),
-        height: LogicalLength(1),
-        depth: 1,
-        opacity: RationalOpacity {
-            numerator: 255,
-            denominator: 255,
-        },
-        revision: 1,
-        hover_resource_id: None,
-        mask_resource_id: None,
-        requested_width: None,
-        requested_height: None,
-        requested_y: None,
-    });
+    model.add_background("PERSISTENT".into(), 9, 2, 255);
 
+    let before = model.snapshot().scene.revision;
     model.clear_client_backgrounds();
 
     let snapshot = model.snapshot();
-    assert_eq!(snapshot.backgrounds.len(), 1);
-    assert_eq!(snapshot.backgrounds[0].resource_id, "PERSISTENT");
+    assert_eq!(snapshot.scene.revision, before + 1);
+    assert_eq!(snapshot.scene.layers.len(), 1);
+    assert!(matches!(
+        &snapshot.scene.layers[0].source,
+        SceneSourceV1::Sprite { sprite_name, .. } if sprite_name == "PERSISTENT"
+    ));
+}
+
+#[test]
+fn empty_background_clear_still_advances_scene_revision() {
+    let mut model = PresentationModel::default();
+    model.set_projection(true, true, true, true, true);
+    let before = model.snapshot().scene.revision;
+    model.clear_backgrounds();
+    let snapshot = model.snapshot();
+    assert_eq!(snapshot.scene.revision, before + 1);
+    assert!(snapshot.scene.layers.is_empty());
 }
 
 #[test]
@@ -1569,13 +1573,13 @@ fn history_buttons_redraw_and_duplicate_backgrounds_remain_semantic() {
     );
     model.append_text(String::new(), false);
     model.set_button_generation(1);
-    model.add_background("SAME".into(), 1, 1);
-    model.add_background("SAME".into(), 3, 2);
+    model.add_background("SAME".into(), 10, 1, 1);
+    model.add_background("SAME".into(), 11, 3, 2);
     model.set_tooltip_format(2 | 16 | (1_i64 << 40));
     model.set_redraw(false);
     let snapshot = model.snapshot();
-    assert_eq!(snapshot.backgrounds.len(), 2);
-    assert_eq!(snapshot.backgrounds[0].depth, 3);
+    assert_eq!(snapshot.scene.layers.len(), 2);
+    assert_eq!(snapshot.scene.layers[0].depth, 3);
     assert!(!snapshot.redraw.enabled);
     assert_eq!(
         snapshot.tooltip.normalized_format.flags,
@@ -1601,7 +1605,7 @@ fn history_buttons_redraw_and_duplicate_backgrounds_remain_semantic() {
         }
     ));
     assert!(model.remove_background("SAME"));
-    assert_eq!(model.snapshot().backgrounds.len(), 1);
+    assert_eq!(model.snapshot().scene.layers.len(), 1);
 }
 
 #[test]

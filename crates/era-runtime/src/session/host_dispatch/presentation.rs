@@ -565,13 +565,13 @@ impl RuntimeSession {
             let resource = request.argument(0).map_or_else(String::new, display_value);
             let depth = request.argument(1).map_or(0, integer_value_or_zero);
             let opacity = request.argument(2).map_or(255, integer_value_or_zero);
-            let exists = self
+            let resource_revision = self
                 .project_snapshot
                 .as_ref()
-                .and_then(|project| project.resource_graph.sprite(&resource))
-                .is_some();
-            if exists {
-                self.presentation.add_background(resource, depth, opacity);
+                .and_then(|project| project.resource_graph.sprite_revision(&resource));
+            if let Some(resource_revision) = resource_revision {
+                self.presentation
+                    .add_background(resource, resource_revision, depth, opacity);
             }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();

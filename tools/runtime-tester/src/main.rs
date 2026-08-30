@@ -1415,7 +1415,7 @@ fn apply_presentation_delta(lines: &mut Vec<DisplayLine>, operations: &[Presenta
                 lines.drain(..count);
             }
             PresentationOperation::SetTitle { .. }
-            | PresentationOperation::SetBackgrounds { .. }
+            | PresentationOperation::ApplySceneDelta { .. }
             | PresentationOperation::SetAudio { .. }
             | PresentationOperation::SetInputWait { .. }
             | PresentationOperation::SetSettings { .. }

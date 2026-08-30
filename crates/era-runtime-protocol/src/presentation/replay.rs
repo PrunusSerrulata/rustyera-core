@@ -2,8 +2,8 @@ use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AudioState, CanvasPoint, CanvasRect, CanvasSize, MediaPlacement, PresentationHistory,
-    PresentationSettings, RedrawState, TooltipSettings,
+    AudioState, CanvasPoint, CanvasRect, CanvasSize, PresentationHistory, PresentationSettings,
+    RedrawState, SceneStateV1, TooltipSettings,
 };
 use crate::InputWait;
 
@@ -40,6 +40,9 @@ pub struct SpriteReplay {
     pub canvas_id: Option<i64>,
     #[n(5)]
     pub canvas_rectangle: Option<CanvasRect>,
+    /// Monotonic identity of the exact sprite definition referenced by a scene layer.
+    #[n(6)]
+    pub revision: u64,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -182,7 +185,7 @@ pub struct PresentationSnapshot {
     #[n(2)]
     pub history: PresentationHistory,
     #[n(3)]
-    pub backgrounds: Vec<MediaPlacement>,
+    pub scene: SceneStateV1,
     #[n(4)]
     pub audio: Vec<AudioState>,
     #[n(5)]

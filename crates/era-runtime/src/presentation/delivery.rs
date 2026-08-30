@@ -119,14 +119,11 @@ impl PresentationModel {
                 settings: self.settings.clone(),
             });
         }
-        if delivery.dirty.backgrounds {
-            operations.push(PresentationOperation::SetBackgrounds {
-                backgrounds: if self.project_graphics {
-                    self.projected_backgrounds()
-                } else {
-                    Vec::new()
-                },
+        if delivery.dirty.scene {
+            operations.push(PresentationOperation::ApplySceneDelta {
+                delta: self.projected_scene_delta(delivery.scene_revision),
             });
+            delivery.scene_revision = self.scene.revision;
         }
         if delivery.dirty.audio {
             operations.push(PresentationOperation::SetAudio {
@@ -272,6 +269,7 @@ impl PresentationModel {
         // same semantic edits in the presentation model made long sessions grow forever.
         self.history_operations.clear();
         self.history_edits.clear();
+        self.scene_operations.clear();
         delivery.history_index = 0;
         delivery.dirty = PresentationDirty::default();
         self.delivery = delivery;
@@ -287,11 +285,13 @@ impl PresentationModel {
         let snapshot = self.snapshot();
         self.history_operations.clear();
         self.history_edits.clear();
+        self.scene_operations.clear();
         self.delivery = PresentationDelivery {
             revision: Some(self.revision),
             history_index: 0,
             history_line_count: self.delivered_line_count(),
             pending_line_id: (!self.pending_runs.is_empty()).then_some(self.next_line),
+            scene_revision: self.scene.revision,
             dirty_lines: BTreeSet::new(),
             dirty: PresentationDirty::default(),
         };
@@ -343,11 +343,7 @@ impl PresentationModel {
                 logical_lines: lines,
                 operations: history_operations,
             },
-            backgrounds: if self.project_graphics {
-                self.projected_backgrounds()
-            } else {
-                Vec::new()
-            },
+            scene: self.projected_scene(),
             audio: if self.project_audio {
                 self.audio.clone()
             } else {

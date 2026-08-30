@@ -1,8 +1,8 @@
 use std::collections::{BTreeSet, VecDeque};
 
 use era_runtime_protocol::{
-    Color, LineAlignment, LogicalLength, PresentationSettings, ResourceReplay, TooltipFormat,
-    TooltipSettings,
+    Color, LineAlignment, LogicalLength, PresentationSettings, ResourceReplay, SceneStateV1,
+    TooltipFormat, TooltipSettings,
 };
 use erabasic_vm::CharacterWidthMode;
 
@@ -58,8 +58,11 @@ pub(super) fn model() -> PresentationModel {
         button_generation: 0,
         replace_next_temporary: false,
         html_island: Vec::new(),
-        backgrounds: Vec::new(),
-        client_backgrounds: Vec::new(),
+        scene: SceneStateV1::default(),
+        scene_operations: Vec::new(),
+        background_layers: Vec::new(),
+        next_scene_layer_id: 1,
+        next_scene_sequence: 1,
         audio: Vec::new(),
         tooltip: TooltipSettings {
             foreground: rgb_color(0),

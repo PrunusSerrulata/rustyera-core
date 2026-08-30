@@ -21,6 +21,10 @@ pub(crate) struct ResourceGraph {
     retained_canvas_command_bytes: usize,
     animation_timer_ms: i32,
     canvas_defaults: CanvasDefaults,
+    #[serde(default)]
+    static_sprite_revision: u64,
+    #[serde(default = "default_next_sprite_revision")]
+    next_sprite_revision: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -47,8 +51,68 @@ impl Default for ResourceGraph {
                 font_size: 100,
                 font_style: 0,
             },
+            static_sprite_revision: 0,
+            next_sprite_revision: default_next_sprite_revision(),
         }
     }
+}
+
+const fn default_next_sprite_revision() -> u64 {
+    1
+}
+
+fn static_sprite_revision(manifest: &ProjectManifest) -> u64 {
+    let mut files = manifest
+        .files
+        .iter()
+        .filter(|file| {
+            matches!(
+                file.category,
+                FileCategory::Resource | FileCategory::ResourceManifest
+            )
+        })
+        .collect::<Vec<_>>();
+    files.sort_by_key(|file| {
+        (
+            file.relative_path.to_ascii_lowercase(),
+            file.relative_path.as_str(),
+        )
+    });
+    let mut hasher = blake3::Hasher::new_derive_key("rustyera.static-sprite-revision.v1");
+    for file in files {
+        hasher.update(file.relative_path.as_bytes());
+        hasher.update(&[file.category as u8]);
+        if let Some(content_hash) = &file.content_hash {
+            hasher.update(content_hash.as_slice());
+            continue;
+        }
+        match &file.payload {
+            FilePayload::Utf8(value) => {
+                hasher.update(value.as_bytes());
+            }
+            FilePayload::Bytes(value) => {
+                hasher.update(value.as_slice());
+            }
+            FilePayload::ExternalResource(resource) => {
+                hasher.update(&resource.byte_length.to_le_bytes());
+                if let Some(metadata) = &resource.image_metadata {
+                    hasher.update(&metadata.width.to_le_bytes());
+                    hasher.update(&metadata.height.to_le_bytes());
+                    hasher.update(metadata.format.as_bytes());
+                    hasher.update(&[u8::from(metadata.animated)]);
+                }
+            }
+            FilePayload::IoError(_) => {
+                hasher.update(b"io-error");
+            }
+        }
+    }
+    let digest = hasher.finalize();
+    u64::from_le_bytes(
+        digest.as_bytes()[..size_of::<u64>()]
+            .try_into()
+            .expect("BLAKE3 digest contains a u64"),
+    )
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -243,7 +307,11 @@ impl ResourceGraph {
         manifest: &ProjectManifest,
         mut progress: impl FnMut(usize, usize),
     ) -> (Self, Vec<ResourceDiagnostic>) {
-        let mut graph = Self::default();
+        let mut graph = Self {
+            static_sprite_revision: static_sprite_revision(manifest),
+            next_sprite_revision: default_next_sprite_revision(),
+            ..Self::default()
+        };
         let mut diagnostics = Vec::new();
         let mut preloaded_metadata = Vec::new();
         let total = Self::work_item_count(manifest);
@@ -421,17 +489,37 @@ impl ResourceGraph {
     }
 
     pub(crate) fn move_sprite(&mut self, name: &str, x: i32, y: i32, relative: bool) -> bool {
-        let Some(sprite) = self.sprites.get_mut(&name.to_ascii_uppercase()) else {
+        let key = name.to_ascii_uppercase();
+        let Some(sprite) = self.sprites.get(&key) else {
             return false;
         };
-        if relative {
-            sprite.position_x = sprite.position_x.saturating_add(x);
-            sprite.position_y = sprite.position_y.saturating_add(y);
+        let position = if relative {
+            (
+                sprite.position_x.saturating_add(x),
+                sprite.position_y.saturating_add(y),
+            )
         } else {
-            sprite.position_x = x;
-            sprite.position_y = y;
+            (x, y)
+        };
+        if (sprite.position_x, sprite.position_y) == position {
+            return true;
         }
+        let revision = self.allocate_sprite_revision();
+        let sprite = self.sprites.get_mut(&key).expect("sprite was checked");
+        sprite.position_x = position.0;
+        sprite.position_y = position.1;
+        sprite.revision = revision;
         true
+    }
+
+    pub(crate) fn sprite_revision(&self, name: &str) -> Option<u64> {
+        self.sprite(name).map(|sprite| sprite.revision)
+    }
+
+    pub(super) fn allocate_sprite_revision(&mut self) -> u64 {
+        let revision = self.next_sprite_revision;
+        self.next_sprite_revision = self.next_sprite_revision.saturating_add(1);
+        revision
     }
 
     pub(crate) fn sprite_pixel_request(
@@ -512,6 +600,7 @@ impl ResourceGraph {
             .values()
             .map(|sprite| SpriteReplay {
                 name: sprite.name.clone(),
+                revision: sprite.revision,
                 size: [sprite.width, sprite.height],
                 position: [sprite.position_x, sprite.position_y],
                 frames: sprite
@@ -576,6 +665,7 @@ impl ResourceGraph {
                             };
                             sprites.push(SpriteReplay {
                                 name: name.clone(),
+                                revision: canvas.revision,
                                 size: [metadata.width, metadata.height],
                                 position: [0, 0],
                                 frames: vec![SpriteFrameReplay {

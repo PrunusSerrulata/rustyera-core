@@ -1,4 +1,5 @@
 mod replay;
+mod scene;
 mod text;
 
 use minicbor::{Decode, Encode};
@@ -9,6 +10,10 @@ use crate::{InputWait, InteractionToken};
 pub use replay::{
     CanvasReplay, CanvasReplayCommand, PresentationSnapshot, ResourceReplay, SpriteFrameReplay,
     SpriteReplay,
+};
+pub use scene::{
+    SceneAnchorV1, SceneDeltaV1, SceneInteractionV1, SceneLayerV1, SceneOffsetV1, SceneOperationV1,
+    SceneReplayError, SceneScrollPolicyV1, SceneSizeV1, SceneSourceV1, SceneStateV1,
 };
 pub use text::{SystemTextArgument, SystemTextKey, SystemTextRef};
 
@@ -89,6 +94,15 @@ pub enum CellAlignment {
     Left,
     #[n(1)]
     Right,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum CellWidthIntent {
+    #[n(0)]
+    ProjectColumns(#[n(0)] u32),
+    #[n(1)]
+    LogicalPixels(#[n(0)] u32),
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -591,9 +605,9 @@ pub enum PresentationOperation {
         title: String,
     },
     #[n(4)]
-    SetBackgrounds {
+    ApplySceneDelta {
         #[n(0)]
-        backgrounds: Vec<MediaPlacement>,
+        delta: SceneDeltaV1,
     },
     #[n(5)]
     SetAudio {

@@ -523,10 +523,12 @@ impl ResourceGraph {
         if rectangle[2] == 0 || rectangle[3] == 0 {
             return false;
         }
+        let revision = self.allocate_sprite_revision();
         self.sprites.insert(
             key.clone(),
             SpriteDefinition {
                 name: key,
+                revision,
                 width: rectangle[2].unsigned_abs(),
                 height: rectangle[3].unsigned_abs(),
                 frames: Vec::new(),
@@ -554,10 +556,12 @@ impl ResourceGraph {
         {
             return false;
         }
+        let revision = self.allocate_sprite_revision();
         self.sprites.insert(
             key.clone(),
             SpriteDefinition {
                 name: key,
+                revision,
                 width,
                 height,
                 frames: Vec::new(),
@@ -592,12 +596,15 @@ impl ResourceGraph {
         {
             return false;
         }
-        let Some(sprite) = self.sprites.get_mut(&name.to_ascii_uppercase()) else {
+        let key = name.to_ascii_uppercase();
+        let Some(sprite) = self.sprites.get(&key) else {
             return false;
         };
         if !sprite.dynamic || sprite.canvas_id.is_some() {
             return false;
         }
+        let revision = self.allocate_sprite_revision();
+        let sprite = self.sprites.get_mut(&key).expect("sprite was checked");
         sprite.frames.push(SpriteFrame {
             image_path: String::new(),
             canvas_id: Some(canvas_id),
@@ -611,6 +618,7 @@ impl ResourceGraph {
             destination_width: None,
             destination_height: None,
         });
+        sprite.revision = revision;
         true
     }
 
@@ -631,6 +639,7 @@ impl ResourceGraph {
 
     /// Preserve game-created replay objects while replacing submitted static resources.
     pub(crate) fn inherit_runtime_graph(&mut self, previous: &Self) {
+        self.next_sprite_revision = self.next_sprite_revision.max(previous.next_sprite_revision);
         self.canvases.clone_from(&previous.canvases);
         self.retained_canvas_command_bytes = previous.retained_canvas_command_bytes;
         self.animation_timer_ms = previous.animation_timer_ms;
@@ -662,9 +671,19 @@ impl ResourceGraph {
         self.retained_canvas_command_bytes = 0;
         self.animation_timer_ms = 0;
         self.sprites.retain(|_, sprite| !sprite.dynamic);
-        for sprite in self.sprites.values_mut() {
+        let moved = self
+            .sprites
+            .iter()
+            .filter_map(|(name, sprite)| {
+                ((sprite.position_x, sprite.position_y) != (0, 0)).then_some(name.clone())
+            })
+            .collect::<Vec<_>>();
+        for name in moved {
+            let revision = self.allocate_sprite_revision();
+            let sprite = self.sprites.get_mut(&name).expect("sprite was retained");
             sprite.position_x = 0;
             sprite.position_y = 0;
+            sprite.revision = revision;
         }
     }
 

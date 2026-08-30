@@ -79,12 +79,14 @@ pub use log::{DiagnosticNotification, RuntimeLog, RuntimeLogLevel};
 pub use message::{RUNTIME_PROTOCOL_VERSION, RuntimeMessage, RuntimeResynchronized};
 pub use presentation::{
     AudioState, CanvasPoint, CanvasRect, CanvasReplay, CanvasReplayCommand, CanvasSize,
-    CellAlignment, Color, DisplayLine, DisplayRun, LineAlignment, LogicalLength, LogicalRect,
-    MediaPlacement, PresentationDelta, PresentationHistory, PresentationHistoryOperation,
-    PresentationLength, PresentationOperation, PresentationSettings, PresentationSnapshot,
-    RationalOpacity, RedrawState, ResourceReplay, SeparatorRole, Shape, SpriteFrameReplay,
-    SpriteReplay, SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle, TooltipFormat,
-    TooltipFormatFlag, TooltipSettings,
+    CellAlignment, CellWidthIntent, Color, DisplayLine, DisplayRun, LineAlignment, LogicalLength,
+    LogicalRect, MediaPlacement, PresentationDelta, PresentationHistory,
+    PresentationHistoryOperation, PresentationLength, PresentationOperation, PresentationSettings,
+    PresentationSnapshot, RationalOpacity, RedrawState, ResourceReplay, SceneAnchorV1,
+    SceneDeltaV1, SceneInteractionV1, SceneLayerV1, SceneOffsetV1, SceneOperationV1,
+    SceneReplayError, SceneScrollPolicyV1, SceneSizeV1, SceneSourceV1, SceneStateV1, SeparatorRole,
+    Shape, SpriteFrameReplay, SpriteReplay, SystemTextArgument, SystemTextKey, SystemTextRef,
+    TextStyle, TooltipFormat, TooltipFormatFlag, TooltipSettings,
 };
 pub use project::{
     ExternalResource, FileCategory, FileChange, FilePayload, FrontendIoError, FrontendIoErrorKind,

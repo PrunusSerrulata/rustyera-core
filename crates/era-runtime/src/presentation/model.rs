@@ -4,9 +4,9 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use era_runtime_protocol::{
-    AudioState, Color, DisplayLine, DisplayRun, InputWait, LineAlignment, MediaPlacement,
-    PresentationDelta, PresentationHistoryOperation, PresentationSettings, PresentationSnapshot,
-    ResourceReplay, TextStyle, TooltipSettings,
+    AudioState, Color, DisplayLine, DisplayRun, InputWait, LineAlignment, PresentationDelta,
+    PresentationHistoryOperation, PresentationSettings, PresentationSnapshot, ResourceReplay,
+    SceneOperationV1, SceneStateV1, TextStyle, TooltipSettings,
 };
 use erabasic_vm::CharacterWidthMode;
 use serde::{Deserialize, Serialize};
@@ -49,9 +49,17 @@ pub(crate) struct PresentationModel {
     pub(super) button_generation: u64,
     pub(super) replace_next_temporary: bool,
     pub(super) html_island: Vec<erabasic_html::HtmlDocument>,
-    pub(super) backgrounds: Vec<MediaPlacement>,
     #[serde(default)]
-    pub(super) client_backgrounds: Vec<MediaPlacement>,
+    pub(super) scene: SceneStateV1,
+    #[serde(skip, default)]
+    pub(super) scene_operations: Vec<SceneOperationV1>,
+    /// Non-visual SETBGIMAGE lookup index; `scene` remains the sole rendered authority.
+    #[serde(default)]
+    pub(super) background_layers: Vec<(String, u64)>,
+    #[serde(default = "first_scene_identifier")]
+    pub(super) next_scene_layer_id: u64,
+    #[serde(default = "first_scene_identifier")]
+    pub(super) next_scene_sequence: u64,
     pub(super) audio: Vec<AudioState>,
     pub(super) tooltip: TooltipSettings,
     pub(super) resources: ResourceReplay,
@@ -71,6 +79,7 @@ pub(super) struct PresentationDelivery {
     /// Physical rows held by the frontend at the delivery baseline, including one pending row.
     pub(super) history_line_count: usize,
     pub(super) pending_line_id: Option<u64>,
+    pub(super) scene_revision: u64,
     pub(super) dirty_lines: BTreeSet<u64>,
     pub(super) dirty: PresentationDirty,
 }
@@ -88,7 +97,7 @@ pub(super) enum PresentationHistoryEdit {
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct PresentationDirty {
     pub(super) title: bool,
-    pub(super) backgrounds: bool,
+    pub(super) scene: bool,
     pub(super) audio: bool,
     pub(super) input_wait: bool,
     pub(super) settings: bool,
@@ -97,6 +106,10 @@ pub(super) struct PresentationDirty {
     pub(super) html_island: bool,
     pub(super) redraw: bool,
     pub(super) force_snapshot: bool,
+}
+
+const fn first_scene_identifier() -> u64 {
+    1
 }
 
 pub(crate) enum PresentationUpdate {

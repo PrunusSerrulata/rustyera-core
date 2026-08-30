@@ -207,6 +207,18 @@ fn parses_static_and_animation_sprites_then_validates_metadata() {
         .unwrap();
     assert_eq!(graph.sprite("face").unwrap().width, 32);
     assert_eq!(graph.sprite("run").unwrap().width, 10);
+    let static_revision = graph.sprite("face").unwrap().revision;
+    assert_eq!(graph.sprite("run").unwrap().revision, static_revision);
+    assert_eq!(
+        graph
+            .replay()
+            .sprites
+            .iter()
+            .find(|sprite| sprite.name == "FACE")
+            .unwrap()
+            .revision,
+        static_revision
+    );
     assert!(graph.create_canvas_from_resource(1, "resources/face.png"));
     graph
         .apply_metadata(
@@ -229,6 +241,7 @@ fn canvas_and_dynamic_sprite_mutations_form_a_deterministic_replay_graph() {
     assert_eq!(graph.create_canvas(3, 1, 1), Ok(false));
     assert!(graph.clear_canvas(3, 0x00ff_00ff, None));
     assert!(graph.create_canvas_sprite("generated", 3, None));
+    let created_revision = graph.sprite("generated").unwrap().revision;
     assert!(graph.create_animation_sprite("animated", 16, 16));
     assert!(graph.add_animation_frame("animated", 3, [0, 0, 16, 16], [2, 3], 55,));
     assert_eq!(
@@ -238,6 +251,7 @@ fn canvas_and_dynamic_sprite_mutations_form_a_deterministic_replay_graph() {
         Some((64, 32))
     );
     assert!(graph.move_sprite("generated", 4, 5, false));
+    assert!(graph.sprite("generated").unwrap().revision > created_revision);
     assert!(graph.set_animation_timer(55));
     assert_eq!(graph.animation_timer(), 55);
     assert_eq!(
@@ -256,6 +270,10 @@ fn canvas_and_dynamic_sprite_mutations_form_a_deterministic_replay_graph() {
         .unwrap();
     assert_eq!(animated.frames[0].canvas_id, Some(3));
     assert_eq!(animated.frames[0].delay_ms, 55);
+    assert_eq!(
+        animated.revision,
+        graph.sprite("animated").unwrap().revision
+    );
     assert!(
         replay
             .sprites
@@ -265,6 +283,36 @@ fn canvas_and_dynamic_sprite_mutations_form_a_deterministic_replay_graph() {
     assert_eq!(replay.animation_timer_ms, 55);
     assert_eq!(graph.dispose_sprites(false), 2);
     assert!(graph.dispose_canvas(3));
+}
+
+#[test]
+fn static_sprite_revision_binds_same_name_to_resource_content() {
+    let manifest = |image_byte| ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+        project_revision: 4,
+        files: vec![
+            SubmittedFile {
+                relative_path: "resources/sprites.csv".into(),
+                category: FileCategory::ResourceManifest,
+                payload: FilePayload::Utf8("SAME,image.png,0,0,1,1".into()),
+                content_hash: None,
+            },
+            SubmittedFile {
+                relative_path: "resources/image.png".into(),
+                category: FileCategory::Resource,
+                payload: FilePayload::Bytes(ProtocolBytes::new(vec![image_byte])),
+                content_hash: None,
+            },
+        ],
+    };
+    let (first, diagnostics) = ResourceGraph::from_manifest(&manifest(1));
+    assert!(diagnostics.is_empty());
+    let (second, diagnostics) = ResourceGraph::from_manifest(&manifest(2));
+    assert!(diagnostics.is_empty());
+    assert_ne!(
+        first.sprite_revision("same"),
+        second.sprite_revision("same")
+    );
 }
 
 #[test]
