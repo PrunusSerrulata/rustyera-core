@@ -61,6 +61,13 @@ impl Builder<'_> {
                 self.store_method_result(*return_type, location);
                 return;
             }
+            let omitted_arguments = arguments
+                .iter()
+                .enumerate()
+                .filter_map(|(index, argument)| {
+                    matches!(argument, HirArgument::Omitted).then_some(index)
+                })
+                .collect::<Vec<_>>();
             let parameter_types = arguments
                 .iter()
                 .map(|argument| self.lower_argument(argument, location))
@@ -71,7 +78,14 @@ impl Builder<'_> {
                 "STRLENFORMU" => "STRLENU",
                 _ => name,
             };
-            self.emit_runtime_call(runtime_name, &parameter_types, result, false, location);
+            self.emit_runtime_call_with_omissions(
+                runtime_name,
+                &parameter_types,
+                result,
+                false,
+                &omitted_arguments,
+                location,
+            );
             if result.is_some() {
                 self.store_method_result(*return_type, location);
             }
@@ -539,17 +553,28 @@ impl Builder<'_> {
         }
         let mut parameter_types = std::mem::take(&mut self.argument_types);
         parameter_types.reserve(arguments.len().saturating_mul(2));
+        let mut omitted_arguments = Vec::new();
         for argument in arguments {
             if let HirArgument::MixedExpression { expression, is_px } = argument {
                 parameter_types.push(self.lower_expression(expression, location));
                 self.emit(opcode::push_integer(i64::from(*is_px)), location);
                 parameter_types.push(BytecodeType::Integer);
             } else {
+                if matches!(argument, HirArgument::Omitted) {
+                    omitted_arguments.push(parameter_types.len());
+                }
                 parameter_types.push(self.lower_argument(argument, location));
             }
         }
         let extension = matches!(target, InstructionTarget::Extension(_));
-        self.emit_runtime_call(name, &parameter_types, None, extension, location);
+        self.emit_runtime_call_with_omissions(
+            name,
+            &parameter_types,
+            None,
+            extension,
+            &omitted_arguments,
+            location,
+        );
         parameter_types.clear();
         self.argument_types = parameter_types;
     }

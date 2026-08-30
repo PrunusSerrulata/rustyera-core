@@ -381,7 +381,12 @@ fn apply_instruction_inner(
             pop_type(stack, BytecodeType::String)?;
         }
         Opcode::Call | Opcode::CallNative | Opcode::CallHost => {
-            expect_payload(&instruction.payload, 7)?;
+            let omitted_arguments = if opcode_value == Opcode::CallHost {
+                validate_host_call_payload(&instruction.payload)?
+            } else {
+                expect_payload(&instruction.payload, 7)?;
+                Vec::new()
+            };
             let import_index = read_u32(&instruction.payload, 0)? as usize;
             let declared_arguments = read_u16(&instruction.payload, 4)? as usize;
             let import = function.imports.get(import_index).ok_or((
@@ -439,6 +444,20 @@ fn apply_instruction_inner(
                     ValidationCode::InvalidOperand,
                     "call argument count does not match its import".into(),
                 ));
+            }
+            for omitted in omitted_arguments {
+                if omitted >= declared_arguments {
+                    return Err((
+                        ValidationCode::InvalidOperand,
+                        "omitted Host argument index is out of bounds".into(),
+                    ));
+                }
+                if parameters[omitted] != BytecodeType::Integer {
+                    return Err((
+                        ValidationCode::TypeMismatch,
+                        "omitted Host argument must use the Integer sentinel slot".into(),
+                    ));
+                }
             }
             for parameter in parameters.iter().rev() {
                 pop_type(stack, *parameter)?;
@@ -524,6 +543,48 @@ fn expect_payload(payload: &[u8], length: usize) -> Result<(), (ValidationCode, 
     }
 }
 
+fn validate_host_call_payload(payload: &[u8]) -> Result<Vec<usize>, (ValidationCode, String)> {
+    if payload.len() == 7 {
+        return Ok(Vec::new());
+    }
+    if payload.len() < 9 {
+        return Err((
+            ValidationCode::InvalidOperand,
+            "Host call omission metadata is truncated".into(),
+        ));
+    }
+    let count = usize::from(read_u16(payload, 7)?);
+    let expected = 9_usize
+        .checked_add(count.checked_mul(2).ok_or((
+            ValidationCode::InvalidOperand,
+            "Host call omission count overflows its payload".into(),
+        ))?)
+        .ok_or((
+            ValidationCode::InvalidOperand,
+            "Host call omission payload length overflows".into(),
+        ))?;
+    if payload.len() != expected {
+        return Err((
+            ValidationCode::InvalidOperand,
+            format!(
+                "expected {expected} Host call payload bytes, found {}",
+                payload.len()
+            ),
+        ));
+    }
+    let mut omitted = Vec::with_capacity(count);
+    for index in 0..count {
+        omitted.push(usize::from(read_u16(payload, 9 + index * 2)?));
+    }
+    if omitted.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err((
+            ValidationCode::InvalidOperand,
+            "omitted Host argument indices must be strictly increasing".into(),
+        ));
+    }
+    Ok(omitted)
+}
+
 fn read_u16(payload: &[u8], offset: usize) -> Result<u16, (ValidationCode, String)> {
     Ok(u16::from_le_bytes(
         payload
@@ -588,5 +649,26 @@ fn pop_value(
             ValidationCode::StackMismatch,
             format!("{operation} underflows the stack"),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_call_omission_payload_requires_sorted_exact_indices() {
+        assert_eq!(
+            validate_host_call_payload(&opcode::host_call(0, 4, None, &[1, 3]).payload),
+            Ok(vec![1, 3])
+        );
+
+        let mut duplicate = opcode::host_call(0, 4, None, &[1, 3]).payload.to_vec();
+        duplicate[11..13].copy_from_slice(&1_u16.to_le_bytes());
+        assert!(validate_host_call_payload(&duplicate).is_err());
+
+        let mut truncated = opcode::host_call(0, 4, None, &[1]).payload.to_vec();
+        truncated.pop();
+        assert!(validate_host_call_payload(&truncated).is_err());
     }
 }

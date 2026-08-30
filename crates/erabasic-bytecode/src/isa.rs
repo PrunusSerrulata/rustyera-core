@@ -395,6 +395,37 @@ pub mod opcode {
         EncodedInstruction::from_payload_slice(opcode, &payload)
     }
 
+    /// Encodes a Host call together with the physical argument slots that were omitted in source.
+    ///
+    /// # Panics
+    /// Panics when more than `u16::MAX` slots are omitted or an omitted slot exceeds `u16::MAX`.
+    #[must_use]
+    pub fn host_call(
+        import: u32,
+        arguments: u16,
+        result: Option<BytecodeType>,
+        omitted_arguments: &[usize],
+    ) -> EncodedInstruction {
+        if omitted_arguments.is_empty() {
+            return call(Opcode::CallHost, import, arguments, result);
+        }
+        let omitted_count = u16::try_from(omitted_arguments.len())
+            .expect("one Host call omits more than u16::MAX argument slots");
+        let mut payload = Vec::with_capacity(9 + omitted_arguments.len().saturating_mul(2));
+        payload.extend_from_slice(&import.to_le_bytes());
+        payload.extend_from_slice(&arguments.to_le_bytes());
+        payload.push(result.map_or(u8::MAX, type_tag));
+        payload.extend_from_slice(&omitted_count.to_le_bytes());
+        for index in omitted_arguments {
+            payload.extend_from_slice(
+                &u16::try_from(*index)
+                    .expect("one omitted Host argument slot exceeds u16::MAX")
+                    .to_le_bytes(),
+            );
+        }
+        EncodedInstruction::new(Opcode::CallHost, payload)
+    }
+
     #[must_use]
     pub fn return_value(has_value: bool) -> EncodedInstruction {
         EncodedInstruction::from_payload_slice(Opcode::Return, &[u8::from(has_value)])
@@ -576,6 +607,16 @@ mod tests {
         assert_eq!(
             opcode::call(Opcode::Call, 11, 2, Some(BytecodeType::String)),
             EncodedInstruction::new(Opcode::Call, call)
+        );
+        let mut host_call = 13_u32.to_le_bytes().to_vec();
+        host_call.extend_from_slice(&4_u16.to_le_bytes());
+        host_call.push(u8::MAX);
+        host_call.extend_from_slice(&2_u16.to_le_bytes());
+        host_call.extend_from_slice(&1_u16.to_le_bytes());
+        host_call.extend_from_slice(&3_u16.to_le_bytes());
+        assert_eq!(
+            opcode::host_call(13, 4, None, &[1, 3]),
+            EncodedInstruction::new(Opcode::CallHost, host_call)
         );
         assert_eq!(
             opcode::return_value(true),

@@ -73,6 +73,44 @@ fn analyze_snake(text: &str) -> erabasic_analyzer::AnalyzedProject {
         .expect("snake analysis should produce a project")
 }
 
+fn omitted_host_calls(artifact: &erabasic_bytecode::BytecodeArtifact) -> Vec<(String, Vec<usize>)> {
+    let mut calls = Vec::new();
+    for function in &artifact.functions {
+        for instruction in &function.code {
+            if instruction.opcode != Opcode::CallHost as u16 || instruction.payload.len() == 7 {
+                continue;
+            }
+            let import_index = u32::from_le_bytes(
+                instruction.payload[..4]
+                    .try_into()
+                    .expect("Host import index"),
+            ) as usize;
+            let import_key = function.imports[import_index].key;
+            let host = artifact
+                .host_imports
+                .iter()
+                .find(|host| host.import.key == import_key)
+                .expect("Host import resolves");
+            let count = usize::from(u16::from_le_bytes(
+                instruction.payload[7..9]
+                    .try_into()
+                    .expect("omission count"),
+            ));
+            let omissions = (0..count)
+                .map(|index| {
+                    usize::from(u16::from_le_bytes(
+                        instruction.payload[9 + index * 2..11 + index * 2]
+                            .try_into()
+                            .expect("omitted argument index"),
+                    ))
+                })
+                .collect::<Vec<_>>();
+            calls.push((host.import.name.clone(), omissions));
+        }
+    }
+    calls
+}
+
 #[test]
 fn column_options_lower_to_validated_private_native_steps() {
     let project = analyze(
@@ -578,7 +616,7 @@ fn host_operations_use_only_call_host_and_round_trip() {
 #[test]
 fn safe_sql_calls_emit_validated_v1_host_imports_with_physical_variadic_arity() {
     let project = analyze_snake(
-        "@SYSTEM_TITLE\nSQL_CONNECT \"discarded\"\nRESULT:0 = SQL_CONNECT(\"db\")\nRESULT:1 = SQL_CONNECT(\"db\", )\nRESULT:2 = SQL_P_EXECUTE_NONQUERY(\"db\", \"SELECT @0\")\nRESULT:3 = SQL_P_EXECUTE_NONQUERY(\"db\", \"SELECT @0\", \"one\")\nRESULT:4 = SQL_P_EXECUTE_NONQUERY(\"db\", \"SELECT @0, @1\", , \"two\")\nRESULT:5 = SQL_P_EXECUTE_NONQUERY(\"db\", \"SELECT @0, @1\", \"one\", \"two\")\nSQL_DISCONNECT \"discarded\"\nRETURN\n",
+        "@SYSTEM_TITLE\nSQL_CONNECT \"discarded\"\nRESULT:0 = SQL_CONNECT(\"db\")\nRESULT:1 = SQL_CONNECT(\"db\", )\nRESULT:2 = SQL_P_EXECUTE_NONQUERY(\"db\", \"SELECT @0\")\nRESULT:3 = SQL_P_EXECUTE_NONQUERY(\"db\", \"SELECT @0\", \"one\")\nRESULT:4 = SQL_P_EXECUTE_NONQUERY(\"db\", \"SELECT @0, @1\", , \"two\")\nRESULT:5 = SQL_P_EXECUTE_NONQUERY(\"db\", \"SELECT @0, @1\", \"one\", \"two\")\nSQL_P_EXECUTE_NONQUERY \"db\", \"SELECT @0, @1, @2\", \"one\", \"two\",\nSQL_DISCONNECT \"discarded\"\nRETURN\n",
     );
     let report = compile_project(
         &project,
@@ -593,7 +631,7 @@ fn safe_sql_calls_emit_validated_v1_host_imports_with_physical_variadic_arity() 
         .iter()
         .filter(|host| host.import.namespace == "rustyera.sql")
         .collect::<Vec<_>>();
-    assert_eq!(sql_imports.len(), 6);
+    assert_eq!(sql_imports.len(), 7);
     assert!(sql_imports.iter().all(|host| {
         host.import.abi_version == 1
             && host.capability == HostCapability::Sql
@@ -633,9 +671,27 @@ fn safe_sql_calls_emit_validated_v1_host_imports_with_physical_variadic_arity() 
                 BytecodeType::String,
                 BytecodeType::String,
             ],
+            vec![
+                BytecodeType::String,
+                BytecodeType::String,
+                BytecodeType::String,
+                BytecodeType::String,
+                BytecodeType::Integer,
+            ],
         ]
         .into_iter()
         .collect()
+    );
+    let omitted_sql_calls = omitted_host_calls(&artifact);
+    assert!(
+        omitted_sql_calls
+            .iter()
+            .any(|(name, omitted)| { name == "sql_p_execute_nonquery" && omitted == &[2] })
+    );
+    assert!(
+        omitted_sql_calls
+            .iter()
+            .any(|(name, omitted)| { name == "sql_p_execute_nonquery" && omitted == &[4] })
     );
 
     let bytes = encode_artifact(&artifact).expect("SQL artifact should encode");

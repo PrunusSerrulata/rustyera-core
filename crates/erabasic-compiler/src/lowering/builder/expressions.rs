@@ -27,8 +27,7 @@ impl Builder<'_> {
             }
             HirArgument::Omitted => {
                 // EraBasic can distinguish an omitted operand from an explicit zero. The
-                // internal call ABI reserves i64::MIN until bytecode gains a first-class
-                // omitted value.
+                // physical call ABI pairs this sentinel with explicit omission metadata.
                 self.emit(opcode::push_integer(i64::MIN), location);
                 BytecodeType::Integer
             }
@@ -99,6 +98,17 @@ impl Builder<'_> {
                     }
                 }
                 let builtin = matches!(target, CallTarget::Builtin { .. });
+                let omitted_arguments = if builtin {
+                    arguments
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, argument)| {
+                            matches!(argument, HirCallArgument::Omitted).then_some(index)
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
                 let parameter_types: Vec<_> = if matches!(target, CallTarget::User { .. }) {
                     Vec::new()
                 } else {
@@ -286,20 +296,22 @@ impl Builder<'_> {
                         }
                     }
                     CallTarget::Builtin { name } => {
-                        self.emit_runtime_call(
+                        self.emit_runtime_call_with_omissions(
                             name,
                             &parameter_types,
                             Some(result),
                             false,
+                            &omitted_arguments,
                             location,
                         );
                     }
                     CallTarget::Extension { name } => {
-                        self.emit_runtime_call(
+                        self.emit_runtime_call_with_omissions(
                             name,
                             &parameter_types,
                             Some(result),
                             true,
+                            &omitted_arguments,
                             location,
                         );
                     }

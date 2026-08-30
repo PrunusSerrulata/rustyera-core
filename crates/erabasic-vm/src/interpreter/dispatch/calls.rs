@@ -60,6 +60,11 @@ impl Vm {
                     &mut fiber.frames.last_mut().expect("frame exists").stack,
                     argument_count,
                 )?;
+                let omitted_arguments = if opcode == Opcode::CallHost {
+                    decode_host_call_omissions(position.encoded.payload)?
+                } else {
+                    Vec::new()
+                };
                 match (opcode, import.kind) {
                     (Opcode::Call, ImportKind::Function) => {
                         if fiber.frames.len() >= self.config.maximum_call_depth {
@@ -397,6 +402,7 @@ impl Vm {
                                 import: target,
                                 normalized_name,
                                 arguments: &arguments,
+                                omitted_arguments: &omitted_arguments,
                             }) {
                                 ImmediateHostCallResult::Unsupported => {}
                                 ImmediateHostCallResult::Ready(ready) => {
@@ -425,7 +431,7 @@ impl Vm {
                                 fiber,
                                 target,
                                 arguments,
-                                Vec::new(),
+                                omitted_arguments,
                                 origin,
                                 None,
                                 host,
@@ -445,4 +451,33 @@ impl Vm {
         }
         Ok(Some(StepOutcome::Continue))
     }
+}
+
+fn decode_host_call_omissions(payload: &[u8]) -> Result<Vec<usize>, StepError> {
+    if payload.len() == 7 {
+        return Ok(Vec::new());
+    }
+    let count = usize::from(read_u16(payload, 7)?);
+    let expected = 9_usize
+        .checked_add(count.checked_mul(2).ok_or_else(|| {
+            StepError::new(
+                VmFaultCode::InvalidInstruction,
+                "Host call omission count overflows",
+            )
+        })?)
+        .ok_or_else(|| {
+            StepError::new(
+                VmFaultCode::InvalidInstruction,
+                "Host call omission payload length overflows",
+            )
+        })?;
+    if payload.len() != expected {
+        return Err(StepError::new(
+            VmFaultCode::InvalidInstruction,
+            "Host call omission payload length is invalid",
+        ));
+    }
+    (0..count)
+        .map(|index| read_u16(payload, 9 + index * 2).map(usize::from))
+        .collect()
 }

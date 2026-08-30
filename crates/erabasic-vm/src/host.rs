@@ -43,6 +43,7 @@ pub struct ImmediateHostCall<'a> {
     pub import: &'a HostImport,
     pub normalized_name: &'a str,
     pub arguments: &'a [VmValue],
+    pub omitted_arguments: &'a [usize],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -264,10 +264,13 @@ fn run_compiled_string_result(artifact: &BytecodeArtifact) -> VmValue {
 struct ReadyHost {
     calls: Vec<i64>,
     strings: Vec<String>,
+    omitted_arguments: Vec<Vec<usize>>,
 }
 
 impl VmHost for ReadyHost {
     fn call(&mut self, request: HostCallRequest) -> HostCallResult {
+        self.omitted_arguments
+            .push(request.omitted_arguments.clone());
         if let Some(VmValue::Integer(value)) = request.arguments.first() {
             self.calls.push(*value);
         } else if let Some(VmValue::String(value)) = request.arguments.first() {
@@ -346,6 +349,37 @@ fn host_artifact(stability: HostSnapshotCapability) -> (BytecodeArtifact, Symbol
     fixture_runtime_variables(&mut artifact);
     artifact.refresh_ids().unwrap();
     (artifact, entry)
+}
+
+#[test]
+fn static_host_calls_preserve_omission_metadata_separately_from_integer_min() {
+    let (mut artifact, entry) = host_artifact(HostSnapshotCapability::StableWait);
+    artifact.functions[0].code = vec![
+        opcode::push_integer(i64::MIN),
+        opcode::host_call(0, 1, None, &[0]),
+        opcode::push_integer(i64::MIN),
+        opcode::call(Opcode::CallHost, 0, 1, None),
+        opcode::return_value(false),
+    ];
+    artifact.refresh_ids().unwrap();
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let mut host = ReadyHost::default();
+    let report = vm.run_slice(
+        &mut host,
+        &mut NativeServiceRegistry::for_artifact(&artifact),
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(host.calls, [i64::MIN, i64::MIN]);
+    assert_eq!(host.omitted_arguments, [vec![0], Vec::new()]);
 }
 
 struct PendingHost {

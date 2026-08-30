@@ -16,10 +16,29 @@ impl Builder<'_> {
         extension: bool,
         location: SourceLocation,
     ) {
+        self.emit_runtime_call_with_omissions(name, parameters, result, extension, &[], location);
+    }
+
+    pub(in super::super) fn emit_runtime_call_with_omissions(
+        &mut self,
+        name: &str,
+        parameters: &[BytecodeType],
+        result: Option<BytecodeType>,
+        extension: bool,
+        omitted_arguments: &[usize],
+        location: SourceLocation,
+    ) {
         let registry = self.context.host_registry;
         match registry.classification(name) {
             Some(ExecutionBinding::Host(binding)) => {
-                self.emit_host_call(name, parameters, result, binding, location);
+                self.emit_host_call_with_omissions(
+                    name,
+                    parameters,
+                    result,
+                    binding,
+                    omitted_arguments,
+                    location,
+                );
             }
             Some(ExecutionBinding::Native(contract)) => {
                 self.emit_native_call(name, parameters, result, *contract, location);
@@ -47,7 +66,14 @@ impl Builder<'_> {
             }
             None if extension => {
                 let binding = extension_binding(name);
-                self.emit_host_call(name, parameters, result, &binding, location);
+                self.emit_host_call_with_omissions(
+                    name,
+                    parameters,
+                    result,
+                    &binding,
+                    omitted_arguments,
+                    location,
+                );
             }
             None => self.emit_unsupported_call(
                 name,
@@ -63,6 +89,18 @@ impl Builder<'_> {
         parameters: &[BytecodeType],
         result: Option<BytecodeType>,
         binding: &HostBinding,
+        location: SourceLocation,
+    ) {
+        self.emit_host_call_with_omissions(name, parameters, result, binding, &[], location);
+    }
+
+    fn emit_host_call_with_omissions(
+        &mut self,
+        name: &str,
+        parameters: &[BytecodeType],
+        result: Option<BytecodeType>,
+        binding: &HostBinding,
+        omitted_arguments: &[usize],
         location: SourceLocation,
     ) {
         if binding.contract.portability
@@ -117,11 +155,11 @@ impl Builder<'_> {
         };
         let index = self.add_import(ImportKind::Host, key);
         self.emit(
-            opcode::call(
-                Opcode::CallHost,
+            opcode::host_call(
                 index,
                 u16::try_from(parameters.len()).unwrap_or(u16::MAX),
                 result,
+                omitted_arguments,
             ),
             location,
         );
