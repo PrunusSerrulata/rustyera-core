@@ -761,7 +761,7 @@ mod source_lifecycle_tests {
     use erabasic_hir::SourceId;
 
     #[test]
-    fn large_workload_progress_reports_completed_units_below_one_percent() {
+    fn large_workload_progress_reports_first_percent() {
         let events = Mutex::new(Vec::new());
         let callback = |event| events.lock().unwrap().push(event);
         let progress = ProgressCounter::new(
@@ -769,12 +769,12 @@ mod source_lifecycle_tests {
             100_000,
             Some(&callback),
         );
-        for _ in 0..64 {
+        for _ in 0..1_000 {
             progress.advance();
         }
         let events = events.into_inner().unwrap();
         assert_eq!(events.len(), 2);
-        assert_eq!(events[1].completed, 64);
+        assert_eq!(events[1].completed, 1_000);
         assert_eq!(events[1].total, 100_000);
     }
 
