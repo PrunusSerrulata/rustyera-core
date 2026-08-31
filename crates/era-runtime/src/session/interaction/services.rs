@@ -385,12 +385,15 @@ impl RuntimeSession {
                                 );
                             }
                         };
+                        // The provider answers the immutable projection carried by this
+                        // request. The frontend may publish a newer environment while it
+                        // samples the pointer, but that does not invalidate the exact
+                        // historical result. The canonical presentation remains fixed while
+                        // the VM is waiting for this completion.
                         if state.presentation_revision != presentation_revision
                             || state.presentation_revision != self.presentation.revision()
                             || state.environment_revision != environment_revision
-                            || state.environment_revision != self.projection_environment_revision
                             || state.projection_space_revision != projection_space_revision
-                            || state.projection_space_revision != self.projection_space_revision
                         {
                             return self.fault(
                                 FaultCode::ServiceFailure,

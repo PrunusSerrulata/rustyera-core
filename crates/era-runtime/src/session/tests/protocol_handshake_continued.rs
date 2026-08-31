@@ -1771,6 +1771,89 @@ fn pointer_query_flushes_prints_and_returns_each_canonical_value() {
 }
 
 #[test]
+fn pointer_query_commits_its_captured_projection_after_environment_advances() {
+    let (mut session, request, _) = start_projection_service_with_messages(
+        "@SYSTEM_TITLE\nRESULT = MOUSEX()\nWAIT\nRETURN\n",
+        ServiceKind::InputState,
+        POINTER_STATE_OPERATION,
+        POINTER_STATE_OPERATION_VERSION,
+    );
+    let query: PointerStateRequest = decode_canonical(request.payload.as_slice()).unwrap();
+    submit_projection_resize(
+        &mut session,
+        3,
+        ProjectionQueryContext {
+            presentation_revision: query.presentation_revision,
+            environment_revision: query.environment_revision,
+            projection_space_revision: query.projection_space_revision,
+        },
+    );
+    submit(
+        &mut session,
+        4,
+        RuntimeMessage::ServiceResponse(ServiceResponse {
+            request_id: request.request_id,
+            result: ServiceResult::Ready {
+                payload: ProtocolBytes::new(
+                    encode_canonical(&PointerStateResponse {
+                        x: ProjectionLength(37),
+                        y: ProjectionLength(-91),
+                        button_value: "script-value".into(),
+                        presentation_revision: query.presentation_revision,
+                        environment_revision: query.environment_revision,
+                        projection_space_revision: query.projection_space_revision,
+                    })
+                    .unwrap(),
+                ),
+            },
+        }),
+    );
+    for _ in 0..8 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        if matches!(
+            session.phase(),
+            RuntimePhase::WaitingInput | RuntimePhase::Faulted
+        ) {
+            break;
+        }
+    }
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
+        37
+    );
+}
+
+#[test]
+fn pointer_query_rejects_a_response_for_another_projection() {
+    let (mut session, request, _) = start_projection_service_with_messages(
+        "@SYSTEM_TITLE\nRESULT = 77\nRESULT = MOUSEX()\nWAIT\nRETURN\n",
+        ServiceKind::InputState,
+        POINTER_STATE_OPERATION,
+        POINTER_STATE_OPERATION_VERSION,
+    );
+    let query: PointerStateRequest = decode_canonical(request.payload.as_slice()).unwrap();
+    complete_projection_reply(
+        &mut session,
+        &request,
+        encode_canonical(&PointerStateResponse {
+            x: ProjectionLength(37),
+            y: ProjectionLength(-91),
+            button_value: "script-value".into(),
+            presentation_revision: query.presentation_revision,
+            environment_revision: query.environment_revision.saturating_add(1),
+            projection_space_revision: query.projection_space_revision,
+        })
+        .unwrap(),
+    );
+    assert_eq!(session.phase(), RuntimePhase::Faulted);
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
+        77
+    );
+}
+
+#[test]
 fn snake_getliney_resolves_a_display_index_to_revision_bound_stable_geometry() {
     let snake = erabasic_compat::CompatibilityIdentity::for_profile(
         erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
