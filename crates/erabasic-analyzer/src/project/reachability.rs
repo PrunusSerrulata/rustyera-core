@@ -1,22 +1,20 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use erabasic_ast::{
-    Argument, Expr, ExprKind, FormPart, FormattedString, Function as AstFunction, Statement,
-    StatementKind,
-};
+use erabasic_ast::Function as AstFunction;
 use erabasic_hir::{
     EventAttributes, Function, FunctionId, FunctionKind, SemanticType, SourceLocation,
 };
 
 use crate::{
     AnalyzerDiagnostic, AnalyzerDiagnosticCode, AnalyzerDiagnosticSeverity, AnalyzerOptions,
-    WarningPolicy, context::AnalysisParserContext, symbols::Symbols,
+    WarningPolicy, context::AnalysisParserContext, expression::IndexResolver, symbols::Symbols,
 };
 
-use super::{
-    ParsedProjectSource, lowering_support::static_target_source,
-    statement_analysis::FunctionDefinition,
-};
+use super::{ParsedProjectSource, statement_analysis::FunctionDefinition};
+
+mod dynamic;
+
+use dynamic::{CandidateIndex, collect_calls};
 
 pub(super) fn reachable_functions(
     sources: &[ParsedProjectSource],
@@ -24,6 +22,7 @@ pub(super) fn reachable_functions(
     symbols: &Symbols,
     options: &AnalyzerOptions,
     context: &AnalysisParserContext,
+    index_resolver: &IndexResolver,
 ) -> BTreeSet<FunctionId> {
     if options.analysis_mode || !options.ignore_uncalled_functions {
         return definitions.iter().map(|definition| definition.id).collect();
@@ -37,6 +36,7 @@ pub(super) fn reachable_functions(
         .iter()
         .map(|definition| (definition.id, definition))
         .collect();
+    let mut candidates = CandidateIndex::new(definitions, sources, options.ignore_case);
     let mut queue: VecDeque<_> = reachable.iter().copied().collect();
     while let Some(id) = queue.pop_front() {
         let Some(definition) = by_id.get(&id) else {
@@ -44,226 +44,34 @@ pub(super) fn reachable_functions(
         };
         let function =
             &sources[definition.source_index].script.functions[definition.function_index];
-        if function.body.iter().any(uses_dynamic_call) {
-            reachable.extend(definitions.iter().map(|definition| definition.id));
-            break;
-        }
-        let mut calls = Vec::new();
-        // Private declarations are registered only after reachability. Until then a
-        // local may shadow even a known global string; retain both possible parses.
-        let private_types_pending = function.attributes.iter().any(|directive| {
-            matches!(directive.name.as_str(), "DIM" | "DIMS")
-        }) || function.body.iter().any(|statement| matches!(
-            &statement.kind,
-            StatementKind::Instruction { name, .. } if matches!(name.as_str(), "VARI" | "VARS")
-        ));
-        for statement in &function.body {
-            collect_statement_calls(statement, &mut calls);
-            collect_numeric_assignment_calls(
-                statement,
-                &mut calls,
-                symbols,
-                id,
-                context,
-                private_types_pending,
-            );
-        }
-        // Runtime STRFORM parses arbitrary expressions, so even a literal input
-        // cannot be treated as a closed static call graph here. EXISTMETH must
-        // retain target signatures/defaults although it does not execute bodies.
-        if calls.iter().any(|name| {
-            matches!(
-                name.to_ascii_uppercase().as_str(),
-                "GETMETH" | "GETMETHS" | "EXISTMETH" | "STRFORM" | "STRFORMCHECK" | "EXISTVAR"
-            )
-        }) {
-            reachable.extend(definitions.iter().map(|definition| definition.id));
-            break;
-        }
-        for call in calls {
+        let calls = collect_calls(function, symbols, id, context, index_resolver);
+        for call in calls.direct {
             if let Some(target) = symbols.function(&call)
                 && reachable.insert(target.id)
             {
                 queue.push_back(target.id);
             }
         }
+        for pattern in calls.dynamic {
+            if !pattern.is_bounded() {
+                return definitions.iter().map(|definition| definition.id).collect();
+            }
+            if let Some(exact) = pattern.exact() {
+                if let Some(target) = symbols.function(&exact)
+                    && reachable.insert(target.id)
+                {
+                    queue.push_back(target.id);
+                }
+                continue;
+            }
+            for target in candidates.resolve(&pattern) {
+                if reachable.insert(*target) {
+                    queue.push_back(*target);
+                }
+            }
+        }
     }
     reachable
-}
-
-fn collect_numeric_assignment_calls(
-    statement: &Statement,
-    calls: &mut Vec<String>,
-    symbols: &Symbols,
-    function: FunctionId,
-    context: &AnalysisParserContext,
-    private_types_pending: bool,
-) {
-    let StatementKind::Assignment {
-        target,
-        op: erabasic_ast::AssignOp::Assign,
-        value,
-        raw_value,
-        ..
-    } = &statement.kind
-    else {
-        return;
-    };
-    if !private_types_pending
-        && symbols
-            .resolve_variable(function, &target.name)
-            .is_some_and(|variable| variable.value_type == SemanticType::String)
-    {
-        return;
-    }
-    // The initial parser keeps '=' as FORM text. Numeric assignments are reparsed
-    // by statement analysis, so their calls must also participate in this graph.
-    // Do not issue diagnostics here: the type-directed analysis owns those spans.
-    let parsed = erabasic_parser::parse_expression_list_at(raw_value, value.span.start, context);
-    for expression in parsed.value.iter().flatten() {
-        collect_expression_calls(expression, calls);
-    }
-}
-
-fn collect_statement_calls(statement: &Statement, calls: &mut Vec<String>) {
-    match &statement.kind {
-        StatementKind::Instruction {
-            name,
-            raw_arguments,
-            arguments,
-        } => {
-            if matches!(
-                name.as_str(),
-                "CALL" | "CALLF" | "JUMP" | "BEGIN" | "TRYCALL" | "TRYJUMP"
-            ) {
-                let target = static_target_source(raw_arguments).trim().trim_matches('"');
-                if !target.is_empty() {
-                    calls.push(target.to_owned());
-                }
-            }
-            for argument in arguments {
-                match argument {
-                    Argument::Expression(expression)
-                    | Argument::MixedExpression { expression, .. } => {
-                        collect_expression_calls(expression, calls);
-                    }
-                    Argument::Formatted(value) => collect_formatted_calls(value, calls),
-                    Argument::Raw(_) | Argument::Omitted(_) => {}
-                }
-            }
-        }
-        StatementKind::Assignment { value, target, .. } => {
-            collect_expression_calls(value, calls);
-            for index in &target.indices {
-                collect_expression_calls(index, calls);
-            }
-        }
-        StatementKind::GotoLabel { .. } | StatementKind::Directive(_) | StatementKind::Invalid => {}
-    }
-}
-
-fn collect_expression_calls(expression: &Expr, calls: &mut Vec<String>) {
-    match &expression.kind {
-        ExprKind::Call { name, args } => {
-            calls.push(name.clone());
-            for argument in args.iter().flatten() {
-                collect_expression_calls(argument, calls);
-            }
-        }
-        ExprKind::Variable { indices, .. } => {
-            for index in indices {
-                collect_expression_calls(index, calls);
-            }
-        }
-        ExprKind::Unary { operand, .. }
-        | ExprKind::Postfix { operand, .. }
-        | ExprKind::Group(operand) => {
-            collect_expression_calls(operand, calls);
-        }
-        ExprKind::Binary { left, right, .. } => {
-            collect_expression_calls(left, calls);
-            collect_expression_calls(right, calls);
-        }
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            collect_expression_calls(condition, calls);
-            collect_expression_calls(then_expr, calls);
-            collect_expression_calls(else_expr, calls);
-        }
-        ExprKind::Formatted(value) => collect_formatted_calls(value, calls),
-        ExprKind::Integer(_) | ExprKind::String(_) | ExprKind::Identifier(_) | ExprKind::Error => {}
-    }
-}
-
-fn collect_formatted_calls(value: &FormattedString, calls: &mut Vec<String>) {
-    for part in &value.parts {
-        match part {
-            FormPart::StringInterpolation {
-                expression, width, ..
-            }
-            | FormPart::IntegerInterpolation {
-                expression, width, ..
-            } => {
-                collect_expression_calls(expression, calls);
-                if let Some(width) = width {
-                    collect_expression_calls(width, calls);
-                }
-            }
-            FormPart::Conditional {
-                condition,
-                then_value,
-                else_value,
-                ..
-            } => {
-                collect_expression_calls(condition, calls);
-                collect_formatted_calls(then_value, calls);
-                if let Some(else_value) = else_value {
-                    collect_formatted_calls(else_value, calls);
-                }
-            }
-            FormPart::Text(_) | FormPart::Triple { .. } => {}
-        }
-    }
-}
-
-fn uses_dynamic_call(statement: &Statement) -> bool {
-    // Emuera parses every function once a runtime-resolved call target is reachable.
-    // Keep this list aligned with the cross-function dynamic lowering paths so the
-    // IgnoreUncalledFunction optimization cannot discard a possible target body.
-    matches!(
-        &statement.kind,
-        StatementKind::Instruction { name, .. }
-            if matches!(
-                name.as_str(),
-                "GETMETH"
-                    | "GETMETHS"
-                    | "EXISTMETH"
-                    | "STRFORM"
-                    | "STRFORMCHECK"
-                    | "EXISTVAR"
-                    | "CALLSTR"
-                    | "JUMPSTR"
-                    | "TRYCALLSTR"
-                    | "TRYJUMPSTR"
-                    | "TRYCCALLSTR"
-                    | "TRYCJUMPSTR"
-                    | "TRYCALLLIST"
-                    | "TRYJUMPLIST"
-                    | "CALLFORM"
-                    | "CALLFORMF"
-                    | "JUMPFORM"
-                    | "TRYCALLFORM"
-                    | "TRYCALLFORMF"
-                    | "TRYJUMPFORM"
-                    | "TRYCCALL"
-                    | "TRYCCALLFORM"
-                    | "TRYCJUMP"
-                    | "TRYCJUMPFORM"
-            )
-    )
 }
 
 pub(super) fn uncalled_function(

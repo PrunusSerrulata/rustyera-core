@@ -162,6 +162,81 @@ fn inline_comment_does_not_become_part_of_a_static_call_target() {
 }
 
 #[test]
+fn trycallf_keeps_its_static_target_reachable() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "trycallf.erb",
+                "@SYSTEM_TITLE\nTRYCALLF HELPER(1)\nRETURN\n@HELPER(ARG)\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::default(),
+        &ExtensionRegistry::default(),
+    );
+    let project = report.project.expect("valid TRYCALLF project");
+    let helper = project
+        .program
+        .functions
+        .iter()
+        .find(|function| function.name == "HELPER")
+        .unwrap();
+    assert!(!helper.lines.is_empty());
+}
+
+#[test]
+fn static_targets_expand_rename_indices_before_symbol_lookup() {
+    let mut data = empty_project();
+    data.static_data
+        .rename
+        .insert("[[TARGET_NO]]".into(), "7".into());
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: data,
+            sources: vec![source(
+                "rename-call.erb",
+                "@SYSTEM_TITLE\nTRYCALL HELPER[[TARGET_NO]]\nRETURN\n@HELPER7\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::default(),
+        &ExtensionRegistry::default(),
+    );
+    let project = report.project.expect("valid renamed static target");
+    let helper = project
+        .program
+        .functions
+        .iter()
+        .find(|function| function.name == "HELPER7")
+        .unwrap();
+    assert!(!helper.lines.is_empty());
+}
+
+#[test]
+fn trygoto_list_func_entries_remain_labels_not_function_targets() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "function-lists.erb",
+                "@SYSTEM_TITLE\nTRYCALLLIST\nFUNC CALLED\nENDFUNC\nTRYGOTOLIST\nFUNC LABEL_ONLY\nENDFUNC\n$LABEL_ONLY\nRETURN\n@CALLED\nRETURN\n@LABEL_ONLY\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::default(),
+        &ExtensionRegistry::default(),
+    );
+    let project = report.project.expect("valid TRY*LIST project");
+    for (name, expected) in [("CALLED", true), ("LABEL_ONLY", false)] {
+        let function = project
+            .program
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap();
+        assert_eq!(!function.lines.is_empty(), expected, "{name}");
+    }
+}
+
+#[test]
 fn structured_formatted_try_call_keeps_dynamic_targets_reachable() {
     let report = analyze_project(
         AnalysisInput {
@@ -210,19 +285,37 @@ fn structured_formatted_try_call_keeps_dynamic_targets_reachable() {
 }
 
 #[test]
-fn method_reachability_covers_formatted_values_widths_conditions_and_runtime_forms() {
-    for statement in [
-        "RESULT = GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0)",
-        "#DIM DYNAMIC VALUE\nVALUE = GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0)",
-        "#DIM DYNAMIC STR\nSTR = GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0)",
-        "RESULTS '= GETMETHS(\"SCOM_\" + TOSTR(1), \"\")",
-        "RESULT = EXISTMETH(\"CAN_MOVE_\" + TOSTR(1))",
-        "PRINTFORML {GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0)}",
-        "PRINTFORML {1, GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0)}",
-        "PRINTFORML \\@ GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0) ? yes # no \\@",
-        "RESULTS '= STRFORM(STR:0)",
-        "RESULT = STRFORMCHECK(STR:0)",
-        "RESULT = EXISTVAR(STR:0, 1)",
+fn bounded_dynamic_methods_and_runtime_forms_reach_only_their_candidates() {
+    for (statement, expected) in [
+        (
+            "RESULT = GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0)",
+            "CAN_MOVE_1",
+        ),
+        (
+            "#DIM DYNAMIC VALUE\nVALUE = GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0)",
+            "CAN_MOVE_1",
+        ),
+        (
+            "#DIM DYNAMIC STR\nSTR = GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0)",
+            "CAN_MOVE_1",
+        ),
+        ("RESULTS '= GETMETHS(\"SCOM_\" + TOSTR(1), \"\")", "SCOM_1"),
+        ("RESULT = EXISTMETH(\"CAN_MOVE_\" + TOSTR(1))", "CAN_MOVE_1"),
+        (
+            "PRINTFORML {GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0)}",
+            "CAN_MOVE_1",
+        ),
+        (
+            "PRINTFORML {1, GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0)}",
+            "CAN_MOVE_1",
+        ),
+        (
+            "PRINTFORML \\@ GETMETH(\"CAN_MOVE_\" + TOSTR(1), 0) ? yes # no \\@",
+            "CAN_MOVE_1",
+        ),
+        ("RESULTS '= STRFORM(\"SCOM_1()\")", "SCOM_1"),
+        ("RESULT = STRFORMCHECK(\"CAN_MOVE_1()\")", "CAN_MOVE_1"),
+        ("RESULT = EXISTVAR(\"CAN_MOVE_1()\", 1)", "CAN_MOVE_1"),
     ] {
         let mut options = AnalyzerOptions::default();
         if statement.contains("STRFORMCHECK") || statement.contains("EXISTVAR") {
@@ -259,9 +352,39 @@ fn method_reachability_covers_formatted_values_widths_conditions_and_runtime_for
                 .iter()
                 .find(|function| function.name == name)
                 .expect("method definition");
-            assert!(!method.lines.is_empty(), "{statement} discarded {name}");
+            assert_eq!(
+                !method.lines.is_empty(),
+                name == expected,
+                "{statement} selected the wrong dynamic candidate {name}"
+            );
         }
     }
+}
+
+#[test]
+fn unbounded_dynamic_targets_block_pruning_and_keep_every_candidate() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "unbounded.erb",
+                "@SYSTEM_TITLE\n#DIMS TARGET_NAME\nTRYCALLFORM %TARGET_NAME%\nRETURN\n@UNRELATED\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions::default(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(report.diagnostics.iter().all(|diagnostic| {
+        diagnostic.severity != erabasic_analyzer::AnalyzerDiagnosticSeverity::Error
+    }));
+    let project = report.project.expect("unbounded graph remains analyzable");
+    let unrelated = project
+        .program
+        .functions
+        .iter()
+        .find(|function| function.name == "UNRELATED")
+        .unwrap();
+    assert!(!unrelated.lines.is_empty());
 }
 
 #[test]

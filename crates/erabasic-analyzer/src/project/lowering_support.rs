@@ -369,11 +369,12 @@ pub(super) fn resolve_static_target(raw: &str, index_resolver: &IndexResolver) -
             result.push_str(&rest[start..]);
             return result;
         };
-        let name = &after[..end];
-        if let Some(value) = index_resolver.resolve_rename(name) {
+        let token_end = start + 2 + end + 2;
+        let token = &rest[start..token_end];
+        if let Some(value) = index_resolver.resolve_rename(token) {
             result.push_str(&value.to_string());
         } else {
-            result.push_str(&rest[start..start + 2 + end + 2]);
+            result.push_str(token);
         }
         rest = &after[end + 2..];
     }
