@@ -1319,7 +1319,7 @@ fn resource_seed_owned_identity_isolated_across_a_b_a_projects_by_actual_sha256(
 }
 
 #[test]
-fn external_resource_seed_defers_exact_sha_verification_to_the_provider() {
+fn host_owned_resource_seed_defers_exact_sha_verification_to_the_provider() {
     let seed = b"external-resource-seed".to_vec();
     let snapshot = crate::runtime_snapshot::SqlConnectionSnapshot {
         logical_name: "seeded".into(),
@@ -1349,6 +1349,21 @@ fn external_resource_seed_defers_exact_sha_verification_to_the_provider() {
         file.content_hash = Some(ProtocolBytes::new(blake3::hash(&seed).as_bytes().to_vec()));
     }
 
+    assert!(
+        fixture
+            .session
+            .validate_exact_sql_restore(std::slice::from_ref(&snapshot))
+            .is_ok()
+    );
+    {
+        let project = fixture.session.project_snapshot.as_mut().unwrap();
+        let file = std::sync::Arc::make_mut(&mut project.manifest)
+            .files
+            .iter_mut()
+            .find(|file| file.relative_path == "db/seed.db")
+            .unwrap();
+        file.payload = FilePayload::Bytes(ProtocolBytes::new(Vec::new()));
+    }
     assert!(
         fixture
             .session

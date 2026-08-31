@@ -170,20 +170,30 @@ impl RuntimeSession {
         let Some(file) = file else {
             return false;
         };
+        let host_owned_payload_is_available = || {
+            file.content_hash
+                .as_ref()
+                .is_some_and(|digest| digest.as_slice().len() == 32)
+        };
         match &file.payload {
             FilePayload::Utf8(value) => {
-                Sha256::digest(value.as_bytes()).as_slice() == seed.sha256.as_slice()
+                if value.is_empty() && host_owned_payload_is_available() {
+                    true
+                } else {
+                    Sha256::digest(value.as_bytes()).as_slice() == seed.sha256.as_slice()
+                }
             }
             FilePayload::Bytes(value) => {
-                Sha256::digest(value.as_slice()).as_slice() == seed.sha256.as_slice()
+                if value.as_slice().is_empty() && host_owned_payload_is_available() {
+                    true
+                } else {
+                    Sha256::digest(value.as_slice()).as_slice() == seed.sha256.as_slice()
+                }
             }
-            // External bytes stay host-owned. Their BLAKE3 content hash binds the project/cache
-            // identity; the SQL provider verifies the saved SHA-256 against the actual seed
-            // before publishing an exact restore candidate.
-            FilePayload::ExternalResource(_) => file
-                .content_hash
-                .as_ref()
-                .is_some_and(|digest| digest.as_slice().len() == 32),
+            // External bytes and released cache payloads stay host-owned. Their BLAKE3 content
+            // hash binds the project/cache identity; the SQL provider verifies the saved SHA-256
+            // against the actual seed before publishing an exact restore candidate.
+            FilePayload::ExternalResource(_) => host_owned_payload_is_available(),
             FilePayload::IoError(_) => false,
         }
     }
