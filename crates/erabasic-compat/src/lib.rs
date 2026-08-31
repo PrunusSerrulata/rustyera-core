@@ -20,6 +20,10 @@ pub const SQL_SERVICE_CONTRACT_NAME: &str = "rustyera.sql";
 pub const SQL_SERVICE_CONTRACT_VERSION: u16 = 1;
 pub const SQL_LIMITS_CONTRACT_NAME: &str = "rustyera.sql.limits";
 pub const SQL_LIMITS_CONTRACT_VERSION: u32 = 1;
+pub const SCENE_CONTRACT_NAME: &str = "rustyera.scene";
+pub const SCENE_CONTRACT_VERSION: u32 = 1;
+pub const SAVE_STATE_CONTRACT_NAME: &str = "rustyera.save_state";
+pub const SAVE_STATE_CONTRACT_VERSION: u32 = 1;
 
 #[derive(
     Clone,
@@ -126,7 +130,7 @@ impl CompatibilityIdentity {
     pub fn for_profile(profile: CompatibilityProfileId) -> Self {
         let version = match profile {
             CompatibilityProfileId::EmueraEm => 1,
-            CompatibilityProfileId::EmueraSkiaSnake => 10,
+            CompatibilityProfileId::EmueraSkiaSnake => 11,
         };
         Self {
             profile,
@@ -142,7 +146,7 @@ impl CompatibilityIdentity {
             layout: "unicode_column_v1".into(),
             save_codec: match profile {
                 CompatibilityProfileId::EmueraEm => "emuera1808",
-                CompatibilityProfileId::EmueraSkiaSnake => "rustyera_envelope_v1:emuera1808",
+                CompatibilityProfileId::EmueraSkiaSnake => "rustyera_envelope_v2:emuera1808",
             }
             .into(),
             services: match profile {
@@ -155,6 +159,14 @@ impl CompatibilityIdentity {
                     CompatibilityServiceContract {
                         name: SQL_LIMITS_CONTRACT_NAME.into(),
                         version: SQL_LIMITS_CONTRACT_VERSION,
+                    },
+                    CompatibilityServiceContract {
+                        name: SCENE_CONTRACT_NAME.into(),
+                        version: SCENE_CONTRACT_VERSION,
+                    },
+                    CompatibilityServiceContract {
+                        name: SAVE_STATE_CONTRACT_NAME.into(),
+                        version: SAVE_STATE_CONTRACT_VERSION,
                     },
                 ],
             },
@@ -232,6 +244,12 @@ impl CompatibilityIdentity {
         matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 10
     }
 
+    /// Whole-project snake source convergence semantics are fixed by policy v11.
+    #[must_use]
+    pub const fn supports_snake_compile_convergence(&self) -> bool {
+        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 11
+    }
+
     /// Policy for non-variadic user calls; builtin signatures remain exact.
     #[must_use]
     pub const fn user_call_argument_policy(&self, strict: bool) -> UserCallArgumentPolicy {
@@ -299,6 +317,9 @@ mod tests {
         assert_ne!(reference.arithmetic, snake.arithmetic);
         assert_eq!(reference.rng_algorithm, snake.rng_algorithm);
         assert!(snake.is_experimental());
+        assert_eq!(snake.semantic_version, 11);
+        assert_eq!(snake.policy_version, 11);
+        assert_eq!(snake.save_codec, "rustyera_envelope_v2:emuera1808");
         assert!(snake.uses_snake_alias_rules());
         assert!(snake.supports_safe_sql());
         assert!(!reference.uses_snake_alias_rules());
@@ -314,21 +335,41 @@ mod tests {
                     name: SQL_LIMITS_CONTRACT_NAME.into(),
                     version: SQL_LIMITS_CONTRACT_VERSION,
                 },
+                CompatibilityServiceContract {
+                    name: SCENE_CONTRACT_NAME.into(),
+                    version: SCENE_CONTRACT_VERSION,
+                },
+                CompatibilityServiceContract {
+                    name: SAVE_STATE_CONTRACT_NAME.into(),
+                    version: SAVE_STATE_CONTRACT_VERSION,
+                },
             ]
         );
         let mut previous_snake = snake.clone();
-        previous_snake.semantic_version = 3;
-        previous_snake.policy_version = 3;
+        previous_snake.semantic_version = 10;
+        previous_snake.policy_version = 10;
+        previous_snake.save_codec = "rustyera_envelope_v1:emuera1808".into();
+        previous_snake.services.retain(|service| {
+            service.name != SCENE_CONTRACT_NAME && service.name != SAVE_STATE_CONTRACT_NAME
+        });
+        assert_ne!(previous_snake.digest(), snake.digest());
         assert!(previous_snake.validate().is_err());
-        let mut different_limits = snake.clone();
-        different_limits
-            .services
-            .iter_mut()
-            .find(|service| service.name == SQL_LIMITS_CONTRACT_NAME)
-            .expect("snake identity carries the SQL limits contract")
-            .version += 1;
-        assert_ne!(different_limits.digest(), snake.digest());
-        assert!(different_limits.validate().is_err());
+        for contract in [
+            SQL_SERVICE_CONTRACT_NAME,
+            SQL_LIMITS_CONTRACT_NAME,
+            SCENE_CONTRACT_NAME,
+            SAVE_STATE_CONTRACT_NAME,
+        ] {
+            let mut different_service = snake.clone();
+            different_service
+                .services
+                .iter_mut()
+                .find(|service| service.name == contract)
+                .expect("snake identity carries every registered service contract")
+                .version += 1;
+            assert_ne!(different_service.digest(), snake.digest());
+            assert!(different_service.validate().is_err());
+        }
         assert!(reference.validate().is_ok());
         assert!(snake.validate().is_ok());
         let mut unsupported = snake;

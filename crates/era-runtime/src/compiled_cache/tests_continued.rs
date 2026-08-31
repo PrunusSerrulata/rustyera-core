@@ -756,15 +756,20 @@ fn profile_identity_survives_cache_and_full_project_without_cross_profile_keys()
     assert_eq!(project_identity(&project).source_digest, source_digest);
     assert_ne!(project_key(&project_identity(&project), &[]), reference_key);
     let snake_key = project_key(&project_identity(&project), &[]);
-    let mut different_limits = project.clone();
-    bump_compatibility_service_version(
-        &mut different_limits.compatibility,
+    for contract in [
+        erabasic_compat::SQL_SERVICE_CONTRACT_NAME,
         erabasic_compat::SQL_LIMITS_CONTRACT_NAME,
-    );
-    assert_ne!(
-        project_key(&project_identity(&different_limits), &[]),
-        snake_key
-    );
+        erabasic_compat::SCENE_CONTRACT_NAME,
+        erabasic_compat::SAVE_STATE_CONTRACT_NAME,
+    ] {
+        let mut different_service = project.clone();
+        bump_compatibility_service_version(&mut different_service.compatibility, contract);
+        assert_ne!(
+            project_key(&project_identity(&different_service), &[]),
+            snake_key,
+            "{contract} must participate in the cache identity"
+        );
+    }
     project.files.push(SubmittedFile {
         relative_path: "reraconfig.toml".into(),
         category: FileCategory::Configuration,
