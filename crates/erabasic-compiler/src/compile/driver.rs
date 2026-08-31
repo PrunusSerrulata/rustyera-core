@@ -315,9 +315,19 @@ fn compile_project_inner(
                     .diagnostics
                     .into_iter()
                     .map(|diagnostic| {
+                        let context = match (diagnostic.function, diagnostic.instruction) {
+                            (Some(function), Some(instruction)) => {
+                                format!(" in function {function} at HIR instruction {instruction}")
+                            }
+                            (Some(function), None) => format!(" in function {function}"),
+                            (None, Some(instruction)) => {
+                                format!(" at HIR instruction {instruction}")
+                            }
+                            (None, None) => String::new(),
+                        };
                         CompilerDiagnostic::new(
                             CompilerDiagnosticCode::InvalidHir,
-                            diagnostic.message,
+                            format!("{}{context}", diagnostic.message),
                         )
                     })
                     .collect(),
