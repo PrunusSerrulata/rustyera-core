@@ -134,19 +134,33 @@ impl CompileAuditObservation {
     fn fail(
         &self,
         stage: &str,
-        diagnostic: serde_json::Value,
+        diagnostics: serde_json::Value,
         message: impl Into<String>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let message = message.into();
+        let diagnostics = diagnostic_batch(diagnostics);
+        let first_diagnostic = diagnostics.first().cloned().unwrap_or_default();
         self.publish(
             "failed",
             serde_json::json!({"stage": stage}),
             0,
             0,
-            diagnostic,
-            serde_json::json!({"failure": &message}),
+            first_diagnostic,
+            serde_json::json!({
+                "failure": &message,
+                "errorCount": diagnostics.len(),
+                "diagnostics": diagnostics
+            }),
         );
         Err(message.into())
+    }
+}
+
+fn diagnostic_batch(diagnostics: serde_json::Value) -> Vec<serde_json::Value> {
+    match diagnostics {
+        serde_json::Value::Null => Vec::new(),
+        serde_json::Value::Array(diagnostics) => diagnostics,
+        diagnostic => vec![diagnostic],
     }
 }
 
@@ -210,10 +224,10 @@ pub(super) fn run(compile: bool) -> Result<(), Box<dyn std::error::Error>> {
             serde_json::Value::Null,
             serde_json::json!({}),
         );
-        let Some(category) = inputs.classify(&relative) else {
+        let Some(category) = inputs.classify(relative) else {
             continue;
         };
-        let data_root = inputs.data_root(&relative, category);
+        let data_root = inputs.data_root(relative, category);
         if data_root.is_none() && !matches!(category, FileCategory::Erb | FileCategory::Erh) {
             continue;
         }
@@ -239,7 +253,7 @@ pub(super) fn run(compile: bool) -> Result<(), Box<dyn std::error::Error>> {
         source_identity.update(&[0]);
         if let Some(data_root) = data_root {
             let file = erabasic_csv::FrontendFile {
-                relative_path: data_root.relative_path(&relative),
+                relative_path: data_root.relative_path(relative),
                 source_path: Some(relative.clone()),
                 payload: erabasic_csv::FilePayload::Utf8(text),
             };
@@ -291,16 +305,20 @@ pub(super) fn run(compile: bool) -> Result<(), Box<dyn std::error::Error>> {
         })
         .count();
     if csv_errors != 0 {
-        let first = csv.diagnostics.iter().find(|diagnostic| {
-            matches!(
-                diagnostic.severity,
-                erabasic_csv::CsvDiagnosticSeverity::Error
-                    | erabasic_csv::CsvDiagnosticSeverity::Fatal
-            )
-        });
+        let errors = csv
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                matches!(
+                    diagnostic.severity,
+                    erabasic_csv::CsvDiagnosticSeverity::Error
+                        | erabasic_csv::CsvDiagnosticSeverity::Fatal
+                )
+            })
+            .collect::<Vec<_>>();
         return observation.fail(
             "csv_load",
-            serde_json::to_value(first)?,
+            serde_json::to_value(errors)?,
             format!("CSV loading reported {csv_errors} errors"),
         );
     }
@@ -408,7 +426,7 @@ pub(super) fn run(compile: bool) -> Result<(), Box<dyn std::error::Error>> {
     if !errors.is_empty() {
         return observation.fail(
             "analysis",
-            serde_json::to_value(errors[0])?,
+            serde_json::to_value(&errors)?,
             format!("analysis reported {} errors", errors.len()),
         );
     }
@@ -439,7 +457,7 @@ pub(super) fn run(compile: bool) -> Result<(), Box<dyn std::error::Error>> {
         if !validation.is_valid() {
             return observation.fail(
                 "hir_validation",
-                serde_json::to_value(validation.diagnostics.first())?,
+                serde_json::to_value(&validation.diagnostics)?,
                 format!(
                     "HIR validation reported {} diagnostics",
                     validation.diagnostics.len()
@@ -620,12 +638,16 @@ pub(super) fn run(compile: bool) -> Result<(), Box<dyn std::error::Error>> {
             })
             .count();
         if compiler_errors != 0 || compiled.artifact.is_none() {
-            let first = compiled.diagnostics.iter().find(|diagnostic| {
-                diagnostic.severity == erabasic_compiler::CompilerDiagnosticSeverity::Error
-            });
+            let errors = compiled
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| {
+                    diagnostic.severity == erabasic_compiler::CompilerDiagnosticSeverity::Error
+                })
+                .collect::<Vec<_>>();
             return observation.fail(
                 "compile",
-                serde_json::to_value(first)?,
+                serde_json::to_value(errors)?,
                 format!(
                     "compilation reported {compiler_errors} errors and artifact={}",
                     compiled.artifact.is_some()
@@ -660,4 +682,22 @@ pub(super) fn run(compile: bool) -> Result<(), Box<dyn std::error::Error>> {
         }),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::diagnostic_batch;
+    use serde_json::json;
+
+    #[test]
+    fn project_load_failures_retain_every_collected_diagnostic() {
+        let diagnostics = diagnostic_batch(json!([
+            {"code": "first", "message": "one"},
+            {"code": "second", "message": "two"}
+        ]));
+
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0]["code"], "first");
+        assert_eq!(diagnostics[1]["code"], "second");
+    }
 }
