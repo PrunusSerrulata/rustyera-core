@@ -108,6 +108,7 @@ pub fn compare_reference_file_paths(left: &str, right: &str) -> std::cmp::Orderi
 pub(crate) struct ProgressCounter<'a> {
     stage: AnalysisProgressStage,
     total: usize,
+    report_interval: usize,
     completed: AtomicUsize,
     reported_completed: AtomicUsize,
     callback_lock: Mutex<()>,
@@ -130,6 +131,7 @@ impl<'a> ProgressCounter<'a> {
         Self {
             stage,
             total,
+            report_interval: total.checked_div(256).unwrap_or(0).max(64),
             completed: AtomicUsize::new(0),
             reported_completed: AtomicUsize::new(0),
             callback_lock: Mutex::new(()),
@@ -158,9 +160,12 @@ impl<'a> ProgressCounter<'a> {
             .saturating_mul(100)
             .checked_div(self.total)
             .unwrap_or(100);
-        // Percentage-only reporting can hide thousands of completed functions.
+        // Percentage-only reporting can hide thousands of completed functions. Keep bounded
+        // sub-percent updates without flooding browser hosts when a large project advances fast.
         if completed > previous
-            && (percent > previous_percent || completed - previous >= 64 || completed == self.total)
+            && (percent > previous_percent
+                || completed - previous >= self.report_interval
+                || completed == self.total)
         {
             self.reported_completed.store(completed, Ordering::Relaxed);
             callback(AnalysisProgress {
