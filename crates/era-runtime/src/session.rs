@@ -233,9 +233,9 @@ struct ProjectProgressGate {
 }
 
 impl ProjectProgressGate {
-    // Project loading only needs to remain observable to the five-second watchdog. Four updates
-    // per second keep slow work responsive without spending browser time rendering progress.
-    const INTERVAL: Duration = Duration::from_millis(250);
+    // Project loading only needs to remain observable to the five-second watchdog. One update
+    // per second keeps slow work responsive without competing with large WASM memory growth.
+    const INTERVAL: Duration = Duration::from_secs(1);
 
     fn accepts(&mut self, progress: ProjectProgress, now: Duration) -> bool {
         if self.last == Some(progress) {
@@ -382,20 +382,20 @@ mod progress_reporter_tests {
 
         assert!(gate.accepts(compiling(0, 100), Duration::ZERO));
         assert!(!gate.accepts(compiling(1, 100), Duration::from_millis(33)));
-        assert!(gate.accepts(compiling(2, 100), Duration::from_millis(250)));
-        assert!(!gate.accepts(compiling(1, 100), Duration::from_millis(251)));
-        assert!(gate.accepts(compiling(100, 100), Duration::from_millis(251)));
-        assert!(!gate.accepts(compiling(100, 100), Duration::from_millis(252)));
-        assert!(gate.accepts(compiling(0, 300), Duration::from_millis(252)));
-        assert!(!gate.accepts(compiling(1, 300), Duration::from_millis(253)));
-        assert!(gate.accepts(compiling(2, 300), Duration::from_millis(502)));
+        assert!(gate.accepts(compiling(2, 100), Duration::from_secs(1)));
+        assert!(!gate.accepts(compiling(1, 100), Duration::from_millis(1_001)));
+        assert!(gate.accepts(compiling(100, 100), Duration::from_millis(1_001)));
+        assert!(!gate.accepts(compiling(100, 100), Duration::from_millis(1_002)));
+        assert!(gate.accepts(compiling(0, 300), Duration::from_millis(1_002)));
+        assert!(!gate.accepts(compiling(1, 300), Duration::from_millis(1_003)));
+        assert!(gate.accepts(compiling(2, 300), Duration::from_millis(2_002)));
 
         let zero_total = ProjectProgress {
             stage: ProjectProgressStage::Preparing,
             completed: 0,
             total: 0,
         };
-        assert!(gate.accepts(zero_total, Duration::from_millis(503)));
+        assert!(gate.accepts(zero_total, Duration::from_millis(2_003)));
         assert!(!gate.accepts(zero_total, Duration::from_secs(3)));
     }
 

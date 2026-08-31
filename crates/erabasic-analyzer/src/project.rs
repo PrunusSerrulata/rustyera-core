@@ -131,7 +131,7 @@ impl<'a> ProgressCounter<'a> {
         Self {
             stage,
             total,
-            report_interval: total.checked_div(256).unwrap_or(0).max(64),
+            report_interval: total.checked_div(64).unwrap_or(0).max(64),
             completed: AtomicUsize::new(0),
             reported_completed: AtomicUsize::new(0),
             callback_lock: Mutex::new(()),
