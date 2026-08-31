@@ -143,9 +143,7 @@ impl RuntimeSession {
                     era_runtime_protocol::SqlDatabaseSourceV1::Memory => true,
                     era_runtime_protocol::SqlDatabaseSourceV1::ResourceSeed(seed) => {
                         seed.sha256.as_slice().len() == 32
-                            && self
-                                .resource_seed_sha256(&seed.resource_id)
-                                .is_some_and(|actual| seed.sha256.as_slice() == actual.as_slice())
+                            && self.resource_seed_identity_available(seed)
                     }
                 };
             let Some(key) = crate::sql::normalize_sql_name(&snapshot.logical_name) else {
@@ -158,18 +156,36 @@ impl RuntimeSession {
         Ok(())
     }
 
-    fn resource_seed_sha256(&self, resource_id: &str) -> Option<[u8; 32]> {
-        let project = self.project_snapshot.as_ref()?;
+    fn resource_seed_identity_available(
+        &self,
+        seed: &era_runtime_protocol::SqlResourceSeedV1,
+    ) -> bool {
+        let Some(project) = self.project_snapshot.as_ref() else {
+            return false;
+        };
         let file = project.manifest.files.iter().find(|file| {
             file.category == FileCategory::Resource
-                && file.relative_path.eq_ignore_ascii_case(resource_id)
-        })?;
-        let bytes = match &file.payload {
-            FilePayload::Utf8(value) => value.as_bytes(),
-            FilePayload::Bytes(value) => value.as_slice(),
-            FilePayload::IoError(_) | FilePayload::ExternalResource(_) => return None,
+                && file.relative_path.eq_ignore_ascii_case(&seed.resource_id)
+        });
+        let Some(file) = file else {
+            return false;
         };
-        Some(Sha256::digest(bytes).into())
+        match &file.payload {
+            FilePayload::Utf8(value) => {
+                Sha256::digest(value.as_bytes()).as_slice() == seed.sha256.as_slice()
+            }
+            FilePayload::Bytes(value) => {
+                Sha256::digest(value.as_slice()).as_slice() == seed.sha256.as_slice()
+            }
+            // External bytes stay host-owned. Their BLAKE3 content hash binds the project/cache
+            // identity; the SQL provider verifies the saved SHA-256 against the actual seed
+            // before publishing an exact restore candidate.
+            FilePayload::ExternalResource(_) => file
+                .content_hash
+                .as_ref()
+                .is_some_and(|digest| digest.as_slice().len() == 32),
+            FilePayload::IoError(_) => false,
+        }
     }
 
     fn install_exact_sql_restore(
