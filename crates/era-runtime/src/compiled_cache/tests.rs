@@ -110,6 +110,13 @@ fn cooperative_planning_bounds_manifest_and_function_traversal() {
         panic!("incremental cache-key planner changed variant");
     };
     assert_eq!(keys.len(), COOPERATIVE_ITEM_QUANTUM);
+    let plan = loop {
+        if let Some(plan) = planner.step(&project, &artifact).unwrap() {
+            break plan;
+        }
+    };
+    assert!(plan.function_ranges.len() > 32);
+    assert!(plan.function_ranges.len() <= TARGET_PARALLEL_SECTIONS);
 }
 
 #[test]

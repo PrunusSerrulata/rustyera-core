@@ -63,7 +63,11 @@ const DATA_PROJECT_VERSION: u8 = 12;
 const VERSION: u8 = 14;
 const PROJECT_COMPRESSION_LEVEL: i32 = 3;
 const CACHE_COMPRESSION_LEVEL: i32 = 1;
-const TARGET_PARALLEL_SECTIONS: usize = 32;
+// This is also the cooperative WASM encoder's largest function/source partition count. Snake TW
+// has enough bytecode for a 32-way function section to monopolize the Runtime Worker beyond the
+// frontend watchdog interval. Keep the canonical native/WASM layout identical while bounding each
+// cooperative serialization slice more tightly.
+const TARGET_PARALLEL_SECTIONS: usize = 256;
 const FIXED_SECTION_COUNT: usize = 9;
 const MANIFEST_SECTION_INDEX: usize = 6;
 const MAXIMUM_DECODED_PAYLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
