@@ -89,26 +89,34 @@ struct TaintFormula {
     dependencies: BTreeSet<FunctionId>,
 }
 
-impl TaintFormula {
-    fn extend(&mut self, other: &Self) {
-        self.direct |= other.direct;
-        self.dependencies.extend(other.dependencies.iter().copied());
-    }
+#[derive(Default)]
+struct TaintLinks {
+    direct: bool,
+    dependencies: Vec<FunctionId>,
+    parents: Vec<usize>,
+}
 
+impl TaintLinks {
     fn is_empty(&self) -> bool {
-        !self.direct && self.dependencies.is_empty()
+        !self.direct && self.dependencies.is_empty() && self.parents.is_empty()
     }
 }
 
 fn function_return_taint_formula(function: &erabasic_hir::Function) -> TaintFormula {
-    let mut variables = BTreeMap::<VariableId, TaintFormula>::new();
-    let mut result = TaintFormula::default();
+    let mut variables = BTreeMap::<VariableId, usize>::new();
+    let mut nodes = Vec::<TaintLinks>::new();
+    let mut result = TaintLinks::default();
     for line in &function.lines {
         match &line.kind {
             HirStatementKind::Assignment { target, value, .. } => {
-                let value = expression_taint_formula(value, &variables);
+                let mut value = expression_taint_links(value, &variables);
+                if let Some(&previous) = variables.get(&target.variable) {
+                    value.parents.push(previous);
+                }
                 if !value.is_empty() {
-                    variables.entry(target.variable).or_default().extend(&value);
+                    let node = nodes.len();
+                    nodes.push(value);
+                    variables.insert(target.variable, node);
                 }
             }
             HirStatementKind::Instruction { target, arguments }
@@ -121,13 +129,35 @@ fn function_return_taint_formula(function: &erabasic_hir::Function) -> TaintForm
             _ => {}
         }
     }
+    resolve_taint_formula(result, &nodes)
+}
+
+fn resolve_taint_formula(root: TaintLinks, nodes: &[TaintLinks]) -> TaintFormula {
+    let mut result = TaintFormula {
+        direct: root.direct,
+        dependencies: root.dependencies.into_iter().collect(),
+    };
+    let mut pending = root.parents;
+    let mut visited = vec![false; nodes.len()];
+    while let Some(index) = pending.pop() {
+        if visited[index] {
+            continue;
+        }
+        visited[index] = true;
+        let node = &nodes[index];
+        result.direct |= node.direct;
+        result
+            .dependencies
+            .extend(node.dependencies.iter().copied());
+        pending.extend(node.parents.iter().copied());
+    }
     result
 }
 
 fn argument_taint_formula(
     argument: &HirArgument,
-    variables: &BTreeMap<VariableId, TaintFormula>,
-    output: &mut TaintFormula,
+    variables: &BTreeMap<VariableId, usize>,
+    output: &mut TaintLinks,
 ) {
     match argument {
         HirArgument::Expression(value)
@@ -140,19 +170,19 @@ fn argument_taint_formula(
     }
 }
 
-fn expression_taint_formula(
+fn expression_taint_links(
     expression: &HirExpr,
-    variables: &BTreeMap<VariableId, TaintFormula>,
-) -> TaintFormula {
-    let mut output = TaintFormula::default();
+    variables: &BTreeMap<VariableId, usize>,
+) -> TaintLinks {
+    let mut output = TaintLinks::default();
     expression_taint_formula_into(expression, variables, &mut output);
     output
 }
 
 fn expression_taint_formula_into(
     expression: &HirExpr,
-    variables: &BTreeMap<VariableId, TaintFormula>,
-    output: &mut TaintFormula,
+    variables: &BTreeMap<VariableId, usize>,
+    output: &mut TaintLinks,
 ) {
     match &expression.kind {
         HirExprKind::Call { target, arguments } => {
@@ -164,7 +194,7 @@ fn expression_taint_formula_into(
                     output.direct = true;
                 }
                 CallTarget::User { function } => {
-                    output.dependencies.insert(*function);
+                    output.dependencies.push(*function);
                 }
                 CallTarget::Builtin { .. }
                 | CallTarget::Extension { .. }
@@ -204,11 +234,11 @@ fn expression_taint_formula_into(
 
 fn place_taint_formula(
     place: &HirPlace,
-    variables: &BTreeMap<VariableId, TaintFormula>,
-    output: &mut TaintFormula,
+    variables: &BTreeMap<VariableId, usize>,
+    output: &mut TaintLinks,
 ) {
-    if let Some(formula) = variables.get(&place.variable) {
-        output.extend(formula);
+    if let Some(&node) = variables.get(&place.variable) {
+        output.parents.push(node);
     }
     for index in &place.indices {
         expression_taint_formula_into(index, variables, output);
@@ -217,8 +247,8 @@ fn place_taint_formula(
 
 fn formatted_taint_formula(
     value: &HirFormattedString,
-    variables: &BTreeMap<VariableId, TaintFormula>,
-    output: &mut TaintFormula,
+    variables: &BTreeMap<VariableId, usize>,
+    output: &mut TaintLinks,
 ) {
     for part in &value.parts {
         match part {

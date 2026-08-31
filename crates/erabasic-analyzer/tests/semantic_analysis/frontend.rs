@@ -121,6 +121,28 @@ fn frontend_observation_return_taint_flows_through_local_assignments() {
 }
 
 #[test]
+fn frontend_observation_return_taint_preserves_assignment_order() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "projection-order.erb",
+                "@SYSTEM_TITLE\nIF WRAPPER()\nPRINT wide\nENDIF\nRETURN\n\
+                 @WRAPPER\n#FUNCTION\n#DIM VALUE\n#DIM LATER\nVALUE = LATER\n\
+                 LATER = OBSERVE()\nRETURNF VALUE\n\
+                 @OBSERVE\n#FUNCTION\nRETURNF CLIENTWIDTH()\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+
+    assert!(!report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == AnalyzerDiagnosticCode::FrontendObservationDependency
+    }));
+}
+
+#[test]
 fn restart_branches_to_the_current_function_entry_without_falling_through() {
     let report = analyze_project(
         AnalysisInput {
