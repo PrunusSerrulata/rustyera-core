@@ -593,6 +593,32 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_prefixed_hex_colors() {
+        let source = "<font color='#0x90EE90'>a</font><div width='1px' height='1px' bcolor='#0X010203,red'>b</div>";
+        let document = parse_document(source).unwrap();
+
+        assert!(matches!(
+            &document.nodes[0],
+            HtmlNode::Element {
+                semantic: HtmlElementSemantic::Font {
+                    color: Some(0x0090_ee90),
+                    ..
+                },
+                ..
+            }
+        ));
+        assert!(matches!(
+            &document.nodes[1],
+            HtmlNode::Element {
+                semantic: HtmlElementSemantic::Division { box_model, .. },
+                ..
+            } if box_model.border_colors
+                == Some([0x0001_0203, 0x00ff_0000, 0x0001_0203, 0x00ff_0000])
+        ));
+        assert_eq!(snake_extension_range(&document), None);
+    }
+
+    #[test]
     fn rejects_reference_invalid_attributes_and_nesting() {
         assert!(matches!(
             parse_document("<img width='1'>"),

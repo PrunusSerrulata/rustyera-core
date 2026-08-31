@@ -434,6 +434,29 @@ fn malformed_immediate_html_print_falls_back_to_a_sourced_vm_fault() {
 }
 
 #[test]
+fn prefixed_hex_html_colors_are_shared_by_both_profiles() {
+    let source =
+        "@SYSTEM_TITLE\nHTML_PRINT \"<font color='#0x90EE90'>ok</font>\"\nFORCEWAIT\nRETURN\n";
+    for profile in [
+        erabasic_compat::CompatibilityProfileId::EmueraEm,
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    ] {
+        let (session, _, messages) = run_immediate_query_project_with_profile(
+            source,
+            erabasic_compat::CompatibilityIdentity::for_profile(profile),
+        );
+        assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{profile:?}");
+        assert!(
+            !messages
+                .iter()
+                .any(|message| matches!(message, RuntimeMessage::Fault(_))),
+            "{profile:?}: {messages:#?}"
+        );
+        assert!(projected_presentation_text(&session.presentation.snapshot()).contains("ok"));
+    }
+}
+
+#[test]
 fn malformed_immediate_html_query_falls_back_to_a_sourced_vm_fault() {
     let (session, _report, messages) = run_immediate_query_project(
         "@SYSTEM_TITLE\nRESULT = HTML_TOPLAINTEXT(\"&#xD800;\") == \"\"\nRETURN\n",

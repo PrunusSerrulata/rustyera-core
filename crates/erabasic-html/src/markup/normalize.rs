@@ -456,6 +456,12 @@ fn parse_box_colors(value: &str) -> Result<[u32; 4], ()> {
 
 fn parse_color(value: &str) -> Result<u32, ()> {
     if let Some(hex) = value.strip_prefix('#') {
+        // Convert.ToInt32(value, 16), used by both reference engines, accepts
+        // an optional 0x prefix after '#'. Keep one canonical RGB value.
+        let hex = hex
+            .strip_prefix("0x")
+            .or_else(|| hex.strip_prefix("0X"))
+            .unwrap_or(hex);
         let color = u32::from_str_radix(hex, 16).map_err(|_| ())?;
         return (color <= 0x00ff_ffff).then_some(color).ok_or(());
     }
