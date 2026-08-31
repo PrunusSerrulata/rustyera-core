@@ -571,7 +571,7 @@ fn analyze_with_context(
     // HIR ordering deterministic while large projects analyze independent bodies in parallel.
     let analyzing_progress = ProgressCounter::new(
         AnalysisProgressStage::Analyzing,
-        definitions.len(),
+        definitions.len().saturating_mul(3),
         progress,
     );
     let analyze_definition = |definition: &FunctionDefinition,
@@ -717,7 +717,9 @@ fn analyze_with_context(
             text: &source.text,
         })
         .collect::<Vec<_>>();
-    crate::portability::analyze(&program, &diagnostic_sources, &mut diagnostics);
+    crate::portability::analyze(&program, &diagnostic_sources, &mut diagnostics, || {
+        analyzing_progress.advance();
+    });
     diagnostics.sort_by_key(|diagnostic| {
         diagnostic.source.as_ref().map_or(
             (u32::MAX, usize::MAX, diagnostic.reference_level),

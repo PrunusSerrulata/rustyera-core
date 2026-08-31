@@ -22,22 +22,25 @@ pub(crate) fn analyze(
     program: &Program,
     sources: &[DiagnosticSource<'_>],
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
+    progress: impl Fn(),
 ) {
     let persistence = program
         .variables
         .iter()
         .map(|variable| (variable.id, variable.persistence))
         .collect::<BTreeMap<_, _>>();
-    let return_taint = summarize_return_taint(program);
-    emit_diagnostics(program, sources, diagnostics, &persistence, &return_taint);
+    let return_taint = summarize_return_taint(program, &progress);
+    emit_diagnostics(
+        program,
+        sources,
+        diagnostics,
+        &persistence,
+        &return_taint,
+        progress,
+    );
 }
 
-fn summarize_return_taint(program: &Program) -> BTreeMap<FunctionId, bool> {
-    let mut return_taint = BTreeMap::<FunctionId, bool>::new();
-
-    // Re-running every function until a fixed point makes a long reverse-ordered
-    // call chain quadratic. Build the reverse dependency graph once and only
-    // revisit callers whose callee summary has just changed.
+fn summarize_return_taint(program: &Program, progress: impl Fn()) -> BTreeMap<FunctionId, bool> {
     let function_indices = program
         .functions
         .iter()
@@ -45,31 +48,34 @@ fn summarize_return_taint(program: &Program) -> BTreeMap<FunctionId, bool> {
         .map(|(index, function)| (function.id, index))
         .collect::<BTreeMap<_, _>>();
     let mut callers = vec![Vec::<usize>::new(); program.functions.len()];
+    let mut directly_tainted = vec![false; program.functions.len()];
     for (caller_index, function) in program.functions.iter().enumerate() {
-        let mut dependencies = BTreeSet::new();
-        collect_return_dependencies(function, &mut dependencies);
-        for dependency in dependencies {
+        let formula = function_return_taint_formula(function);
+        directly_tainted[caller_index] = formula.direct;
+        for dependency in formula.dependencies {
             if let Some(&callee_index) = function_indices.get(&dependency) {
                 callers[callee_index].push(caller_index);
             }
         }
+        progress();
     }
 
-    let mut pending = (0..program.functions.len()).collect::<VecDeque<_>>();
-    let mut queued = vec![true; program.functions.len()];
-    while let Some(index) = pending.pop_front() {
-        queued[index] = false;
-        let function = &program.functions[index];
-        if return_taint.get(&function.id).copied().unwrap_or(false)
-            || !function_return_tainted(function, &return_taint)
-        {
-            continue;
+    // Each function body is reduced to a direct-taint bit and the user functions
+    // whose return values can reach its return. Propagation then visits every
+    // newly tainted function once instead of repeatedly rescanning caller bodies.
+    let mut return_taint = BTreeMap::<FunctionId, bool>::new();
+    let mut pending = VecDeque::new();
+    for (index, tainted) in directly_tainted.into_iter().enumerate() {
+        if tainted {
+            return_taint.insert(program.functions[index].id, true);
+            pending.push_back(index);
         }
-        return_taint.insert(function.id, true);
+    }
+    while let Some(index) = pending.pop_front() {
         for &caller_index in &callers[index] {
             let caller = &program.functions[caller_index];
-            if !queued[caller_index] && !return_taint.get(&caller.id).copied().unwrap_or(false) {
-                queued[caller_index] = true;
+            if !return_taint.get(&caller.id).copied().unwrap_or(false) {
+                return_taint.insert(caller.id, true);
                 pending.push_back(caller_index);
             }
         }
@@ -77,120 +83,151 @@ fn summarize_return_taint(program: &Program) -> BTreeMap<FunctionId, bool> {
     return_taint
 }
 
-fn function_return_tainted(
-    function: &erabasic_hir::Function,
-    return_taint: &BTreeMap<FunctionId, bool>,
-) -> bool {
-    let mut variables = BTreeSet::new();
+#[derive(Default)]
+struct TaintFormula {
+    direct: bool,
+    dependencies: BTreeSet<FunctionId>,
+}
+
+impl TaintFormula {
+    fn extend(&mut self, other: &Self) {
+        self.direct |= other.direct;
+        self.dependencies.extend(other.dependencies.iter().copied());
+    }
+
+    fn is_empty(&self) -> bool {
+        !self.direct && self.dependencies.is_empty()
+    }
+}
+
+fn function_return_taint_formula(function: &erabasic_hir::Function) -> TaintFormula {
+    let mut variables = BTreeMap::<VariableId, TaintFormula>::new();
+    let mut result = TaintFormula::default();
     for line in &function.lines {
         match &line.kind {
             HirStatementKind::Assignment { target, value, .. } => {
-                if expression_tainted(value, &variables, return_taint) {
-                    variables.insert(target.variable);
+                let value = expression_taint_formula(value, &variables);
+                if !value.is_empty() {
+                    variables.entry(target.variable).or_default().extend(&value);
                 }
             }
-            HirStatementKind::Instruction { target, arguments }
-                if is_return_instruction(target.name())
-                    && arguments
-                        .iter()
-                        .any(|argument| argument_tainted(argument, &variables, return_taint)) =>
-            {
-                return true;
-            }
-            _ => {}
-        }
-    }
-    false
-}
-
-fn collect_return_dependencies(
-    function: &erabasic_hir::Function,
-    output: &mut BTreeSet<FunctionId>,
-) {
-    for line in &function.lines {
-        match &line.kind {
-            HirStatementKind::Assignment { value, .. } => collect_expression_calls(value, output),
             HirStatementKind::Instruction { target, arguments }
                 if is_return_instruction(target.name()) =>
             {
                 for argument in arguments {
-                    collect_argument_calls(argument, output);
+                    argument_taint_formula(argument, &variables, &mut result);
                 }
             }
             _ => {}
         }
     }
+    result
 }
 
-fn collect_argument_calls(argument: &HirArgument, output: &mut BTreeSet<FunctionId>) {
+fn argument_taint_formula(
+    argument: &HirArgument,
+    variables: &BTreeMap<VariableId, TaintFormula>,
+    output: &mut TaintFormula,
+) {
     match argument {
         HirArgument::Expression(value)
         | HirArgument::MixedExpression {
             expression: value, ..
-        } => collect_expression_calls(value, output),
-        HirArgument::Place(place) => {
-            for index in &place.indices {
-                collect_expression_calls(index, output);
-            }
-        }
-        HirArgument::Formatted(value) => collect_formatted_calls(value, output),
+        } => expression_taint_formula_into(value, variables, output),
+        HirArgument::Place(place) => place_taint_formula(place, variables, output),
+        HirArgument::Formatted(value) => formatted_taint_formula(value, variables, output),
         HirArgument::Raw(_) | HirArgument::Omitted => {}
     }
 }
 
-fn collect_expression_calls(expression: &HirExpr, output: &mut BTreeSet<FunctionId>) {
+fn expression_taint_formula(
+    expression: &HirExpr,
+    variables: &BTreeMap<VariableId, TaintFormula>,
+) -> TaintFormula {
+    let mut output = TaintFormula::default();
+    expression_taint_formula_into(expression, variables, &mut output);
+    output
+}
+
+fn expression_taint_formula_into(
+    expression: &HirExpr,
+    variables: &BTreeMap<VariableId, TaintFormula>,
+    output: &mut TaintFormula,
+) {
     match &expression.kind {
         HirExprKind::Call { target, arguments } => {
-            if let CallTarget::User { function } = target {
-                output.insert(*function);
+            match target {
+                CallTarget::Builtin { name }
+                    if builtin_callable_portability(name)
+                        == CallablePortability::FrontendObservation =>
+                {
+                    output.direct = true;
+                }
+                CallTarget::User { function } => {
+                    output.dependencies.insert(*function);
+                }
+                CallTarget::Builtin { .. }
+                | CallTarget::Extension { .. }
+                | CallTarget::Unresolved { .. } => {}
             }
             for argument in arguments {
                 match argument {
-                    HirCallArgument::Value(value) => collect_expression_calls(value, output),
-                    HirCallArgument::Place(place) => {
-                        for index in &place.indices {
-                            collect_expression_calls(index, output);
-                        }
+                    HirCallArgument::Value(value) => {
+                        expression_taint_formula_into(value, variables, output);
                     }
+                    HirCallArgument::Place(place) => place_taint_formula(place, variables, output),
                     HirCallArgument::Omitted => {}
                 }
             }
         }
-        HirExprKind::Variable { place } => {
-            for index in &place.indices {
-                collect_expression_calls(index, output);
-            }
-        }
+        HirExprKind::Variable { place } => place_taint_formula(place, variables, output),
         HirExprKind::Unary { operand, .. } | HirExprKind::Postfix { operand, .. } => {
-            collect_expression_calls(operand, output);
+            expression_taint_formula_into(operand, variables, output);
         }
         HirExprKind::Binary { left, right, .. } => {
-            collect_expression_calls(left, output);
-            collect_expression_calls(right, output);
+            expression_taint_formula_into(left, variables, output);
+            expression_taint_formula_into(right, variables, output);
         }
         HirExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
         } => {
-            collect_expression_calls(condition, output);
-            collect_expression_calls(then_expr, output);
-            collect_expression_calls(else_expr, output);
+            expression_taint_formula_into(condition, variables, output);
+            expression_taint_formula_into(then_expr, variables, output);
+            expression_taint_formula_into(else_expr, variables, output);
         }
-        HirExprKind::Formatted { value } => collect_formatted_calls(value, output),
+        HirExprKind::Formatted { value } => formatted_taint_formula(value, variables, output),
         HirExprKind::Integer { .. } | HirExprKind::String { .. } | HirExprKind::Error => {}
     }
 }
 
-fn collect_formatted_calls(value: &HirFormattedString, output: &mut BTreeSet<FunctionId>) {
+fn place_taint_formula(
+    place: &HirPlace,
+    variables: &BTreeMap<VariableId, TaintFormula>,
+    output: &mut TaintFormula,
+) {
+    if let Some(formula) = variables.get(&place.variable) {
+        output.extend(formula);
+    }
+    for index in &place.indices {
+        expression_taint_formula_into(index, variables, output);
+    }
+}
+
+fn formatted_taint_formula(
+    value: &HirFormattedString,
+    variables: &BTreeMap<VariableId, TaintFormula>,
+    output: &mut TaintFormula,
+) {
     for part in &value.parts {
         match part {
             HirFormPart::Interpolation {
                 expression, width, ..
             } => {
-                collect_expression_calls(expression, output);
+                expression_taint_formula_into(expression, variables, output);
                 if let Some(width) = width {
-                    collect_expression_calls(width, output);
+                    expression_taint_formula_into(width, variables, output);
                 }
             }
             HirFormPart::Conditional {
@@ -199,10 +236,10 @@ fn collect_formatted_calls(value: &HirFormattedString, output: &mut BTreeSet<Fun
                 else_value,
                 ..
             } => {
-                collect_expression_calls(condition, output);
-                collect_formatted_calls(then_value, output);
+                expression_taint_formula_into(condition, variables, output);
+                formatted_taint_formula(then_value, variables, output);
                 if let Some(value) = else_value {
-                    collect_formatted_calls(value, output);
+                    formatted_taint_formula(value, variables, output);
                 }
             }
             HirFormPart::Text { .. } | HirFormPart::Triple { .. } => {}
@@ -222,6 +259,7 @@ fn emit_diagnostics(
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
     persistence: &BTreeMap<VariableId, Persistence>,
     return_taint: &BTreeMap<FunctionId, bool>,
+    progress: impl Fn(),
 ) {
     for function in &program.functions {
         // Taint is scoped to one function. Interprocedural propagation is carried
@@ -291,6 +329,7 @@ fn emit_diagnostics(
                 HirStatementKind::Label { .. } | HirStatementKind::Error => {}
             }
         }
+        progress();
     }
 }
 

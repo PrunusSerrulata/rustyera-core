@@ -100,6 +100,27 @@ fn frontend_observation_propagates_through_a_long_reverse_ordered_call_chain() {
 }
 
 #[test]
+fn frontend_observation_return_taint_flows_through_local_assignments() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "projection-local.erb",
+                "@SYSTEM_TITLE\nIF WRAPPER()\nPRINT wide\nENDIF\nRETURN\n\
+                 @WRAPPER\n#FUNCTION\n#DIM VALUE\nVALUE = OBSERVE()\nRETURNF VALUE\n\
+                 @OBSERVE\n#FUNCTION\nRETURNF CLIENTWIDTH()\n",
+            )],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == AnalyzerDiagnosticCode::FrontendObservationDependency
+    }));
+}
+
+#[test]
 fn restart_branches_to_the_current_function_entry_without_falling_through() {
     let report = analyze_project(
         AnalysisInput {
