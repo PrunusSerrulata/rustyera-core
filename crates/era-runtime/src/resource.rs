@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::mem::size_of;
 
 use era_runtime_protocol::{
-    FileCategory, FilePayload, ImageMetadataResponse, ProjectManifest, SceneSourceV1,
-    validate_relative_path,
+    CompatibilityProfileId, FileCategory, FilePayload, ImageMetadataResponse, ProjectManifest,
+    SceneSourceV1, validate_relative_path,
 };
 use serde::{Deserialize, Serialize};
 
@@ -422,6 +422,8 @@ impl ResourceGraph {
             progress(completed, total);
         }
 
+        let missing_images_are_warnings =
+            manifest.compatibility.profile == CompatibilityProfileId::EmueraSkiaSnake;
         let mut manifests = manifest
             .files
             .iter()
@@ -438,7 +440,13 @@ impl ResourceGraph {
                 progress(completed, total);
                 continue;
             };
-            parse_resource_manifest(&mut graph, &mut diagnostics, &manifest.relative_path, text);
+            parse_resource_manifest(
+                &mut graph,
+                &mut diagnostics,
+                &manifest.relative_path,
+                text,
+                missing_images_are_warnings,
+            );
             completed += 1;
             progress(completed, total);
         }

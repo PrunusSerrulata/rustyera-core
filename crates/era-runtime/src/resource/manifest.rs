@@ -8,6 +8,7 @@ pub(super) fn parse_resource_manifest(
     diagnostics: &mut Vec<ResourceDiagnostic>,
     path: &str,
     text: &str,
+    missing_images_are_warnings: bool,
 ) {
     let directory = path.rsplit_once('/').map_or("", |(directory, _)| directory);
     let mut current_animation: Option<String> = None;
@@ -78,12 +79,12 @@ pub(super) fn parse_resource_manifest(
             continue;
         };
         if !graph.images.contains_key(&image_path.to_ascii_lowercase()) {
-            diagnostics.push(resource_error(
-                path,
-                line_index,
-                "runtime.missing_resource_image",
-                format!("resource image {image_path} was not submitted by the frontend"),
-            ));
+            let message = format!("resource image {image_path} was not submitted by the frontend");
+            diagnostics.push(if missing_images_are_warnings {
+                resource_warning(path, line_index, "runtime.missing_resource_image", message)
+            } else {
+                resource_error(path, line_index, "runtime.missing_resource_image", message)
+            });
             current_animation = None;
             continue;
         }

@@ -377,6 +377,37 @@ fn parses_static_and_animation_sprites_then_validates_metadata() {
 }
 
 #[test]
+fn snake_profile_skips_missing_manifest_images_without_rejecting_the_project() {
+    let manifest = |profile| ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity {
+            profile,
+            ..era_runtime_protocol::CompatibilityIdentity::default()
+        },
+        project_revision: 1,
+        files: vec![SubmittedFile {
+            relative_path: "resources/sprites.csv".into(),
+            category: FileCategory::ResourceManifest,
+            payload: FilePayload::Utf8("MISSING,absent.png,0,0,1,1".into()),
+            content_hash: None,
+        }],
+    };
+
+    let (_, reference_diagnostics) = ResourceGraph::from_manifest(&manifest(
+        era_runtime_protocol::CompatibilityProfileId::EmueraEm,
+    ));
+    assert_eq!(reference_diagnostics.len(), 1);
+    assert!(reference_diagnostics[0].error);
+
+    let (snake_graph, snake_diagnostics) = ResourceGraph::from_manifest(&manifest(
+        era_runtime_protocol::CompatibilityProfileId::EmueraSkiaSnake,
+    ));
+    assert_eq!(snake_diagnostics.len(), 1);
+    assert_eq!(snake_diagnostics[0].code, "runtime.missing_resource_image");
+    assert!(!snake_diagnostics[0].error);
+    assert!(snake_graph.sprite("missing").is_none());
+}
+
+#[test]
 fn canvas_and_dynamic_sprite_mutations_form_a_deterministic_replay_graph() {
     let mut graph = ResourceGraph::default();
     assert_eq!(graph.create_canvas(3, 64, 32), Ok(true));
