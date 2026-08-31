@@ -12,14 +12,15 @@ use era_protocol::{
 };
 use era_runtime::{ProjectProgressReporter, RuntimeDriveBudget, RuntimeOptions, RuntimeSession};
 use era_runtime_protocol::{
-    ClientCapabilities, ClientHello, ClientStateChanged, DeviceStateChanged, DisplayLine,
-    DEVICE_PUMP_OPERATION, DEVICE_PUMP_OPERATION_VERSION, DevicePumpRequest, DevicePumpResponse,
-    EnvironmentCapability, GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION,
+    ClientCapabilities, ClientHello, ClientStateChanged, DEVICE_PUMP_OPERATION,
+    DEVICE_PUMP_OPERATION_VERSION, DevicePumpRequest, DevicePumpResponse, DeviceStateChanged,
+    DisplayLine, EnvironmentCapability, GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION,
     GetKeyStateRequest, GetKeyStateResponse, INPUT_DEVICE_LATCH_CAPABILITY,
     INPUT_DEVICE_PUMP_CAPABILITY, INPUT_ENVIRONMENT_VERSION, InputDeviceKind, InputModality,
     InputWait, PresentationOperation, PresentationSettings, ProjectLoadReport,
-    RUNTIME_PROTOCOL_VERSION, ResourceReplay, RuntimeFeature, RuntimeMessage, ServiceCapability,
-    ServiceKind, ServiceResponse, ServiceResult, StorageCapabilities, WaitChange,
+    RUNTIME_PROTOCOL_VERSION, ResourceReplay, RuntimeFeature, RuntimeMessage, SQL_OPERATION,
+    SQL_OPERATION_VERSION, ServiceCapability, ServiceKind, ServiceResponse, ServiceResult,
+    StorageCapabilities, WaitChange,
 };
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -161,6 +162,15 @@ impl ObservationSession {
                         kind: ServiceKind::InputState,
                         operation: DEVICE_PUMP_OPERATION.into(),
                         versions: VersionRange::exact(DEVICE_PUMP_OPERATION_VERSION),
+                    },
+                    // Snake profiles require the SQL broker to be negotiated before project
+                    // loading. These non-SQL observation fixtures advertise the endpoint so
+                    // compilation can proceed; any unexpected SQL request still takes the
+                    // unsupported-service path below instead of receiving a fabricated result.
+                    ServiceCapability {
+                        kind: ServiceKind::Sql,
+                        operation: SQL_OPERATION.into(),
+                        versions: VersionRange::exact(SQL_OPERATION_VERSION),
                     },
                 ],
                 storage: StorageCapabilities {
