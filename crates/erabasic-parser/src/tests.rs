@@ -92,6 +92,32 @@ fn apostrophe_equals_uses_string_expression_assignment() {
 }
 
 #[test]
+fn trailing_destination_comma_preserves_the_form_comma_after_assignment() {
+    let output = parse_line("VALUE ,= ,", &DefaultParserContext::default());
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let StatementKind::Assignment {
+        target,
+        op,
+        raw_value,
+        value,
+        ..
+    } = output.value.unwrap().kind
+    else {
+        panic!("expected assignment");
+    };
+    assert_eq!(target.name, "VALUE");
+    assert_eq!(op, AssignOp::Assign);
+    assert_eq!(raw_value, ",");
+    let ExprKind::Formatted(formatted) = value.kind else {
+        panic!("expected formatted assignment value");
+    };
+    assert!(matches!(
+        formatted.parts.as_slice(),
+        [erabasic_ast::FormPart::Text(value)] if value == ","
+    ));
+}
+
+#[test]
 fn times_parses_real_literal_as_an_exact_ratio() {
     let output = parse_line("TIMES LOCAL:1, 1.25", &DefaultParserContext::default());
     assert!(!output.has_errors(), "{:#?}", output.diagnostics);

@@ -30,6 +30,8 @@ impl RuntimeSession {
             };
             if bgm {
                 self.presentation.play_bgm(resource.clone());
+            } else {
+                self.presentation.play_sound();
             }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             if bgm {
@@ -54,6 +56,8 @@ impl RuntimeSession {
             let bgm = name == "STOPBGM";
             if bgm {
                 self.presentation.stop_bgm();
+            } else {
+                self.presentation.stop_sound();
             }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             if bgm {
@@ -79,6 +83,8 @@ impl RuntimeSession {
             let volume = integer_argument_value(&request.arguments, 0)?;
             if bgm {
                 self.presentation.set_bgm_volume(volume);
+            } else {
+                self.presentation.set_sound_volume(volume);
             }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             if bgm {
@@ -99,7 +105,48 @@ impl RuntimeSession {
             }
             return Ok(());
         }
+        if name == "GETSOUNDORBGMINFO" {
+            return self.dispatch_audio_info(vm, request, status);
+        }
 
         Ok(())
+    }
+
+    fn dispatch_audio_info(
+        &mut self,
+        vm: &mut RuntimeVm,
+        request: &VmHostRequest,
+        status: &mut HostDispatchStatus,
+    ) -> Result<(), RuntimeError> {
+        *status = HostDispatchStatus::Handled;
+        let channel = integer_argument_value(&request.arguments, 0)?;
+        let Some(information) = request.arguments.get(1) else {
+            return complete_script_fault(
+                vm,
+                request,
+                erabasic_vm::ScriptFaultKind::Operation,
+                "GETSOUNDORBGMINFO without an information selector is not supported",
+            );
+        };
+        let information = match information {
+            VmValue::Integer(value) => *value,
+            _ => {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Argument,
+                    "GETSOUNDORBGMINFO argument 2 must be integer",
+                );
+            }
+        };
+        let value = self.presentation.sound_or_bgm_info(channel, information);
+        commit_completion(
+            vm,
+            request.id,
+            VmHostCompletion::Ready(HostReady {
+                value: Some(VmValue::Integer(value)),
+                writes: Vec::new(),
+            }),
+        )
     }
 }

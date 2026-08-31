@@ -15,6 +15,7 @@ pub fn named_color(name: &str) -> Option<u32> {
         "blue" => 0x0000_00ff,
         "yellow" => 0x00ff_ff00,
         "gray" | "grey" => 0x0080_8080,
+        "dimgray" | "dimgrey" => 0x0069_6969,
         "silver" => 0x00c0_c0c0,
         "maroon" => 0x0080_0000,
         "purple" => 0x0080_0080,
@@ -50,6 +51,7 @@ mod tests {
         assert_eq!(named_color("LightSalmon"), Some(0x00ff_a07a));
         assert_eq!(named_color("DEEPSKYBLUE"), Some(0x0000_bfff));
         assert_eq!(named_color("Magenta"), Some(0x00ff_00ff));
+        assert_eq!(named_color("dimgray"), Some(0x0069_6969));
         assert_eq!(named_color("transparent"), None);
         assert_eq!(named_color("ControlText"), None);
     }

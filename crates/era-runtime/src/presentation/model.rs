@@ -75,6 +75,10 @@ pub(crate) struct PresentationModel {
     #[serde(default = "first_scene_identifier")]
     pub(super) next_scene_sequence: u64,
     pub(super) audio: Vec<AudioState>,
+    #[serde(default = "default_audio_volume")]
+    pub(super) sound_volume_millionths: u32,
+    #[serde(default)]
+    pub(super) sound_playing: bool,
     pub(super) tooltip: TooltipSettings,
     pub(super) resources: ResourceReplay,
     #[serde(default)]
@@ -137,6 +141,10 @@ pub(super) struct PresentationDirty {
 
 const fn first_scene_identifier() -> u64 {
     1
+}
+
+const fn default_audio_volume() -> u32 {
+    1_000_000
 }
 
 pub(crate) enum PresentationUpdate {

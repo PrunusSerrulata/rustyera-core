@@ -354,6 +354,7 @@ pub(super) const AUDIO: &[&str] = &[
     "SETSOUNDVOLUME",
     "SETBGMVOLUME",
     "EXISTSOUND",
+    "GETSOUNDORBGMINFO",
 ];
 
 pub(super) const STORAGE: &[&str] = &[
@@ -460,6 +461,7 @@ pub(super) const SYSTEM: &[&str] = &[
     "CALLTRAIN",
     "STOPCALLTRAIN",
     "GETMEMORYUSAGE",
+    "CLEARMEMORY",
     "GETCONFIG",
     "GETCONFIGS",
     "VARSIZE",

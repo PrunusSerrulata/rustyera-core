@@ -36,7 +36,14 @@ pub(crate) struct DeclaredVariable {
     pub location: SourceLocation,
     pub reference: bool,
     pub static_lifetime: bool,
+    pub runtime_initializer: Option<RuntimeInitializer>,
     pub arithmetic_diagnostics: Vec<AnalyzerDiagnostic>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RuntimeInitializer {
+    pub source: String,
+    pub location: SourceLocation,
 }
 
 pub(crate) struct ScopedDeclaration {
@@ -403,11 +410,44 @@ fn parse_dim(
     }
 
     let mut initial_values = Vec::new();
+    let mut runtime_initializer = None;
     if let Some(initializer) = initializer_text {
         if reference || character || dimensions.len() >= 2 {
             return Err(DimError::InvalidInitializer(
                 "this declaration cannot have an initializer".into(),
             ));
+        }
+        let trimmed_initializer = initializer.trim();
+        let runtime_scalar =
+            private && !is_static && (dimensions.is_empty() || dimensions.as_slice() == [1]);
+        if runtime_scalar {
+            if trimmed_initializer.is_empty() {
+                return Err(DimError::InvalidInitializer(
+                    "scalar initializer cannot be empty".into(),
+                ));
+            }
+            if dimensions.is_empty() {
+                dimensions.push(1);
+            }
+            let directive_text = &input.text[input.directive.span.start..input.directive.span.end];
+            let relative = directive_text
+                .find('=')
+                .and_then(|equals| {
+                    directive_text[equals + 1..]
+                        .find(trimmed_initializer)
+                        .map(|offset| equals + 1 + offset)
+                })
+                .unwrap_or_default();
+            runtime_initializer = Some(RuntimeInitializer {
+                source: trimmed_initializer.to_owned(),
+                location: SourceLocation::new(
+                    input.source,
+                    erabasic_ast::Span::new(
+                        input.directive.span.start + relative,
+                        input.directive.span.start + relative + trimmed_initializer.len(),
+                    ),
+                ),
+            });
         }
         let mut segments = split_top_level(initializer, ',');
         if segments
@@ -417,6 +457,9 @@ fn parse_dim(
             segments.pop();
         }
         for segment in segments {
+            if runtime_scalar {
+                break;
+            }
             if segment.trim().is_empty() {
                 return Err(DimError::InvalidInitializer(
                     "array initializers cannot be omitted".into(),
@@ -508,6 +551,7 @@ fn parse_dim(
         location: SourceLocation::new(input.source, input.directive.span),
         reference,
         static_lifetime: is_static,
+        runtime_initializer,
         arithmetic_diagnostics: constant_warnings(
             constant_evaluation.warnings.into_inner(),
             input.source,

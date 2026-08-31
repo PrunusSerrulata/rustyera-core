@@ -236,6 +236,7 @@ fn builtin_shared_available(name: &str, identity: &erabasic_compat::Compatibilit
         | "BITINDEXOFFIRST"
         | "MATCHALL"
         | "MATCHALLEX" => identity.supports_snake_data_apis(),
+        "GETSOUNDORBGMINFO" => identity.supports_snake_compile_convergence(),
         "MAP_VALUES" | "MAP_MERGE" | "MAP_REMOVEIF" | "MAP_FINDKEY" | "MAP_TOSTRING"
         | "MAP_FROMSTRING" => identity.supports_map_extensions(),
         _ => true,

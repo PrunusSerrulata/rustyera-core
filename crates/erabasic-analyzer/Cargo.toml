@@ -11,6 +11,7 @@ erabasic-ast = { path = "../erabasic-ast" }
 erabasic-csv = { path = "../erabasic-csv" }
 erabasic-data = { path = "../erabasic-data" }
 erabasic-hir = { path = "../erabasic-hir" }
+erabasic-html = { path = "../erabasic-html" }
 erabasic-lexer = { path = "../erabasic-lexer" }
 erabasic-parser = { path = "../erabasic-parser" }
 rayon.workspace = true

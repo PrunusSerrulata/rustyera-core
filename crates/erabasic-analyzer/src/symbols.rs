@@ -7,8 +7,16 @@ use erabasic_hir::{
 };
 
 use crate::{
-    declarations::DeclaredVariable, identifiers::identifier_key, options::AnalyzerOptions,
+    declarations::{DeclaredVariable, RuntimeInitializer},
+    identifiers::identifier_key,
+    options::AnalyzerOptions,
 };
+
+#[derive(Clone, Debug)]
+pub(crate) struct FunctionRuntimeInitializer {
+    pub variable: VariableId,
+    pub initializer: RuntimeInitializer,
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct FunctionSymbol {
@@ -26,6 +34,7 @@ pub(crate) struct Symbols {
     local_templates: Vec<VariableSchema>,
     functions: Vec<FunctionSymbol>,
     functions_by_name: BTreeMap<String, usize>,
+    runtime_initializers: BTreeMap<FunctionId, Vec<FunctionRuntimeInitializer>>,
     allow_function_overloading: bool,
     ignore_case: bool,
 }
@@ -44,6 +53,7 @@ impl Symbols {
             local_templates: Vec::new(),
             functions: Vec::new(),
             functions_by_name: BTreeMap::new(),
+            runtime_initializers: BTreeMap::new(),
             allow_function_overloading: options.allow_function_overloading,
             ignore_case: options.ignore_case,
         };
@@ -188,7 +198,7 @@ impl Symbols {
         if let Some(existing) = self.locals.get(&key) {
             return Err(*existing);
         }
-        Ok(self.add_variable(
+        let variable = self.add_variable(
             &declaration.schema,
             Some(function),
             VariableScope::Function,
@@ -196,7 +206,22 @@ impl Symbols {
             declaration.static_lifetime,
             declaration.initial_values.clone(),
             Some(declaration.location),
-        ))
+        );
+        if let Some(initializer) = &declaration.runtime_initializer {
+            self.runtime_initializers.entry(function).or_default().push(
+                FunctionRuntimeInitializer {
+                    variable,
+                    initializer: initializer.clone(),
+                },
+            );
+        }
+        Ok(variable)
+    }
+
+    pub fn runtime_initializers(&self, function: FunctionId) -> &[FunctionRuntimeInitializer] {
+        self.runtime_initializers
+            .get(&function)
+            .map_or(&[], Vec::as_slice)
     }
 
     pub fn resolve_variable(&self, function: FunctionId, name: &str) -> Option<&Variable> {

@@ -7,6 +7,46 @@ use era_runtime_protocol::{
 };
 
 impl PresentationModel {
+    pub(crate) fn play_sound(&mut self) {
+        self.sound_playing = true;
+        self.bump();
+    }
+
+    pub(crate) fn stop_sound(&mut self) {
+        self.sound_playing = false;
+        self.bump();
+    }
+
+    pub(crate) fn set_sound_volume(&mut self, volume: i64) {
+        self.sound_volume_millionths =
+            u32::try_from(volume.clamp(0, 100)).unwrap_or_default() * 10_000;
+        self.bump();
+    }
+
+    pub(crate) fn sound_or_bgm_info(&self, channel: i64, information: i64) -> i64 {
+        let (playing, volume) = if channel == -1 {
+            self.audio
+                .iter()
+                .find(|state| state.channel_id == 1)
+                .map_or((false, 100), |state| {
+                    (state.playing, i64::from(state.volume_millionths / 10_000))
+                })
+        } else if channel == 0 {
+            (
+                self.sound_playing,
+                i64::from(self.sound_volume_millionths / 10_000),
+            )
+        } else {
+            return 0;
+        };
+        match information {
+            3 => i64::from(playing),
+            4 => volume,
+            5 => 100,
+            _ => 0,
+        }
+    }
+
     pub(crate) fn play_bgm(&mut self, resource_id: String) {
         self.audio.clear();
         self.audio.push(AudioState {

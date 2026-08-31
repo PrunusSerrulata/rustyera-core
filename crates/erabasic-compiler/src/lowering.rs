@@ -259,6 +259,17 @@ pub(crate) fn lower_function(
                         ControlFlowKind::Continue | ControlFlowKind::Break
                     )
                 });
+                if loop_edge.is_none() {
+                    builder.emit(
+                        EncodedInstruction::new(
+                            Opcode::Trap,
+                            format!("{} outside loop", structural_name.unwrap_or_default())
+                                .into_bytes(),
+                        ),
+                        line.location,
+                    );
+                    continue;
+                }
                 let opener = loop_edge.and_then(|edge| edge.to);
                 let closer = opener.and_then(|opener| loop_closers.get(opener.0).copied());
                 let opener_name = opener.and_then(|opener| {

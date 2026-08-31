@@ -280,6 +280,25 @@ fn folded_getnum_does_not_emit_a_native_call() {
 }
 
 #[test]
+fn loop_control_outside_a_loop_compiles_to_a_runtime_trap() {
+    let artifact = compile_project(
+        &analyze("@SYSTEM_TITLE\nCONTINUE\nRETURN\n"),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    )
+    .artifact
+    .expect("deferred loop-control fault should compile");
+    assert!(
+        artifact.functions[0]
+            .code
+            .iter()
+            .any(|instruction| instruction.opcode == Opcode::Trap as u16
+                && instruction.payload.as_slice() == b"CONTINUE outside loop")
+    );
+}
+
+#[test]
 fn expression_methods_use_typed_lazy_bytecode_in_expressions_and_statements() {
     use erabasic_bytecode::{UserArgumentSpec, UserCallMode, UserCallSpec};
 

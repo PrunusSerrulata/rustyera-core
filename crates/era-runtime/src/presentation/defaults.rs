@@ -68,6 +68,8 @@ pub(super) fn model() -> PresentationModel {
         next_scene_layer_id: 1,
         next_scene_sequence: 1,
         audio: Vec::new(),
+        sound_volume_millionths: 1_000_000,
+        sound_playing: false,
         tooltip: TooltipSettings {
             foreground: rgb_color(0),
             background: rgb_color(0x00ff_ffe1),

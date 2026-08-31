@@ -11,6 +11,17 @@ impl RuntimeSession {
         name: &String,
         status: &mut HostDispatchStatus,
     ) -> Result<(), RuntimeError> {
+        if name == "CLEARMEMORY" {
+            *status = HostDispatchStatus::Handled;
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Ready(HostReady {
+                    value: Some(VmValue::Integer(0)),
+                    writes: Vec::new(),
+                }),
+            );
+        }
         if name == "AWAIT" {
             *status = HostDispatchStatus::Handled;
             let milliseconds = match request.argument(0) {

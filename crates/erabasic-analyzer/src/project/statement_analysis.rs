@@ -4,7 +4,7 @@ use erabasic_ast::{
     Argument, Expr, ExprKind, Function as AstFunction, Span, Statement, StatementKind, VariableRef,
 };
 use erabasic_hir::{
-    ConstantValue, Function, FunctionId, FunctionKind, HirArgument, HirExpr, HirExprKind,
+    ConstantValue, Function, FunctionId, FunctionKind, HirArgument, HirExpr, HirExprKind, HirPlace,
     HirStatement, HirStatementKind, InstructionTarget, LabelId, LineId, Parameter, SemanticType,
     SourceLocation,
 };
@@ -193,6 +193,21 @@ pub(super) fn analyze_function(
 
     let mut lines = Vec::new();
     let mut next_label = 0u32;
+    for runtime in symbols.runtime_initializers(id) {
+        let line_id = LineId(u32::try_from(lines.len()).expect("too many lines"));
+        lines.push(analyze_runtime_initializer(
+            line_id,
+            id,
+            source,
+            runtime,
+            symbols,
+            catalog,
+            context,
+            index_resolver,
+            options,
+            diagnostics,
+        ));
+    }
     for statement in &function.body {
         let line_id = LineId(u32::try_from(lines.len()).expect("too many lines"));
         lines.push(analyze_statement(
@@ -229,6 +244,101 @@ pub(super) fn analyze_function(
         labels,
         control_flow,
         location: SourceLocation::new(source.source.id, function.span),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn analyze_runtime_initializer(
+    line_id: LineId,
+    function: FunctionId,
+    source: &ParsedProjectSource,
+    runtime: &crate::symbols::FunctionRuntimeInitializer,
+    symbols: &Symbols,
+    catalog: &Catalog,
+    context: &AnalysisParserContext,
+    index_resolver: &IndexResolver,
+    options: &AnalyzerOptions,
+    diagnostics: &mut Vec<AnalyzerDiagnostic>,
+) -> HirStatement {
+    let location = runtime.initializer.location;
+    let Some(variable) = symbols.variables.get(runtime.variable.0 as usize) else {
+        return HirStatement {
+            id: line_id,
+            kind: HirStatementKind::Error,
+            location,
+        };
+    };
+    let mut parsed = erabasic_parser::parse_expression_list_at(
+        &runtime.initializer.source,
+        location.span.start,
+        context,
+    );
+    for diagnostic in parsed.diagnostics.drain(..) {
+        diagnostics.push(map_parser_diagnostic(
+            source.source.id,
+            &source.source.relative_path,
+            &source.text,
+            &diagnostic,
+        ));
+    }
+    let expression = parsed
+        .value
+        .and_then(|mut values| (values.len() == 1).then(|| values.remove(0)));
+    let Some(expression) = expression else {
+        diagnostics.push(AnalyzerDiagnostic::at(
+            AnalyzerDiagnosticCode::InvalidInitializer,
+            AnalyzerDiagnosticSeverity::Error,
+            2,
+            source.source.id,
+            &source.source.relative_path,
+            &source.text,
+            location.span,
+            "dynamic private initializer must contain exactly one expression",
+        ));
+        return HirStatement {
+            id: line_id,
+            kind: HirStatementKind::Error,
+            location,
+        };
+    };
+    let value = ExpressionAnalyzer {
+        symbols,
+        catalog,
+        options,
+        function,
+        source: source.source.id,
+        path: &source.source.relative_path,
+        text: &source.text,
+        diagnostics,
+        index_resolver,
+    }
+    .analyze(&expression);
+    if variable.value_type != value.value_type && value.value_type != SemanticType::Error {
+        diagnostics.push(AnalyzerDiagnostic::at(
+            AnalyzerDiagnosticCode::TypeMismatch,
+            AnalyzerDiagnosticSeverity::Error,
+            2,
+            source.source.id,
+            &source.source.relative_path,
+            &source.text,
+            location.span,
+            "dynamic private initializer type does not match its declaration",
+        ));
+    }
+    HirStatement {
+        id: line_id,
+        kind: HirStatementKind::Assignment {
+            target: HirPlace {
+                variable: variable.id,
+                indices: Vec::new(),
+                value_type: variable.value_type,
+                mutable: variable.mutable,
+                location,
+            },
+            op: erabasic_ast::AssignOp::Assign,
+            value,
+        },
+        location,
     }
 }
 

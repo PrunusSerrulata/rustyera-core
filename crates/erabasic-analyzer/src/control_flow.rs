@@ -267,14 +267,16 @@ pub(crate) fn build_control_flow(
                         label: None,
                     });
                 } else {
-                    invalid_flow(
-                        line,
+                    diagnostics.push(AnalyzerDiagnostic::at(
+                        AnalyzerDiagnosticCode::InvalidControlFlow,
+                        AnalyzerDiagnosticSeverity::Warning,
+                        1,
                         source,
                         path,
                         text,
-                        diagnostics,
-                        format!("{name} is outside a loop"),
-                    );
+                        line.location.span,
+                        format!("{name} is outside a loop and will fault if execution reaches it"),
+                    ));
                 }
             }
             "GOTO" | "TRYGOTO" => {
