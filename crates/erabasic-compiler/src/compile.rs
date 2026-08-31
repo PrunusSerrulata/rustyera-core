@@ -30,8 +30,8 @@ mod incremental;
 mod runtime_symbols;
 
 use artifact::{
-    canonical_digest, event_groups, function_keys, globals, shared_variable_dependencies,
-    variable_keys,
+    binary_digest, canonical_digest, event_groups, function_keys, globals,
+    shared_variable_dependencies, variable_keys,
 };
 use incremental::{
     PreviousArtifactIndex, cached_function, compact_cached_function, create_incremental_patch,

@@ -22,6 +22,15 @@ pub(super) fn canonical_digest<T: Serialize + ?Sized>(domain: &str, value: &T) -
     Digest(*writer.hasher.finalize().as_bytes())
 }
 
+pub(super) fn binary_digest<T: Serialize + ?Sized>(domain: &str, value: &T) -> Digest {
+    let mut writer = DigestWriter {
+        hasher: blake3::Hasher::new_derive_key(domain),
+    };
+    rmp_serde::encode::write(&mut writer, value)
+        .expect("compiler identity values are serializable");
+    Digest(*writer.hasher.finalize().as_bytes())
+}
+
 struct DigestWriter {
     hasher: blake3::Hasher,
 }

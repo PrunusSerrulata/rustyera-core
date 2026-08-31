@@ -409,8 +409,7 @@ fn compile_project_inner(
                 let key = *function_keys
                     .get(function.id.0)
                     .expect("validated function IDs have stable keys");
-                let function_digest =
-                    canonical_digest("rustyera.compiler.hir-function.v3", function);
+                let function_digest = binary_digest("rustyera.compiler.hir-function.v4", function);
                 let signature_dependencies = call_dependencies.for_function(function);
                 let cache_key = Digest::hash(
                     "rustyera.compiler.function.v4",
