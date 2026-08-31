@@ -683,10 +683,14 @@ fn build_project_with_resolved_compatibility(
     config.maximum_shop_items = u32::try_from(data.static_data.replace.max_shop_item).unwrap_or(0);
     let mut analyzer_options = config.analyzer.clone();
     analyzer_options.compatibility = normalized_manifest.compatibility.clone();
+    // Runtime bytecode must retain every discovered function. EraBasic permits
+    // computed calls, so the diagnostic reachability pass cannot safely define
+    // the executable artifact even when Emuera is configured to skip warnings
+    // for apparently uncalled functions.
+    analyzer_options.ignore_uncalled_functions = false;
     if analysis_selection.is_some() {
         analyzer_options.analysis_mode = true;
         analyzer_options.debug_mode = analysis_debug_mode;
-        analyzer_options.ignore_uncalled_functions = false;
     }
     let analysis_input = AnalysisInput {
         project_data: data,
