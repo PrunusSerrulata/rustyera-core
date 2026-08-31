@@ -650,6 +650,7 @@ fn retained_title_program_is_released_on_failure_shutdown_load_and_reload() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn compiled_cache_export_prepares_the_payload_off_thread() {
     let manifest = ProjectManifest {
         compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
@@ -667,10 +668,19 @@ fn compiled_cache_export_prepares_the_payload_off_thread() {
                 payload: FilePayload::Utf8("Font size:18\n".into()),
                 content_hash: None,
             },
+            SubmittedFile {
+                relative_path: "resources/sprites.csv".into(),
+                category: FileCategory::ResourceManifest,
+                payload: FilePayload::Utf8("; no sprites\n".into()),
+                content_hash: None,
+            },
         ],
     };
     let identity = crate::compiled_cache::project_identity(&manifest);
-    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    let mut session = RuntimeSession::new(RuntimeOptions {
+        retain_project_source_payloads: false,
+        ..RuntimeOptions::default()
+    });
     session.state = SessionState::Active;
     session.phase = RuntimePhase::Ready;
     session.epoch = SessionEpoch(1);
@@ -692,6 +702,15 @@ fn compiled_cache_export_prepares_the_payload_off_thread() {
         .and_then(|snapshot| snapshot.generated_configuration_source.as_deref())
         .expect("legacy configuration generates reraconfig.toml");
     assert_rera_font_size(generated, 18);
+    let snapshot_manifest = &session.project_snapshot.as_ref().unwrap().manifest;
+    assert!(matches!(
+        &snapshot_manifest.files[0].payload,
+        FilePayload::Utf8(value) if value.is_empty()
+    ));
+    assert!(matches!(
+        &snapshot_manifest.files[2].payload,
+        FilePayload::Utf8(value) if value == "; no sprites\n"
+    ));
 
     assert!(session.compiled_project_cache.is_none());
     assert!(session.compiled_cache_task.is_none());
@@ -732,6 +751,10 @@ fn compiled_cache_export_prepares_the_payload_off_thread() {
     let bytes = session.compiled_project_cache.as_ref().unwrap();
     let decoded = crate::compiled_cache::decode(bytes, 64 * 1024 * 1024).unwrap();
     assert_manifest_rera_font_size(&decoded.snapshot.manifest, 18);
+    assert!(matches!(
+        &decoded.snapshot.manifest.files[2].payload,
+        FilePayload::Utf8(value) if value == "; no sprites\n"
+    ));
     assert!(crate::compiled_cache::decode_project_file(bytes, bytes.len()).is_err());
 
     session

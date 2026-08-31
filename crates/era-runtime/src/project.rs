@@ -111,7 +111,14 @@ fn release_manifest_payloads(
 pub(crate) fn release_snapshot_manifest_payloads(snapshot: &mut NormalizedProjectSnapshot) {
     let manifest = Arc::get_mut(&mut snapshot.manifest)
         .expect("a newly built project snapshot must uniquely own its manifest");
-    release_manifest_payloads(manifest, |_| true);
+    release_manifest_payloads(manifest, compiled_cache_omits_payload);
+}
+
+fn compiled_cache_omits_payload(category: FileCategory) -> bool {
+    !matches!(
+        category,
+        FileCategory::Configuration | FileCategory::ResourceManifest
+    )
 }
 
 fn ensure_manifest_hash(file: &mut SubmittedFile) {
@@ -433,7 +440,6 @@ fn build_project_with_resolved_compatibility(
                             | FileCategory::Csv
                             | FileCategory::Als
                             | FileCategory::Erd
-                            | FileCategory::Configuration
                     ) {
                     take_manifest_payload(file)
                 } else {
@@ -916,7 +922,6 @@ fn build_project_with_resolved_compatibility(
                     | FileCategory::Csv
                     | FileCategory::Als
                     | FileCategory::Erd
-                    | FileCategory::Configuration
             )
         });
     }
@@ -989,7 +994,7 @@ fn build_project_with_resolved_compatibility(
         preparing_total,
     );
     if !retain_project_source_payloads {
-        release_manifest_payloads(&mut normalized_manifest, |_| true);
+        release_manifest_payloads(&mut normalized_manifest, compiled_cache_omits_payload);
     }
     let game_information = project_game_information(&artifact);
     ProjectBuild {
