@@ -502,6 +502,44 @@ fn regex_string_natives_match_non_overlapping_reference_semantics() {
 }
 
 #[test]
+fn strcount_supports_snake_name_predicate_lookahead() {
+    let request = |input: &str, pattern: &str| NativeCallRequest {
+        service_key: SymbolKey([0; 16]),
+        omitted_arguments: Vec::new(),
+        import: RuntimeImport {
+            key: SymbolKey([0; 16]),
+            namespace: "test".into(),
+            name: "strcount".into(),
+            abi_version: 1,
+            parameters: vec![],
+            result: None,
+        },
+        arguments: vec![
+            VmValue::String(input.into()),
+            VmValue::String(pattern.into()),
+        ],
+        places: Vec::new(),
+        implicit_places: BTreeMap::new(),
+    };
+    let snake_names = concat!(
+        r"(?i)(?=.*\b浊酒\b).*$|",
+        r"(?=.*\bNULL\b).*$|",
+        r"(?=.*\b灵梦\b).*$"
+    );
+    let mut count = CoreNative::new("strcount".into(), LegacyEncoding::default());
+    for (input, pattern, expected) in [
+        ("喝 浊酒", snake_names, 1),
+        ("reimu", r"(?i)(?=.*\bREIMU\b).*$", 1),
+        ("ordinary text", snake_names, 0),
+    ] {
+        assert_eq!(
+            count.call(request(input, pattern)).unwrap().value,
+            Some(VmValue::Integer(expected))
+        );
+    }
+}
+
+#[test]
 fn replace_native_uses_reference_regex_literal_and_array_modes() {
     let request = |arguments: Vec<VmValue>, places: Vec<NativePlaceView>| NativeCallRequest {
         service_key: SymbolKey([0; 16]),

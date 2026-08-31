@@ -15,11 +15,16 @@ const REGEX_CACHE_CAPACITY: usize = 16;
 // is intentionally rebuilt rather than persisted in VM snapshots.
 #[derive(Default)]
 struct RegexCache {
-    entries: Vec<(String, regex::Regex)>,
+    entries: Vec<(String, CachedRegex)>,
+}
+
+enum CachedRegex {
+    Standard(regex::Regex),
+    LeadingPositiveTail(Vec<regex::Regex>),
 }
 
 impl RegexCache {
-    fn get_or_compile(&mut self, pattern: &str) -> Result<&regex::Regex, regex::Error> {
+    fn get_or_compile(&mut self, pattern: &str) -> Result<&CachedRegex, regex::Error> {
         if let Some(index) = self
             .entries
             .iter()
@@ -33,7 +38,7 @@ impl RegexCache {
             return Ok(&self.entries[newest].1);
         }
 
-        let regex = regex::Regex::new(pattern)?;
+        let regex = compile_core_regex(pattern)?;
         if self.entries.len() == REGEX_CACHE_CAPACITY {
             self.entries.remove(0);
         }
@@ -41,6 +46,60 @@ impl RegexCache {
         self.entries.push((pattern.to_owned(), regex));
         Ok(&self.entries[index].1)
     }
+
+    fn get_standard(&mut self, pattern: &str) -> Result<&regex::Regex, regex::Error> {
+        match self.get_or_compile(pattern)? {
+            CachedRegex::Standard(regex) => Ok(regex),
+            CachedRegex::LeadingPositiveTail(_) => {
+                Err(regex::Regex::new(pattern)
+                    .expect_err("look-ahead is unsupported by regex crate"))
+            }
+        }
+    }
+
+    fn count_matches(&mut self, pattern: &str, input: &str) -> Result<usize, regex::Error> {
+        Ok(match self.get_or_compile(pattern)? {
+            CachedRegex::Standard(regex) => regex.find_iter(input).count(),
+            CachedRegex::LeadingPositiveTail(assertions) => {
+                usize::from(assertions.iter().any(|assertion| assertion.is_match(input)))
+            }
+        })
+    }
+}
+
+fn compile_core_regex(pattern: &str) -> Result<CachedRegex, regex::Error> {
+    if let Some(assertions) = leading_positive_tail_assertions(pattern) {
+        return assertions.map(CachedRegex::LeadingPositiveTail);
+    }
+    regex::Regex::new(pattern).map(CachedRegex::Standard)
+}
+
+/// Compile the bounded look-ahead shape used by Snake TW's name predicate.
+///
+/// Each alternative asserts a condition and then consumes through the end of the
+/// input. Its observable result is therefore either one match or no match, which
+/// can be evaluated with Rust's linear regex engine without general backtracking.
+fn leading_positive_tail_assertions(
+    pattern: &str,
+) -> Option<Result<Vec<regex::Regex>, regex::Error>> {
+    let (case_insensitive, pattern) = pattern
+        .strip_prefix("(?i)")
+        .map_or((false, pattern), |pattern| (true, pattern));
+    let assertions = pattern
+        .strip_prefix("(?=")?
+        .strip_suffix(").*$")?
+        .split(").*$|(?=");
+    let mut compiled_assertions = Vec::new();
+    for assertion in assertions {
+        let compiled = regex::RegexBuilder::new(assertion)
+            .case_insensitive(case_insensitive)
+            .build();
+        match compiled {
+            Ok(compiled) => compiled_assertions.push(compiled),
+            Err(error) => return Some(Err(error)),
+        }
+    }
+    (!compiled_assertions.is_empty()).then_some(Ok(compiled_assertions))
 }
 
 impl CoreNative {
@@ -458,12 +517,15 @@ impl NativeService for CoreNative {
             }
             "strcount" => {
                 let pattern = string(1)?;
-                let regex = self
-                    .regex_cache
+                self.regex_cache
                     .get_or_compile(pattern)
                     .map_err(|error| regex_failure("STRCOUNT", &error))?;
                 let input = string(0)?;
-                VmValue::Integer(i64::try_from(regex.find_iter(input).count()).unwrap_or(i64::MAX))
+                let count = self
+                    .regex_cache
+                    .count_matches(pattern, input)
+                    .map_err(|error| regex_failure("STRCOUNT", &error))?;
+                VmValue::Integer(i64::try_from(count).unwrap_or(i64::MAX))
             }
             "getpalamlv" | "getexplv" => {
                 let maximum = usize::try_from(integer(1)?).map_err(|_| {
@@ -579,7 +641,7 @@ fn replace_text(
     }
 
     let regex = regex_cache
-        .get_or_compile(pattern)
+        .get_standard(pattern)
         .map_err(|error| regex_failure("REPLACE", &error))?;
     if mode == 1 {
         match request.argument(2) {
