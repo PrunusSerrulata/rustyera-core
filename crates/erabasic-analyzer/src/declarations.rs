@@ -44,6 +44,7 @@ pub(crate) struct DeclaredVariable {
 pub(crate) struct RuntimeInitializer {
     pub source: String,
     pub location: SourceLocation,
+    pub value_count: usize,
 }
 
 pub(crate) struct ScopedDeclaration {
@@ -418,16 +419,32 @@ fn parse_dim(
             ));
         }
         let trimmed_initializer = initializer.trim();
-        let runtime_scalar =
-            private && !is_static && (dimensions.is_empty() || dimensions.as_slice() == [1]);
-        if runtime_scalar {
+        let mut segments = split_top_level(initializer, ',');
+        if segments
+            .last()
+            .is_some_and(|segment| segment.trim().is_empty())
+        {
+            segments.pop();
+        }
+        if segments.iter().any(|segment| segment.trim().is_empty()) {
+            return Err(DimError::InvalidInitializer(
+                "array initializers cannot be omitted".into(),
+            ));
+        }
+        let runtime_values = private && !is_static && dimensions.len() <= 1;
+        if runtime_values {
             if trimmed_initializer.is_empty() {
                 return Err(DimError::InvalidInitializer(
-                    "scalar initializer cannot be empty".into(),
+                    "dynamic private initializer cannot be empty".into(),
                 ));
             }
             if dimensions.is_empty() {
-                dimensions.push(1);
+                dimensions.push(segments.len());
+            }
+            if segments.len() > dimensions[0] {
+                return Err(DimError::InvalidInitializer(
+                    "initializer count does not match the declared size".into(),
+                ));
             }
             let directive_text = &input.text[input.directive.span.start..input.directive.span.end];
             let relative = directive_text
@@ -447,23 +464,12 @@ fn parse_dim(
                         input.directive.span.start + relative + trimmed_initializer.len(),
                     ),
                 ),
+                value_count: segments.len(),
             });
         }
-        let mut segments = split_top_level(initializer, ',');
-        if segments
-            .last()
-            .is_some_and(|segment| segment.trim().is_empty())
-        {
-            segments.pop();
-        }
         for segment in segments {
-            if runtime_scalar {
+            if runtime_values {
                 break;
-            }
-            if segment.trim().is_empty() {
-                return Err(DimError::InvalidInitializer(
-                    "array initializers cannot be omitted".into(),
-                ));
             }
             let value = parse_constant(segment, context, &constant_evaluation)?;
             if matches!(value, ConstantValue::String(_)) != is_string {

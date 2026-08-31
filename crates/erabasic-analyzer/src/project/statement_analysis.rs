@@ -195,7 +195,7 @@ pub(super) fn analyze_function(
     let mut next_label = 0u32;
     for runtime in symbols.runtime_initializers(id) {
         let line_id = LineId(u32::try_from(lines.len()).expect("too many lines"));
-        lines.push(analyze_runtime_initializer(
+        lines.extend(analyze_runtime_initializer(
             line_id,
             id,
             source,
@@ -259,14 +259,14 @@ fn analyze_runtime_initializer(
     index_resolver: &IndexResolver,
     options: &AnalyzerOptions,
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
-) -> HirStatement {
+) -> Vec<HirStatement> {
     let location = runtime.initializer.location;
     let Some(variable) = symbols.variables.get(runtime.variable.0 as usize) else {
-        return HirStatement {
+        return vec![HirStatement {
             id: line_id,
             kind: HirStatementKind::Error,
             location,
-        };
+        }];
     };
     let mut parsed = erabasic_parser::parse_expression_list_at(
         &runtime.initializer.source,
@@ -281,10 +281,7 @@ fn analyze_runtime_initializer(
             &diagnostic,
         ));
     }
-    let expression = parsed
-        .value
-        .and_then(|mut values| (values.len() == 1).then(|| values.remove(0)));
-    let Some(expression) = expression else {
+    let Some(mut expressions) = parsed.value else {
         diagnostics.push(AnalyzerDiagnostic::at(
             AnalyzerDiagnosticCode::InvalidInitializer,
             AnalyzerDiagnosticSeverity::Error,
@@ -293,14 +290,71 @@ fn analyze_runtime_initializer(
             &source.source.relative_path,
             &source.text,
             location.span,
-            "dynamic private initializer must contain exactly one expression",
+            "dynamic private initializer must contain at least one expression",
         ));
-        return HirStatement {
+        return vec![HirStatement {
             id: line_id,
             kind: HirStatementKind::Error,
             location,
-        };
+        }];
     };
+    expressions.truncate(runtime.initializer.value_count);
+    if expressions.is_empty() {
+        diagnostics.push(AnalyzerDiagnostic::at(
+            AnalyzerDiagnosticCode::InvalidInitializer,
+            AnalyzerDiagnosticSeverity::Error,
+            2,
+            source.source.id,
+            &source.source.relative_path,
+            &source.text,
+            location.span,
+            "dynamic private initializer must contain at least one expression",
+        ));
+        return vec![HirStatement {
+            id: line_id,
+            kind: HirStatementKind::Error,
+            location,
+        }];
+    }
+    let value_count = expressions.len();
+    expressions
+        .iter()
+        .enumerate()
+        .map(|(index, expression)| {
+            analyze_runtime_initializer_value(
+                line_id,
+                index,
+                value_count,
+                function,
+                expression,
+                variable,
+                source,
+                symbols,
+                catalog,
+                index_resolver,
+                options,
+                diagnostics,
+            )
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn analyze_runtime_initializer_value(
+    first_line_id: LineId,
+    index: usize,
+    value_count: usize,
+    function: FunctionId,
+    expression: &Expr,
+    variable: &erabasic_hir::Variable,
+    source: &ParsedProjectSource,
+    symbols: &Symbols,
+    catalog: &Catalog,
+    index_resolver: &IndexResolver,
+    options: &AnalyzerOptions,
+    diagnostics: &mut Vec<AnalyzerDiagnostic>,
+) -> HirStatement {
+    let location = SourceLocation::new(source.source.id, expression.span);
     let value = ExpressionAnalyzer {
         symbols,
         catalog,
@@ -312,7 +366,7 @@ fn analyze_runtime_initializer(
         diagnostics,
         index_resolver,
     }
-    .analyze(&expression);
+    .analyze(expression);
     if variable.value_type != value.value_type && value.value_type != SemanticType::Error {
         diagnostics.push(AnalyzerDiagnostic::at(
             AnalyzerDiagnosticCode::TypeMismatch,
@@ -321,16 +375,31 @@ fn analyze_runtime_initializer(
             source.source.id,
             &source.source.relative_path,
             &source.text,
-            location.span,
+            expression.span,
             "dynamic private initializer type does not match its declaration",
         ));
     }
+    let index_value = i64::try_from(index).expect("initializer index fits in i64");
+    let indices = (value_count > 1)
+        .then_some(HirExpr {
+            kind: HirExprKind::Integer { value: index_value },
+            value_type: SemanticType::Integer,
+            constant: Some(ConstantValue::Integer(index_value)),
+            location,
+        })
+        .into_iter()
+        .collect();
     HirStatement {
-        id: line_id,
+        id: LineId(
+            first_line_id
+                .0
+                .checked_add(u32::try_from(index).expect("too many initializer values"))
+                .expect("too many lines"),
+        ),
         kind: HirStatementKind::Assignment {
             target: HirPlace {
                 variable: variable.id,
-                indices: Vec::new(),
+                indices,
                 value_type: variable.value_type,
                 mutable: variable.mutable,
                 location,

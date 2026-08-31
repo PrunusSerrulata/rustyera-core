@@ -317,6 +317,15 @@ pub(super) fn parse_arguments(
     );
     let mut diagnostics = shift_diagnostics(lexed.diagnostics, base);
     let tokens = shift_tokens(lexed.tokens, base);
+    if tokens.is_empty() {
+        // A non-empty source can still contain only an Era inline comment. It
+        // contributes no argument, just like a physically empty instruction
+        // tail; a literal comma still produces omitted slots below.
+        return ParseOutput {
+            value: Some(Vec::new()),
+            diagnostics,
+        };
+    }
     let mut arguments = Vec::new();
     for segment in split_top_level(&tokens, ',') {
         if segment.is_empty() {

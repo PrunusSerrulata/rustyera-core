@@ -476,6 +476,25 @@ fn plain_print_preserves_format_metacharacters_as_raw_text() {
 }
 
 #[test]
+fn comment_only_expression_tail_has_no_omitted_argument() {
+    let output = parse_line(
+        "CLEARMEMORY ;debloat custom code",
+        &DefaultParserContext::default(),
+    );
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let StatementKind::Instruction {
+        arguments,
+        raw_arguments,
+        ..
+    } = output.value.unwrap().kind
+    else {
+        panic!("expected instruction");
+    };
+    assert_eq!(raw_arguments, ";debloat custom code");
+    assert!(arguments.is_empty());
+}
+
+#[test]
 fn plain_print_consumes_only_its_first_separator() {
     for (source, expected) in [("PRINT  text", " text"), ("PRINT \u{3000}", "\u{3000}")] {
         let output = parse_line(source, &DefaultParserContext::default());

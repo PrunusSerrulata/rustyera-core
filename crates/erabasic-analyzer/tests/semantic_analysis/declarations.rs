@@ -160,6 +160,53 @@ fn dynamic_private_initializer_is_lowered_at_function_entry() {
 }
 
 #[test]
+fn dynamic_private_initializer_list_infers_array_and_assigns_each_element() {
+    let mut options = AnalyzerOptions::analysis_mode();
+    options.compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "dynamic-list.erb",
+                "@SYSTEM_TITLE\n#DIMS DYNAMIC LABELS = \"first\", TOSTR(2), \"third\"\nRESULTS = LABELS:1\nRETURN\n",
+            )],
+        },
+        &options,
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let project = report.project.unwrap();
+    let variable = project
+        .program
+        .variables
+        .iter()
+        .find(|variable| variable.name == "LABELS")
+        .unwrap();
+    assert_eq!(variable.dimensions, vec![3]);
+    let function = &project.program.functions[0];
+    for (index, line) in function.lines[..3].iter().enumerate() {
+        let HirStatementKind::Assignment { target, .. } = &line.kind else {
+            panic!("expected synthesized array initializer assignment");
+        };
+        assert_eq!(
+            target.indices[0].constant,
+            Some(erabasic_hir::ConstantValue::Integer(
+                i64::try_from(index).unwrap()
+            ))
+        );
+    }
+}
+
+#[test]
 fn resolves_header_constants_variables_and_typed_expressions() {
     let report = analyze_project(
         AnalysisInput {
@@ -385,7 +432,8 @@ fn unresolved_named_indices_in_dynamic_call_candidates_are_deferred() {
             sources: vec![source(
                 "dynamic.erb",
                 "@SYSTEM_TITLE\n\
-                 CALLFORM \"OPTIONAL\"\n\
+                 #DIMS TARGET\n\
+                 CALLFORM %TARGET%\n\
                  RETURN\n\
                  @OPTIONAL\n\
                  RESULT = CFLAG:LOCAL\n\
