@@ -436,6 +436,209 @@ pub(in super::super) fn execute_set_var(
     Ok(VmValue::Integer(1))
 }
 
+pub(in super::super) fn execute_var_set_ex(
+    vm: &mut Vm,
+    fiber: &mut Fiber,
+    arguments: &[VmValue],
+    omitted_arguments: &[usize],
+) -> Result<VmValue, VmError> {
+    let Some(VmValue::String(reference)) = arguments.first() else {
+        return Err(VmError::InvalidArguments(
+            "VARSETEX variable name must be a string".into(),
+        ));
+    };
+    let value = arguments
+        .get(1)
+        .cloned()
+        .ok_or_else(|| VmError::InvalidArguments("VARSETEX value is missing".into()))?;
+    if matches!(value, VmValue::IntegerPlace(_) | VmValue::StringPlace(_)) {
+        return Err(VmError::InvalidArguments(
+            "VARSETEX value must be a scalar".into(),
+        ));
+    }
+    let (target, value_type, variable_name) =
+        resolve_dynamic_variable_target(vm, fiber, reference, true)?;
+    if value.value_type() != value_type {
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
+            format!("VARSETEX value type differs from {variable_name}"),
+        ));
+    }
+    let dimensions = vm.place_dimensions(fiber, &target)?;
+    if dimensions.is_empty() {
+        // The pinned implementation accepts a scalar target but performs no write.
+        return Ok(VmValue::Integer(1));
+    }
+    if dimensions.len() > 3 {
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
+            "VARSETEX supports arrays of rank one through three".into(),
+        ));
+    }
+    let (set_all_dimensions, last_length, indexed_start, end) =
+        var_set_ex_selection(arguments, omitted_arguments, &target, &dimensions)?;
+    if indexed_start >= end {
+        return Ok(VmValue::Integer(1));
+    }
+
+    let mut array = target.clone();
+    array.indices.clear();
+    let length = vm.place_array_len(fiber, &array)?;
+    // The pinned String implementation always preserves the selected prefix;
+    // its all-dimensions branch only exists for numeric arrays.
+    if set_all_dimensions && value_type == BytecodeType::Integer {
+        let prefix_count = var_set_ex_prefix_count(&dimensions)?;
+        for prefix in 0..prefix_count {
+            let row = prefix.checked_mul(last_length).ok_or_else(|| {
+                script_native_error(
+                    crate::ScriptFaultKind::Bounds,
+                    "VARSETEX offset exceeds this platform".into(),
+                )
+            })?;
+            vm.fill_place_array_range(
+                fiber,
+                &array,
+                row + indexed_start,
+                row + end,
+                value.clone(),
+            )?;
+        }
+    } else {
+        let row = var_set_ex_selected_row(&target, &dimensions, last_length, length, end)?;
+        vm.fill_place_array_range(fiber, &array, row + indexed_start, row + end, value)?;
+    }
+    Ok(VmValue::Integer(1))
+}
+
+fn var_set_ex_selection(
+    arguments: &[VmValue],
+    omitted_arguments: &[usize],
+    target: &PlaceDescriptor,
+    dimensions: &[u64],
+) -> Result<(bool, usize, usize, usize), VmError> {
+    let argument = |index| {
+        (!omitted_arguments.contains(&index))
+            .then(|| arguments.get(index))
+            .flatten()
+    };
+    let integer_argument = |index, default, label| match argument(index) {
+        None => Ok(default),
+        Some(VmValue::Integer(value)) => usize::try_from(*value).map_err(|_| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                format!("VARSETEX {label} is negative"),
+            )
+        }),
+        Some(_) => Err(VmError::InvalidArguments(format!(
+            "VARSETEX {label} must be an integer"
+        ))),
+    };
+    let set_all_dimensions = match argument(2) {
+        None => true,
+        Some(VmValue::Integer(value)) => *value != 0,
+        Some(_) => {
+            return Err(VmError::InvalidArguments(
+                "VARSETEX dimension mode must be an integer".into(),
+            ));
+        }
+    };
+    let last_length = usize::try_from(*dimensions.last().unwrap_or(&0)).map_err(|_| {
+        script_native_error(
+            crate::ScriptFaultKind::Bounds,
+            "VARSETEX final dimension exceeds this platform".into(),
+        )
+    })?;
+    let start = integer_argument(3, 0, "start")?;
+    let end = integer_argument(4, last_length, "end")?;
+    if end > last_length {
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Bounds,
+            "VARSETEX range exceeds the final dimension".into(),
+        ));
+    }
+    let indexed_start = if dimensions.len() == 1 {
+        start
+    } else {
+        start.max(
+            target
+                .indices
+                .get(dimensions.len() - 1)
+                .copied()
+                .and_then(|index| usize::try_from(index).ok())
+                .unwrap_or(0),
+        )
+    };
+    Ok((set_all_dimensions, last_length, indexed_start, end))
+}
+
+fn var_set_ex_prefix_count(dimensions: &[u64]) -> Result<usize, VmError> {
+    dimensions[..dimensions.len() - 1]
+        .iter()
+        .try_fold(1usize, |count, dimension| {
+            usize::try_from(*dimension)
+                .ok()
+                .and_then(|dimension| count.checked_mul(dimension))
+        })
+        .ok_or_else(|| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                "VARSETEX dimensions exceed this platform".into(),
+            )
+        })
+}
+
+fn var_set_ex_selected_row(
+    target: &PlaceDescriptor,
+    dimensions: &[u64],
+    last_length: usize,
+    array_length: usize,
+    end: usize,
+) -> Result<usize, VmError> {
+    let mut prefix = 0usize;
+    for (dimension, length) in dimensions[..dimensions.len() - 1].iter().enumerate() {
+        let length = usize::try_from(*length).map_err(|_| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                "VARSETEX dimension exceeds this platform".into(),
+            )
+        })?;
+        let index = target
+            .indices
+            .get(dimension)
+            .copied()
+            .and_then(|index| usize::try_from(index).ok())
+            .unwrap_or(0);
+        if index >= length {
+            return Err(script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                "VARSETEX prefix index is out of range".into(),
+            ));
+        }
+        prefix = prefix
+            .checked_mul(length)
+            .and_then(|prefix| prefix.checked_add(index))
+            .ok_or_else(|| {
+                script_native_error(
+                    crate::ScriptFaultKind::Bounds,
+                    "VARSETEX prefix exceeds this platform".into(),
+                )
+            })?;
+    }
+    let row = prefix.checked_mul(last_length).ok_or_else(|| {
+        script_native_error(
+            crate::ScriptFaultKind::Bounds,
+            "VARSETEX offset exceeds this platform".into(),
+        )
+    })?;
+    if row.checked_add(end).is_none_or(|end| end > array_length) {
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Bounds,
+            "VARSETEX range exceeds the variable".into(),
+        ));
+    }
+    Ok(row)
+}
+
 pub(in super::super) fn execute_get_var(
     vm: &Vm,
     fiber: &Fiber,

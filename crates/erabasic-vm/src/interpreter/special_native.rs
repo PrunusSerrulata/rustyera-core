@@ -28,6 +28,13 @@ impl Vm {
             NativeReady::value(execute_index_by_name(self, fiber, arguments)?)
         } else if native_name == "setvar" {
             NativeReady::value(execute_set_var(self, fiber, arguments)?)
+        } else if native_name == "varsetex" {
+            NativeReady::value(execute_var_set_ex(
+                self,
+                fiber,
+                arguments,
+                omitted_arguments,
+            )?)
         } else if matches!(native_name, "getvar" | "getvars") {
             NativeReady::value(execute_get_var(
                 self,
@@ -111,6 +118,7 @@ pub(super) fn owns_native(name: &str) -> bool {
             | "erdname"
             | "__indexbyname"
             | "setvar"
+            | "varsetex"
             | "getvar"
             | "getvars"
             | "__encodetouni_result"

@@ -676,6 +676,77 @@ fn dynamic_variable_methods_resolve_local_global_and_named_places() {
 }
 
 #[test]
+fn varsetex_fills_the_selected_or_all_final_dimension_ranges() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n\
+         #DIM GRID, 2, 3\n\
+         #DIMS WORDS, 2, 3\n\
+         RESULT:0 = VARSETEX(\"GRID:1:1\", 7, 0)\n\
+         RESULT:1 = VARSETEX(\"GRID:0:1\", 9)\n\
+         RESULT:2 = VARSETEX(\"WORDS:1:0\", \"leaf\", 0)\n\
+         RETURN RESULT\n",
+    );
+    let entry = artifact.functions[0].key;
+    let key = |name: &str| {
+        artifact
+            .globals
+            .iter()
+            .find(|global| global.name == name)
+            .unwrap()
+            .key
+    };
+    let result = key("RESULT");
+    let grid = key("GRID");
+    let words = key("WORDS");
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        (0..3)
+            .map(|index| vm.read_variable(result, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        vec![VmValue::Integer(1); 3]
+    );
+    assert_eq!(
+        [[0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [1, 2]]
+            .map(|indices| vm.read_variable(grid, &indices, None).unwrap()),
+        [
+            VmValue::Integer(0),
+            VmValue::Integer(9),
+            VmValue::Integer(9),
+            VmValue::Integer(0),
+            VmValue::Integer(9),
+            VmValue::Integer(9),
+        ]
+    );
+    assert_eq!(
+        [[0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [1, 2]]
+            .map(|indices| vm.read_variable(words, &indices, None).unwrap()),
+        [
+            VmValue::String(String::new()),
+            VmValue::String(String::new()),
+            VmValue::String(String::new()),
+            VmValue::String("leaf".into()),
+            VmValue::String("leaf".into()),
+            VmValue::String("leaf".into()),
+        ]
+    );
+}
+
+#[test]
 fn dynamic_variable_methods_resolve_character_named_indices() {
     let mut data = project_data();
     data.static_data

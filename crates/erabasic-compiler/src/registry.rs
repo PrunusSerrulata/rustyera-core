@@ -300,6 +300,7 @@ const IMPLEMENTED_NATIVE_NAMES: &[&str] = &[
     "getvar",
     "getvars",
     "setvar",
+    "varsetex",
     "varset",
     "cvarset",
     "arraymsort",

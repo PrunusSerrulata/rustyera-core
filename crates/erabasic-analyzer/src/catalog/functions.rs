@@ -148,6 +148,13 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     }
     add("ENCODETOUNI", IntType, &[String, Integer], 1, false);
     add("SETVAR", IntType, &[String, Any], 2, false);
+    add(
+        "VARSETEX",
+        IntType,
+        &[String, Any, Integer, Integer, Integer],
+        2,
+        false,
+    );
     add("CHARATU", StrType, &[String, Integer], 2, false);
     add(
         "STRJOIN",
@@ -853,7 +860,7 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
             .expect("find-element signature was inserted")
             .allow_omitted = true;
     }
-    for name in ["SUBSTRING", "SUBSTRINGU", "ENCODETOUNI"] {
+    for name in ["SUBSTRING", "SUBSTRINGU", "ENCODETOUNI", "VARSETEX"] {
         result
             .get_mut(name)
             .expect("optional string method signature was inserted")
