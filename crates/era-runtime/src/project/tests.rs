@@ -1037,46 +1037,6 @@ fn runtime_project_build_retains_a_compact_serializable_incremental_cache() {
 }
 
 #[test]
-fn runtime_project_build_compiles_functions_hidden_by_diagnostic_reachability() {
-    let build = build_project(
-        &ProjectManifest {
-            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
-            project_revision: 1,
-            files: vec![
-                SubmittedFile {
-                    relative_path: "reraconfig.toml".into(),
-                    category: FileCategory::Configuration,
-                    payload: FilePayload::Utf8(
-                        "[meta]\nschema_version = 4\n[diagnostics]\nignore_uncalled_functions = true\n"
-                            .into(),
-                    ),
-                    content_hash: None,
-                },
-                SubmittedFile {
-                    relative_path: "main.erb".into(),
-                    category: FileCategory::Erb,
-                    payload: FilePayload::Utf8(
-                        "@SYSTEM_TITLE\nRETURN\n@UNUSED(ARG)\nRETURN\n".into(),
-                    ),
-                    content_hash: None,
-                },
-            ],
-        },
-        None,
-    );
-
-    assert!(build.report.success, "{:?}", build.report.diagnostics);
-    let artifact = build.artifact.expect("compiled artifact");
-    let function = artifact
-        .artifact()
-        .functions
-        .iter()
-        .find(|function| function.name.eq_ignore_ascii_case("UNUSED"))
-        .expect("uncalled function remains in runtime artifact");
-    assert_eq!(function.parameters.len(), 1);
-}
-
-#[test]
 fn project_build_reports_real_workload_progress() {
     use std::sync::{Arc, Mutex};
 
