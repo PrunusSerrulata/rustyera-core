@@ -1,6 +1,6 @@
 use super::{
-    AnalyzerOptions, BTreeMap, BinaryOp, ConstantValue, DimError, Expr, ExprKind, FormPart,
-    FormattedString, IndexResolver, ParserContext, UnaryOp, normalize, parse_expression,
+    AnalyzerOptions, BinaryOp, ConstantValue, DeclarationLookup, DimError, Expr, ExprKind,
+    FormPart, FormattedString, IndexResolver, ParserContext, UnaryOp, normalize, parse_expression,
 };
 use std::cell::RefCell;
 
@@ -9,8 +9,8 @@ use erabasic_compat::{IntegerArithmeticPolicy, IntegerArithmeticWarning, Integer
 pub(crate) type ConstantWarnings = Vec<(IntegerArithmeticWarning, String)>;
 
 pub(super) struct ConstantEvaluation<'a> {
-    pub(super) constants: &'a BTreeMap<String, ConstantValue>,
-    pub(super) variable_dimensions: &'a BTreeMap<String, Vec<usize>>,
+    pub(super) constants: &'a dyn DeclarationLookup<ConstantValue>,
+    pub(super) variable_dimensions: &'a dyn DeclarationLookup<Vec<usize>>,
     pub(super) index_resolver: &'a IndexResolver,
     pub(super) options: &'a AnalyzerOptions,
     pub(super) warnings: RefCell<ConstantWarnings>,

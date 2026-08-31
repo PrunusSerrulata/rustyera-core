@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use erabasic_data::{ProjectData, StorageScope, ValueType, VariableSchema};
 use erabasic_hir::{
@@ -7,7 +7,7 @@ use erabasic_hir::{
 };
 
 use crate::{
-    declarations::{DeclaredVariable, RuntimeInitializer},
+    declarations::{DeclaredVariable, LayeredDeclarationLookup, RuntimeInitializer},
     identifiers::identifier_key,
     options::AnalyzerOptions,
 };
@@ -35,6 +35,9 @@ pub(crate) struct Symbols {
     functions: Vec<FunctionSymbol>,
     functions_by_name: BTreeMap<String, usize>,
     runtime_initializers: BTreeMap<FunctionId, Vec<FunctionRuntimeInitializer>>,
+    function_variables: BTreeMap<FunctionId, Vec<VariableId>>,
+    global_constants: Arc<BTreeMap<String, ConstantValue>>,
+    global_dimensions: Arc<BTreeMap<String, Vec<usize>>>,
     allow_function_overloading: bool,
     ignore_case: bool,
 }
@@ -54,6 +57,9 @@ impl Symbols {
             functions: Vec::new(),
             functions_by_name: BTreeMap::new(),
             runtime_initializers: BTreeMap::new(),
+            function_variables: BTreeMap::new(),
+            global_constants: Arc::new(BTreeMap::new()),
+            global_dimensions: Arc::new(BTreeMap::new()),
             allow_function_overloading: options.allow_function_overloading,
             ignore_case: options.ignore_case,
         };
@@ -96,6 +102,29 @@ impl Symbols {
                 location,
             );
         }
+        result.global_constants = Arc::new(
+            result
+                .variables
+                .iter()
+                .filter(|variable| variable.owner.is_none())
+                .filter(|variable| variable.storage == StorageScope::Constant)
+                .filter_map(|variable| {
+                    variable
+                        .initial_values
+                        .first()
+                        .cloned()
+                        .map(|value| (result.key(&variable.name), value))
+                })
+                .collect(),
+        );
+        result.global_dimensions = Arc::new(
+            result
+                .variables
+                .iter()
+                .filter(|variable| variable.owner.is_none())
+                .map(|variable| (result.key(&variable.name), variable.dimensions.clone()))
+                .collect(),
+        );
         result
     }
 
@@ -168,6 +197,10 @@ impl Symbols {
                 id
             };
             self.locals.insert((function, variable_name), id);
+            let variables = self.function_variables.entry(function).or_default();
+            if !variables.contains(&id) {
+                variables.push(id);
+            }
         }
     }
 
@@ -233,26 +266,31 @@ impl Symbols {
         self.variables.get(id.0 as usize)
     }
 
-    pub fn constant_values(&self) -> BTreeMap<String, ConstantValue> {
-        self.variables
-            .iter()
-            .filter(|variable| variable.storage == StorageScope::Constant)
-            .filter_map(|variable| {
-                variable
-                    .initial_values
-                    .first()
-                    .cloned()
-                    .map(|value| (self.key(&variable.name), value))
-            })
-            .collect()
-    }
-
-    pub fn variable_dimensions(&self, function: FunctionId) -> BTreeMap<String, Vec<usize>> {
-        self.variables
-            .iter()
-            .filter(|variable| variable.owner.is_none() || variable.owner == Some(function))
-            .map(|variable| (self.key(&variable.name), variable.dimensions.clone()))
-            .collect()
+    pub fn declaration_lookups(
+        &self,
+        function: FunctionId,
+    ) -> (
+        LayeredDeclarationLookup<ConstantValue>,
+        LayeredDeclarationLookup<Vec<usize>>,
+    ) {
+        let mut constants = LayeredDeclarationLookup::new(Arc::clone(&self.global_constants));
+        let mut dimensions = LayeredDeclarationLookup::new(Arc::clone(&self.global_dimensions));
+        for variable in self
+            .function_variables
+            .get(&function)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| self.variables.get(id.0 as usize))
+        {
+            let key = self.key(&variable.name);
+            dimensions.insert(key.clone(), variable.dimensions.clone());
+            if variable.storage == StorageScope::Constant
+                && let Some(value) = variable.initial_values.first()
+            {
+                constants.insert(key, value.clone());
+            }
+        }
+        (constants, dimensions)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -308,6 +346,10 @@ impl Symbols {
         });
         if let Some(function) = owner {
             self.locals.insert((function, key), id);
+            let variables = self.function_variables.entry(function).or_default();
+            if !variables.contains(&id) {
+                variables.push(id);
+            }
         } else {
             self.globals.insert(key, id);
         }

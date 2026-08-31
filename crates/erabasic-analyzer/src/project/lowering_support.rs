@@ -35,8 +35,7 @@ pub(super) fn analyze_scoped_declaration_statement(
     options: &AnalyzerOptions,
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
 ) -> HirStatementKind {
-    let constants = symbols.constant_values();
-    let dimensions = symbols.variable_dimensions(function);
+    let (constants, dimensions) = symbols.declaration_lookups(function);
     let Ok(scoped) = parse_scoped_declaration(
         source.source.id,
         &source.source.relative_path,
@@ -444,8 +443,7 @@ pub(super) fn register_function_declarations(
     // Building the constant lookup clones every constant name and value. Most
     // functions have no private declarations, so defer that work until the
     // declaration parser can actually consume it.
-    let mut constants = symbols.constant_values();
-    let mut variable_dimensions = symbols.variable_dimensions(function_id);
+    let (mut constants, mut variable_dimensions) = symbols.declaration_lookups(function_id);
     let mut integer_size = None;
     let mut string_size = None;
     for directive in &function.attributes {

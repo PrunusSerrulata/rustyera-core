@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use erabasic_ast::{BinaryOp, Directive, Expr, ExprKind, FormPart, FormattedString, UnaryOp};
 use erabasic_data::{
@@ -21,6 +21,44 @@ mod constants;
 
 pub(crate) use constants::ConstantWarnings;
 use constants::{ConstantEvaluation, parse_constant};
+
+pub(crate) trait DeclarationLookup<T> {
+    fn get(&self, key: &str) -> Option<&T>;
+
+    fn contains_key(&self, key: &str) -> bool {
+        self.get(key).is_some()
+    }
+}
+
+impl<T> DeclarationLookup<T> for BTreeMap<String, T> {
+    fn get(&self, key: &str) -> Option<&T> {
+        BTreeMap::get(self, key)
+    }
+}
+
+pub(crate) struct LayeredDeclarationLookup<T> {
+    base: Arc<BTreeMap<String, T>>,
+    local: BTreeMap<String, T>,
+}
+
+impl<T> LayeredDeclarationLookup<T> {
+    pub(crate) fn new(base: Arc<BTreeMap<String, T>>) -> Self {
+        Self {
+            base,
+            local: BTreeMap::new(),
+        }
+    }
+
+    pub(crate) fn insert(&mut self, key: String, value: T) {
+        self.local.insert(key, value);
+    }
+}
+
+impl<T> DeclarationLookup<T> for LayeredDeclarationLookup<T> {
+    fn get(&self, key: &str) -> Option<&T> {
+        self.local.get(key).or_else(|| self.base.get(key))
+    }
+}
 
 pub(crate) struct DeclarationInput<'a> {
     pub source: SourceId,
@@ -167,8 +205,8 @@ pub(crate) fn analyze_global_declarations(
 pub(crate) fn parse_private_declaration(
     input: &DeclarationInput<'_>,
     context: &dyn ParserContext,
-    constants: &BTreeMap<String, ConstantValue>,
-    variable_dimensions: &BTreeMap<String, Vec<usize>>,
+    constants: &dyn DeclarationLookup<ConstantValue>,
+    variable_dimensions: &dyn DeclarationLookup<Vec<usize>>,
     index_resolver: &IndexResolver,
     options: &AnalyzerOptions,
 ) -> Result<DeclaredVariable, String> {
@@ -187,8 +225,8 @@ pub(crate) fn parse_private_declaration(
 pub(crate) fn parse_integer_constant(
     source: &str,
     context: &dyn ParserContext,
-    constants: &BTreeMap<String, ConstantValue>,
-    variable_dimensions: &BTreeMap<String, Vec<usize>>,
+    constants: &dyn DeclarationLookup<ConstantValue>,
+    variable_dimensions: &dyn DeclarationLookup<Vec<usize>>,
     index_resolver: &IndexResolver,
     options: &AnalyzerOptions,
 ) -> Result<(i64, ConstantWarnings), String> {
@@ -216,8 +254,8 @@ pub(crate) fn parse_scoped_declaration(
     raw_arguments: &str,
     span: erabasic_ast::Span,
     context: &dyn ParserContext,
-    constants: &BTreeMap<String, ConstantValue>,
-    variable_dimensions: &BTreeMap<String, Vec<usize>>,
+    constants: &dyn DeclarationLookup<ConstantValue>,
+    variable_dimensions: &dyn DeclarationLookup<Vec<usize>>,
     index_resolver: &IndexResolver,
     options: &AnalyzerOptions,
 ) -> Result<ScopedDeclaration, String> {
@@ -293,8 +331,8 @@ fn parse_dim(
     input: &DeclarationInput<'_>,
     private: bool,
     context: &dyn ParserContext,
-    constants: &BTreeMap<String, ConstantValue>,
-    variable_dimensions: &BTreeMap<String, Vec<usize>>,
+    constants: &dyn DeclarationLookup<ConstantValue>,
+    variable_dimensions: &dyn DeclarationLookup<Vec<usize>>,
     index_resolver: &IndexResolver,
     options: &AnalyzerOptions,
 ) -> Result<DeclaredVariable, DimError> {
