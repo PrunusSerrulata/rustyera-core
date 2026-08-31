@@ -71,6 +71,35 @@ fn frontend_observation_reports_source_and_control_dependency() {
 }
 
 #[test]
+fn frontend_observation_propagates_through_a_long_reverse_ordered_call_chain() {
+    use std::fmt::Write as _;
+
+    let mut script = String::from("@SYSTEM_TITLE\nIF CHAIN_0()\nPRINT wide\nENDIF\nRETURN\n");
+    for index in 0..256 {
+        writeln!(
+            script,
+            "@CHAIN_{index}\n#FUNCTION\nRETURNF CHAIN_{}()",
+            index + 1
+        )
+        .expect("writing to a String cannot fail");
+    }
+    script.push_str("@CHAIN_256\n#FUNCTION\nRETURNF CLIENTWIDTH()\n");
+
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source("projection-chain.erb", &script)],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == AnalyzerDiagnosticCode::FrontendObservationDependency
+    }));
+}
+
+#[test]
 fn restart_branches_to_the_current_function_entry_without_falling_through() {
     let report = analyze_project(
         AnalysisInput {

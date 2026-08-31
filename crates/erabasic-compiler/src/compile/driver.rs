@@ -278,9 +278,26 @@ fn compile_project_inner(
         consume_owned_hir,
     } = policy;
     let mut project = project;
-    let total_functions = project.project().program.functions.len();
-    let compiling_progress =
-        CompileProgressCounter::new(CompileProgressStage::Compiling, total_functions, progress);
+    let (total_functions, total_variables, total_sources) = {
+        let program = &project.project().program;
+        (
+            program.functions.len(),
+            program.variables.len(),
+            program.sources.len(),
+        )
+    };
+    // Compiling includes stable-key/signature indexing and call-dependency preparation before
+    // bytecode lowering. Count those real work units so large projects keep reporting progress
+    // instead of appearing stalled before the first function body is emitted.
+    let total_compile_work = total_functions
+        .saturating_mul(5)
+        .saturating_add(total_variables.saturating_mul(2))
+        .saturating_add(total_sources);
+    let compiling_progress = CompileProgressCounter::new(
+        CompileProgressStage::Compiling,
+        total_compile_work,
+        progress,
+    );
     let hir_report = {
         let project_ref = project.project();
         validate_hir(&project_ref.program, &project_ref.data)
@@ -312,15 +329,19 @@ fn compile_project_inner(
     let compiler_options = canonical_digest("rustyera.compiler.options.v2", &options.optimization);
     let (function_keys, variable_keys, function_signatures, artifact_event_groups) = {
         let project_ref = project.project();
-        let function_keys =
-            function_keys(&project_ref.program.functions, &project_ref.program.sources);
-        let variable_keys = variable_keys(&project_ref.program.variables, &function_keys);
-        let function_signatures = project_ref
-            .program
-            .functions
-            .iter()
-            .map(FunctionSignature::from)
-            .collect::<Vec<_>>();
+        let function_keys = function_keys(
+            &project_ref.program.functions,
+            &project_ref.program.sources,
+            || compiling_progress.advance(),
+        );
+        let variable_keys = variable_keys(&project_ref.program.variables, &function_keys, || {
+            compiling_progress.advance();
+        });
+        let mut function_signatures = Vec::with_capacity(total_functions);
+        for function in &project_ref.program.functions {
+            function_signatures.push(FunctionSignature::from(function));
+            compiling_progress.advance();
+        }
         let artifact_event_groups = event_groups(&project_ref.program.functions, &function_keys);
         (
             function_keys,
@@ -335,10 +356,12 @@ fn compile_project_inner(
         let mut functions_by_id = DenseIdIndex::new(function_signatures.len());
         for function in &function_signatures {
             functions_by_id.insert(function.id.0, function);
+            compiling_progress.advance();
         }
         let mut source_indices = DenseIdIndex::new(project_ref.program.sources.len());
         for (index, source) in project_ref.program.sources.iter().enumerate() {
             source_indices.insert(source.id.0, u32::try_from(index).unwrap_or(u32::MAX));
+            compiling_progress.advance();
         }
         let context = LoweringContext {
             program: LoweringProgram {
@@ -356,13 +379,18 @@ fn compile_project_inner(
             &function_signatures,
             &function_keys,
             &project_ref.program.variables,
+            || compiling_progress.advance(),
         );
+        let variable_dependencies =
+            shared_variable_dependencies(&project_ref.program.variables, || {
+                compiling_progress.advance();
+            });
         let shared_dependencies = canonical_digest(
-            "rustyera.compiler.shared-dependencies.v4",
+            "rustyera.compiler.shared-dependencies.v5",
             &(
                 &project_ref.program.compatibility,
                 &project_ref.program.call_compatibility,
-                &project_ref.program.variables,
+                variable_dependencies,
                 host_registry,
                 options.optimization,
             ),
@@ -922,5 +950,54 @@ mod tests {
         assert_eq!(consumed.report, expected);
         assert_eq!(consumed.source_ids, [SourceId(0)]);
         assert!(consumed.diagnostic_sources.is_empty());
+    }
+
+    #[test]
+    fn compilation_preparation_reports_intermediate_work() {
+        let events = std::sync::Mutex::new(Vec::new());
+        let callback = |progress| events.lock().unwrap().push(progress);
+        let project = analyzed("@SYSTEM_TITLE\nCALL HELPER\nRETURN\n@HELPER\nRETURN\n");
+        let expected_work = project
+            .program
+            .functions
+            .len()
+            .saturating_mul(5)
+            .saturating_add(project.program.variables.len().saturating_mul(2))
+            .saturating_add(project.program.sources.len());
+        let report = compile_project_inner(
+            ProjectInput::Owned(Box::new(project)),
+            &CompilerOptions::default(),
+            &default_host_registry(),
+            None,
+            None,
+            CompilePolicy {
+                compact_cache: true,
+                consume_owned_hir: true,
+            },
+            Some(&callback),
+        );
+
+        assert!(
+            report.report.artifact.is_some(),
+            "{:#?}",
+            report.report.diagnostics
+        );
+        let events = events.into_inner().unwrap();
+        let compiling = events
+            .iter()
+            .filter(|progress| progress.stage == CompileProgressStage::Compiling)
+            .collect::<Vec<_>>();
+        assert_eq!(compiling.first().unwrap().completed, 0);
+        assert_eq!(compiling.last().unwrap().total, expected_work);
+        assert_eq!(
+            compiling.last().unwrap().completed,
+            compiling.last().unwrap().total
+        );
+        assert!(
+            compiling
+                .iter()
+                .any(|progress| progress.completed > 0 && progress.completed < progress.total),
+            "compilation preparation did not expose intermediate progress: {compiling:?}"
+        );
     }
 }

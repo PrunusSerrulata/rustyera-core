@@ -22,6 +22,7 @@ impl<'a> CallDependencies<'a> {
         signatures: &'a [FunctionSignature],
         keys: &DenseIdIndex<SymbolKey>,
         variables: &[Variable],
+        progress: impl Fn(),
     ) -> Self {
         let mut result = Self {
             signatures: DenseIdIndex::new(signatures.len()),
@@ -69,6 +70,7 @@ impl<'a> CallDependencies<'a> {
                 .or_default()
                 .push(signature.id);
             all.push((key, digest));
+            progress();
         }
         all.sort_by_key(|entry| entry.0);
         result.dynamic = canonical_digest("rustyera.compiler.dynamic-signatures.v1", &all);

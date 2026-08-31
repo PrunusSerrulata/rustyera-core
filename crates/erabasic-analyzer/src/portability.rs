@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use erabasic_data::Persistence;
 use erabasic_hir::{
@@ -35,41 +35,185 @@ pub(crate) fn analyze(
 fn summarize_return_taint(program: &Program) -> BTreeMap<FunctionId, bool> {
     let mut return_taint = BTreeMap::<FunctionId, bool>::new();
 
-    // Function summaries reach a deterministic fixed point before diagnostics
-    // are emitted. Recursive groups therefore behave the same regardless of
-    // source or collection traversal order.
-    loop {
-        let mut changed = false;
-        for function in &program.functions {
-            let mut variables = BTreeSet::new();
-            let mut tainted_return = false;
-            for line in &function.lines {
-                match &line.kind {
-                    HirStatementKind::Assignment { target, value, .. } => {
-                        if expression_tainted(value, &variables, &return_taint) {
-                            variables.insert(target.variable);
-                        }
-                    }
-                    HirStatementKind::Instruction { target, arguments }
-                        if target.name().eq_ignore_ascii_case("RETURN") =>
-                    {
-                        tainted_return |= arguments
-                            .iter()
-                            .any(|argument| argument_tainted(argument, &variables, &return_taint));
-                    }
-                    _ => {}
-                }
-            }
-            if tainted_return && !return_taint.get(&function.id).copied().unwrap_or(false) {
-                return_taint.insert(function.id, true);
-                changed = true;
+    // Re-running every function until a fixed point makes a long reverse-ordered
+    // call chain quadratic. Build the reverse dependency graph once and only
+    // revisit callers whose callee summary has just changed.
+    let function_indices = program
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(index, function)| (function.id, index))
+        .collect::<BTreeMap<_, _>>();
+    let mut callers = vec![Vec::<usize>::new(); program.functions.len()];
+    for (caller_index, function) in program.functions.iter().enumerate() {
+        let mut dependencies = BTreeSet::new();
+        collect_return_dependencies(function, &mut dependencies);
+        for dependency in dependencies {
+            if let Some(&callee_index) = function_indices.get(&dependency) {
+                callers[callee_index].push(caller_index);
             }
         }
-        if !changed {
-            break;
+    }
+
+    let mut pending = (0..program.functions.len()).collect::<VecDeque<_>>();
+    let mut queued = vec![true; program.functions.len()];
+    while let Some(index) = pending.pop_front() {
+        queued[index] = false;
+        let function = &program.functions[index];
+        if return_taint.get(&function.id).copied().unwrap_or(false)
+            || !function_return_tainted(function, &return_taint)
+        {
+            continue;
+        }
+        return_taint.insert(function.id, true);
+        for &caller_index in &callers[index] {
+            let caller = &program.functions[caller_index];
+            if !queued[caller_index] && !return_taint.get(&caller.id).copied().unwrap_or(false) {
+                queued[caller_index] = true;
+                pending.push_back(caller_index);
+            }
         }
     }
     return_taint
+}
+
+fn function_return_tainted(
+    function: &erabasic_hir::Function,
+    return_taint: &BTreeMap<FunctionId, bool>,
+) -> bool {
+    let mut variables = BTreeSet::new();
+    for line in &function.lines {
+        match &line.kind {
+            HirStatementKind::Assignment { target, value, .. } => {
+                if expression_tainted(value, &variables, return_taint) {
+                    variables.insert(target.variable);
+                }
+            }
+            HirStatementKind::Instruction { target, arguments }
+                if is_return_instruction(target.name())
+                    && arguments
+                        .iter()
+                        .any(|argument| argument_tainted(argument, &variables, return_taint)) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn collect_return_dependencies(
+    function: &erabasic_hir::Function,
+    output: &mut BTreeSet<FunctionId>,
+) {
+    for line in &function.lines {
+        match &line.kind {
+            HirStatementKind::Assignment { value, .. } => collect_expression_calls(value, output),
+            HirStatementKind::Instruction { target, arguments }
+                if is_return_instruction(target.name()) =>
+            {
+                for argument in arguments {
+                    collect_argument_calls(argument, output);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_argument_calls(argument: &HirArgument, output: &mut BTreeSet<FunctionId>) {
+    match argument {
+        HirArgument::Expression(value)
+        | HirArgument::MixedExpression {
+            expression: value, ..
+        } => collect_expression_calls(value, output),
+        HirArgument::Place(place) => {
+            for index in &place.indices {
+                collect_expression_calls(index, output);
+            }
+        }
+        HirArgument::Formatted(value) => collect_formatted_calls(value, output),
+        HirArgument::Raw(_) | HirArgument::Omitted => {}
+    }
+}
+
+fn collect_expression_calls(expression: &HirExpr, output: &mut BTreeSet<FunctionId>) {
+    match &expression.kind {
+        HirExprKind::Call { target, arguments } => {
+            if let CallTarget::User { function } = target {
+                output.insert(*function);
+            }
+            for argument in arguments {
+                match argument {
+                    HirCallArgument::Value(value) => collect_expression_calls(value, output),
+                    HirCallArgument::Place(place) => {
+                        for index in &place.indices {
+                            collect_expression_calls(index, output);
+                        }
+                    }
+                    HirCallArgument::Omitted => {}
+                }
+            }
+        }
+        HirExprKind::Variable { place } => {
+            for index in &place.indices {
+                collect_expression_calls(index, output);
+            }
+        }
+        HirExprKind::Unary { operand, .. } | HirExprKind::Postfix { operand, .. } => {
+            collect_expression_calls(operand, output);
+        }
+        HirExprKind::Binary { left, right, .. } => {
+            collect_expression_calls(left, output);
+            collect_expression_calls(right, output);
+        }
+        HirExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            collect_expression_calls(condition, output);
+            collect_expression_calls(then_expr, output);
+            collect_expression_calls(else_expr, output);
+        }
+        HirExprKind::Formatted { value } => collect_formatted_calls(value, output),
+        HirExprKind::Integer { .. } | HirExprKind::String { .. } | HirExprKind::Error => {}
+    }
+}
+
+fn collect_formatted_calls(value: &HirFormattedString, output: &mut BTreeSet<FunctionId>) {
+    for part in &value.parts {
+        match part {
+            HirFormPart::Interpolation {
+                expression, width, ..
+            } => {
+                collect_expression_calls(expression, output);
+                if let Some(width) = width {
+                    collect_expression_calls(width, output);
+                }
+            }
+            HirFormPart::Conditional {
+                condition,
+                then_value,
+                else_value,
+                ..
+            } => {
+                collect_expression_calls(condition, output);
+                collect_formatted_calls(then_value, output);
+                if let Some(value) = else_value {
+                    collect_formatted_calls(value, output);
+                }
+            }
+            HirFormPart::Text { .. } | HirFormPart::Triple { .. } => {}
+        }
+    }
+}
+
+fn is_return_instruction(name: &str) -> bool {
+    name.eq_ignore_ascii_case("RETURN")
+        || name.eq_ignore_ascii_case("RETURNF")
+        || name.eq_ignore_ascii_case("RETURNFORM")
 }
 
 fn emit_diagnostics(

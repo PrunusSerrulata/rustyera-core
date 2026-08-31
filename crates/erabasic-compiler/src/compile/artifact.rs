@@ -91,6 +91,7 @@ pub(super) fn event_groups(
 pub(super) fn function_keys(
     functions: &[Function],
     sources: &[erabasic_hir::SourceFile],
+    progress: impl Fn(),
 ) -> DenseIdIndex<SymbolKey> {
     let mut paths = DenseIdIndex::new(sources.len());
     for source in sources {
@@ -131,6 +132,7 @@ pub(super) fn function_keys(
             function.id.0,
             SymbolKey::derive("rustyera.bytecode.function.v1", &identity_bytes),
         );
+        progress();
     }
     keys
 }
@@ -138,6 +140,7 @@ pub(super) fn function_keys(
 pub(super) fn variable_keys(
     variables: &[Variable],
     functions: &DenseIdIndex<SymbolKey>,
+    progress: impl Fn(),
 ) -> DenseIdIndex<SymbolKey> {
     let mut keys = DenseIdIndex::new(variables.len());
     let mut identity = Vec::new();
@@ -155,8 +158,24 @@ pub(super) fn variable_keys(
             variable.id.0,
             SymbolKey::derive("rustyera.bytecode.variable.v2", &identity),
         );
+        progress();
     }
     keys
+}
+
+pub(super) fn shared_variable_dependencies(variables: &[Variable], progress: impl Fn()) -> Digest {
+    let mut dependencies = Vec::with_capacity(variables.len());
+    for variable in variables {
+        dependencies.push(canonical_digest(
+            "rustyera.compiler.shared-variable.v1",
+            variable,
+        ));
+        progress();
+    }
+    canonical_digest(
+        "rustyera.compiler.shared-variable-dependencies.v1",
+        &dependencies,
+    )
 }
 
 pub(super) fn globals(
