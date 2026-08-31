@@ -76,6 +76,7 @@ fn required_identical_samples(state: &Value) -> usize {
                 | "csv_load"
                 | "analysis"
                 | "analysis_returned"
+                | "hir_validation"
                 | "coverage_symbol_projection"
                 | "compile"
                 | "loading_project"
