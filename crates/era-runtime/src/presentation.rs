@@ -1038,6 +1038,7 @@ mod defaults;
 mod delivery;
 mod media;
 mod projection;
+mod scene;
 #[cfg(test)]
 mod tests;
 

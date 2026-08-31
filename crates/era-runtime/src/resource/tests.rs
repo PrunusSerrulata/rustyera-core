@@ -308,6 +308,7 @@ fn file_sprite_reload_inherits_only_an_identical_resource_digest() {
 }
 
 use super::*;
+use era_runtime_protocol::CanvasReplayCommand;
 
 #[test]
 fn parses_static_and_animation_sprites_then_validates_metadata() {

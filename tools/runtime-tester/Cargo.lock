@@ -280,6 +280,7 @@ dependencies = [
  "erabasic-csv",
  "erabasic-data",
  "erabasic-hir",
+ "erabasic-html",
  "erabasic-lexer",
  "erabasic-parser",
  "rayon",
