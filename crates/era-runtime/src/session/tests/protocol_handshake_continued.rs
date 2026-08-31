@@ -338,7 +338,7 @@ fn html_layout_query_is_revision_bound_and_commits_after_service_response() {
 }
 
 #[test]
-fn html_layout_query_rejects_a_concurrent_projection_resize() {
+fn html_layout_query_commits_its_captured_context_after_projection_advances() {
     let (mut session, request) = start_html_query(
         "@SYSTEM_TITLE\nRESULT = HTML_STRINGLEN(\"<b>x</b>\", 1)\nWAIT\nRETURN\n",
         HTML_STRING_LEN_OPERATION,
@@ -359,7 +359,14 @@ fn html_layout_query_rejects_a_concurrent_projection_resize() {
             },
         }),
     );
-    assert_service_failure(&mut session);
+    for _ in 0..4 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+    }
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
+        12
+    );
 }
 
 // The service fixture measures each Unicode scalar at a fixed advance. It does not

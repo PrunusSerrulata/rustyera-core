@@ -355,8 +355,11 @@ impl RuntimeSession {
                 "HTML query timeline is no longer running",
             );
         }
+        // The provider answers the immutable context carried by this request. A later
+        // projection observation may legitimately advance while the frontend finishes
+        // measuring that historical environment; the captured style and the response's
+        // exact context still bind the result. Epoch and VM-frame changes remain stale.
         if continuation.epoch != self.epoch.0
-            || continuation.context != self.projection_query_context()
             || self
                 .vm
                 .as_ref()
