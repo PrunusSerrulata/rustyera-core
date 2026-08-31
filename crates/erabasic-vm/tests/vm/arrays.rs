@@ -591,6 +591,8 @@ fn dynamic_variable_methods_resolve_local_global_and_named_places() {
     let artifact = compile_source_with_data(
         "@SYSTEM_TITLE\n\
          #DIMS HTMLS\n\
+         #DIM INDEX\n\
+         #DIMS WORDS = \"zero\", \"one\"\n\
          SETVAR \"HTMLS\", \"local\"\n\
          RESULTS:10 = %HTMLS%\n\
          SETVAR \"SAVESTR:portrait\", \"saved\"\n\
@@ -601,6 +603,8 @@ fn dynamic_variable_methods_resolve_local_global_and_named_places() {
          RESULT:13 = COLOR_FROMNAME(\"not-a-color\")\n\
          RESULTS:13 = %GETVARS(\"HTMLS\")%\n\
          RESULTS:14 = %GETVARS(\"SAVESTR:portrait\")%\n\
+         INDEX = 1\n\
+         RESULTS:15 = %GETVARS(\"WORDS:INDEX\")%\n\
          RETURN RESULT\n",
         data,
     );
@@ -824,6 +828,10 @@ fn omitted_substring_and_statement_encodetouni_match_reference_results() {
     assert_eq!(
         vm.read_variable(results, &[14], None),
         Ok(VmValue::String("cd".into()))
+    );
+    assert_eq!(
+        vm.read_variable(results, &[15], None),
+        Ok(VmValue::String("one".into()))
     );
 }
 

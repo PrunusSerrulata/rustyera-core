@@ -743,7 +743,9 @@ fn resolve_dynamic_variable_target(
                             .get(&kind)
                     })
                 };
-                set_var_index(table, &definition.name, component)
+                set_var_index(table, &definition.name, component, || {
+                    dynamic_variable_index(vm, fiber, program, component)
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
         (definition, indices)
@@ -768,10 +770,54 @@ fn resolve_dynamic_variable_target(
     Ok((target, definition.value_type, definition.name))
 }
 
+fn dynamic_variable_index(
+    vm: &Vm,
+    fiber: &Fiber,
+    program: &crate::ProgramGeneration,
+    component: &str,
+) -> Result<Option<i64>, VmError> {
+    let frame = fiber.frames.last().expect("frame exists");
+    let name = component.trim();
+    let definition = program
+        .artifact
+        .globals
+        .iter()
+        .find(|candidate| {
+            candidate.owner == Some(frame.function) && candidate.name.eq_ignore_ascii_case(name)
+        })
+        .or_else(|| {
+            program.artifact.globals.iter().find(|candidate| {
+                candidate.owner.is_none() && candidate.name.eq_ignore_ascii_case(name)
+            })
+        });
+    let Some(definition) = definition else {
+        return Ok(None);
+    };
+    if definition.value_type != BytecodeType::Integer {
+        return Ok(None);
+    }
+    let character = (definition.storage == BytecodeStorage::Character).then(|| {
+        u64::try_from(vm.target_character_for_generation(frame.generation)).unwrap_or(u64::MAX)
+    });
+    let place = PlaceDescriptor {
+        backing: None,
+        variable: definition.key,
+        indices: vec![0; definition.dimensions.len()],
+        character,
+        fiber: Some(fiber.id),
+        frame: (definition.storage == BytecodeStorage::FunctionLocal).then_some(frame.id),
+    };
+    match vm.read_place(fiber, &place)? {
+        VmValue::Integer(value) => Ok(Some(value)),
+        _ => Ok(None),
+    }
+}
+
 fn set_var_index(
     table: Option<&erabasic_data::NameTable>,
     variable_name: &str,
     component: &str,
+    dynamic_index: impl FnOnce() -> Result<Option<i64>, VmError>,
 ) -> Result<u64, VmError> {
     let component = component.trim();
     if component.is_empty() {
@@ -788,7 +834,7 @@ fn set_var_index(
             )
         });
     }
-    let index = table
+    let named_index = table
         .and_then(|table| {
             table.lookup.get(component).or_else(|| {
                 table
@@ -798,19 +844,27 @@ fn set_var_index(
                     .map(|(_, index)| index)
             })
         })
-        .copied()
-        .ok_or_else(|| {
+        .copied();
+    if let Some(index) = named_index {
+        return u64::try_from(index).map_err(|_| {
             script_native_error(
-                crate::ScriptFaultKind::Resolve,
-                format!("SETVAR variable {variable_name} has no named index {component:?}"),
+                crate::ScriptFaultKind::Bounds,
+                format!("SETVAR variable {variable_name} has a negative named index {component:?}"),
             )
-        })?;
-    u64::try_from(index).map_err(|_| {
-        script_native_error(
-            crate::ScriptFaultKind::Bounds,
-            format!("SETVAR variable {variable_name} has a negative named index {component:?}"),
-        )
-    })
+        });
+    }
+    if let Some(index) = dynamic_index()? {
+        return u64::try_from(index).map_err(|_| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                format!("SETVAR variable index expression {component:?} is negative"),
+            )
+        });
+    }
+    Err(script_native_error(
+        crate::ScriptFaultKind::Resolve,
+        format!("SETVAR variable {variable_name} has no named index {component:?}"),
+    ))
 }
 
 pub(in super::super) fn execute_encode_to_uni_result(
