@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
 
 use erabasic_ast::{Script, SourceKind};
 use erabasic_csv::{CsvLoadOptions, resolve_deferred_indices};
@@ -112,8 +111,6 @@ pub(crate) struct ProgressCounter<'a> {
     report_interval: usize,
     completed: AtomicUsize,
     reported_completed: AtomicUsize,
-    started_at: Instant,
-    reported_at_ms: AtomicUsize,
     callback_lock: Mutex<()>,
     callback: Option<&'a dyn AnalysisProgressCallback>,
 }
@@ -134,11 +131,9 @@ impl<'a> ProgressCounter<'a> {
         Self {
             stage,
             total,
-            report_interval: total.checked_div(256).unwrap_or(0).max(64),
+            report_interval: total.checked_div(1_024).unwrap_or(0).max(64),
             completed: AtomicUsize::new(0),
             reported_completed: AtomicUsize::new(0),
-            started_at: Instant::now(),
-            reported_at_ms: AtomicUsize::new(0),
             callback_lock: Mutex::new(()),
             callback,
         }
@@ -150,9 +145,7 @@ impl<'a> ProgressCounter<'a> {
             return;
         };
         let previous = self.reported_completed.load(Ordering::Relaxed);
-        let now_ms = self.started_at.elapsed().as_millis() as usize;
-        let previous_ms = self.reported_at_ms.load(Ordering::Relaxed);
-        if !self.should_report(completed, previous, now_ms, previous_ms) {
+        if !self.should_report(completed, previous) {
             return;
         }
         let _guard = self
@@ -163,14 +156,10 @@ impl<'a> ProgressCounter<'a> {
         // workers must never publish an older count after a newer one.
         let completed = self.completed.load(Ordering::Relaxed);
         let previous = self.reported_completed.load(Ordering::Relaxed);
-        let now_ms = self.started_at.elapsed().as_millis() as usize;
-        let previous_ms = self.reported_at_ms.load(Ordering::Relaxed);
         // Percentage-only reporting can hide thousands of completed functions. Keep bounded
-        // sub-percent updates, plus one update per second during slow work, without flooding
-        // browser hosts when a large project advances fast.
-        if self.should_report(completed, previous, now_ms, previous_ms) {
+        // sub-percent updates without flooding browser hosts when a large project advances fast.
+        if self.should_report(completed, previous) {
             self.reported_completed.store(completed, Ordering::Relaxed);
-            self.reported_at_ms.store(now_ms, Ordering::Relaxed);
             callback(AnalysisProgress {
                 stage: self.stage,
                 completed,
@@ -179,13 +168,7 @@ impl<'a> ProgressCounter<'a> {
         }
     }
 
-    fn should_report(
-        &self,
-        completed: usize,
-        previous: usize,
-        now_ms: usize,
-        previous_ms: usize,
-    ) -> bool {
+    fn should_report(&self, completed: usize, previous: usize) -> bool {
         let percent = completed
             .saturating_mul(100)
             .checked_div(self.total)
@@ -197,7 +180,6 @@ impl<'a> ProgressCounter<'a> {
         completed > previous
             && (percent > previous_percent
                 || completed - previous >= self.report_interval
-                || now_ms.saturating_sub(previous_ms) >= 1_000
                 || completed == self.total)
     }
 }
