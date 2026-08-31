@@ -240,10 +240,10 @@ impl ProjectProgressGate {
             return false;
         }
         let boundary = progress.completed == 0 || progress.completed >= progress.total;
-        let stage_changed = self
-            .last
-            .is_none_or(|previous| previous.stage != progress.stage);
-        if !stage_changed
+        let segment_changed = self.last.is_none_or(|previous| {
+            previous.stage != progress.stage || previous.total != progress.total
+        });
+        if !segment_changed
             && self
                 .last
                 .is_some_and(|previous| progress.completed < previous.completed)
@@ -253,7 +253,7 @@ impl ProjectProgressGate {
         let interval_elapsed = self
             .last_emitted_at
             .is_none_or(|previous| now.saturating_sub(previous) >= Self::INTERVAL);
-        let accepts = stage_changed || boundary || interval_elapsed;
+        let accepts = segment_changed || boundary || interval_elapsed;
         if accepts {
             self.last = Some(progress);
             self.last_emitted_at = Some(now);
@@ -384,6 +384,9 @@ mod progress_reporter_tests {
         assert!(!gate.accepts(compiling(1, 100), Duration::from_secs(1)));
         assert!(gate.accepts(compiling(100, 100), Duration::from_millis(35)));
         assert!(!gate.accepts(compiling(100, 100), Duration::from_secs(2)));
+        assert!(gate.accepts(compiling(0, 300), Duration::from_millis(35)));
+        assert!(!gate.accepts(compiling(1, 300), Duration::from_millis(35)));
+        assert!(gate.accepts(compiling(2, 300), Duration::from_millis(69)));
 
         let zero_total = ProjectProgress {
             stage: ProjectProgressStage::Preparing,
