@@ -1,0 +1,2154 @@
+{
+  "schemaVersion": 1,
+  "status": "fixed-snake-reference-golden",
+  "projection": {
+    "audioGui": {
+      "observation": {
+        "completeObservableState": true,
+        "file": {
+          "exists": true,
+          "sha256": "9261baebb7af7ded63c595845e31debe3abf474beb6cf697059a5091daf82e22",
+          "size": 1857
+        }
+      },
+      "pitchEvidenceBoundary": "GUI proves calls succeed; fixed source proves pitch-flag mapping",
+      "prefixAudit": {
+        "file": {
+          "exists": true,
+          "sha256": "268a16bf45f59106096a349d743a8f654a3a5a0e215d5b3f7967a69bfdf51760",
+          "size": 1526
+        },
+        "passed": true
+      },
+      "process": {
+        "completion": "FORCE_QUIT path completed naturally after writing the result; no watchdog termination was required.",
+        "endedAt": "2026-09-01T16:51:20Z",
+        "exePath": "/Users/edwardl/Projects/rustyera/.worktrees/snake-compatibility/rustyera-core/.audit/batch-5/5.0/gui-project-final/Emuera.exe",
+        "exeSha256": "1a22365c6d8fca2368e92e174bec3c6340b02c2355c8095cddb05cae7a15a10a",
+        "exitCode": 0,
+        "markerObserved": true,
+        "nativeProvider": {
+          "sha256": "44a6f68222eec9d7dc312049a8f65cbdb04b990e95f570310b52b5a63aa41cab",
+          "sourceRelativePath": "games/eratw-sub-modding/SoundTouch_x64.dll",
+          "targetIsSymlink": false,
+          "targetPath": "/Users/edwardl/Projects/rustyera/.worktrees/snake-compatibility/rustyera-core/.audit/batch-5/5.0/gui-project-final/SoundTouch_x64.dll"
+        },
+        "prefixAuditPath": "/Users/edwardl/Projects/rustyera/.worktrees/snake-compatibility/rustyera-core/.audit/batch-5/5.0/wine-prefix-audit.json",
+        "prefixAuditSha256": "268a16bf45f59106096a349d743a8f654a3a5a0e215d5b3f7967a69bfdf51760",
+        "prefixPath": "/Users/edwardl/Projects/rustyera/.worktrees/snake-compatibility/rustyera-core/.audit/batch-5/5.0/wine-gui-prefix",
+        "processId": 10846,
+        "resultBytes": 746,
+        "resultObserved": true,
+        "resultPath": "/Users/edwardl/Projects/rustyera/.worktrees/snake-compatibility/rustyera-core/.audit/batch-5/5.0/gui-project-final/batch5-gui-result.txt",
+        "resultSha256": "b0b4423796c08a2c00c829a3b9a2fdbacc08916fd4a3af071de8786219313a9d",
+        "schemaVersion": 1,
+        "sessionId": 96857,
+        "startedAt": "2026-09-01T16:51:01Z",
+        "terminalOutput": "MoltenVK initialization output only; no application error emitted.",
+        "windowObservation": "Computer Use cannot discover Wine/Emuera/XQuartz as an accessible application; xdotool likewise found no target window. No window visibility is claimed."
+      },
+      "resultFile": {
+        "exists": true,
+        "sha256": "b0b4423796c08a2c00c829a3b9a2fdbacc08916fd4a3af071de8786219313a9d",
+        "size": 746
+      },
+      "semanticVerdict": {
+        "exact": {
+          "bgm_pause_ret": 1,
+          "bgm_paused": 0,
+          "bgm_pitch_nonzero": 1,
+          "bgm_pitch_zero": 1,
+          "bgm_playing": 1,
+          "bgm_rate_omitted": 1,
+          "bgm_resume_ret": 1,
+          "bgm_resumed": 1,
+          "bgm_stop_ret": 1,
+          "bgm_stopped": 0,
+          "invalid_action": -2,
+          "invalid_control": -1,
+          "invalid_get": 0,
+          "invalid_is": -1,
+          "pause_ret": 1,
+          "paused_is": -1,
+          "pitch_nonzero": 1,
+          "pitch_zero": 1,
+          "playing": 0,
+          "rate_omitted": 1,
+          "resume_ret": 1,
+          "resumed_is": 0,
+          "speed": 250,
+          "speed_high": 1000,
+          "speed_low": 10,
+          "stop_ret": 1,
+          "stopped": -1,
+          "volume": 37
+        },
+        "relations": {
+          "allBusyOverwritesZero": true,
+          "bgmDuration": true,
+          "bgmPauseStable": true,
+          "bgmSpeed": true,
+          "omittedFields": true,
+          "omittedReturnMatchesDuration": true,
+          "pauseStable": true,
+          "pausedChannelReused": true,
+          "playingPositionPositive": true,
+          "resumeContinues": true,
+          "soundDuration": true,
+          "stopReset": true
+        },
+        "status": "passed"
+      }
+    },
+    "audioHeadless": {
+      "diagnostics": [],
+      "error": null,
+      "ok": true,
+      "output": [
+        "Now Loading...",
+        "BATCH5_READY"
+      ],
+      "state": "WaitInput",
+      "termination": "completed",
+      "watches": {
+        "RESULT:20": 0,
+        "RESULT:21": -1,
+        "RESULT:22": -1,
+        "RESULT:23": -2,
+        "RESULT:24": 1,
+        "RESULT:25": 1,
+        "RESULT:26": 1,
+        "RESULT:27": 1,
+        "RESULT:28": 1,
+        "RESULT:29": 0,
+        "RESULT:30": -2,
+        "RESULT:31": 1,
+        "RESULT:32": 1,
+        "RESULT:33": 1,
+        "RESULT:34": 1,
+        "RESULT:35": 1
+      }
+    },
+    "audioSourceSemantics": {
+      "evidenceBoundary": "GUI proves calls succeed; fixed source proves pitch-flag mapping",
+      "files": [
+        {
+          "exists": true,
+          "path": "Emuera/Runtime/Script/Statements/Function/Creator.Method.cs",
+          "sha256": "f48cdabeaad4549127b1c13b50ff674a70da028db64b26eba44fd3a2de4aa160",
+          "size": 357745
+        },
+        {
+          "exists": true,
+          "path": "Emuera/Runtime/Utils/Sound.cs",
+          "sha256": "8919745d5f1842c3edc01bf1b868b737c54b5bdda559b75bbdf22d87ac1db73a",
+          "size": 1140
+        }
+      ],
+      "pitchFlagNonzero": "do-not-preserve-pitch",
+      "pitchFlagZeroOrOmitted": "preserve-pitch",
+      "seekAction": "absent-from-ERB-API"
+    },
+    "damaged": {
+      "bad-header": {
+        "artifact": {
+          "exists": true,
+          "sha256": "ce4080f081c66e0de3f662dfda46dccde00d4ef71c24a0f41c599d09908fc69a",
+          "size": 4330
+        },
+        "processExitCode": 0,
+        "referenceActual": {
+          "diagnostics": [],
+          "error": {
+            "message": "Unable to translate bytes [E8][03] at index 153 from specified code page to Unicode.",
+            "type": "System.Text.DecoderFallbackException"
+          },
+          "ok": false,
+          "output": null,
+          "state": null,
+          "termination": null,
+          "watches": null
+        },
+        "rustBatch5Target": "invalid-header",
+        "stateAfter": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {}
+        },
+        "stateBefore": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {
+            "B5_CINT:0:1": 909004,
+            "B5_I3:1:1:1": 909003,
+            "B5_INT": 909001,
+            "B5_STR": "sentinel",
+            "DT_CELL_GET(\"b5_dt\", 0, \"n\")": 909005,
+            "MAP_GET(\"b5_map\", \"key\")": "sentinel-map",
+            "XML_TOSTR(\"b5_xml\")": "<root value=\"sentinel-xml\" />"
+          }
+        },
+        "wrapperRecovered": true
+      },
+      "truncated-binary-body": {
+        "artifact": {
+          "exists": true,
+          "sha256": "d4bd9783de280a9cdbb89c4a1cd59e5e3b79b3a5a63279f1adbf6143a995ddf9",
+          "size": 4323
+        },
+        "processExitCode": 0,
+        "referenceActual": {
+          "diagnostics": [],
+          "error": {
+            "message": "Unable to read beyond the end of the stream.",
+            "type": "System.IO.EndOfStreamException"
+          },
+          "ok": false,
+          "output": null,
+          "state": null,
+          "termination": null,
+          "watches": null
+        },
+        "rustBatch5Target": "truncated-body",
+        "stateAfter": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {}
+        },
+        "stateBefore": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {
+            "B5_CINT:0:1": 909004,
+            "B5_I3:1:1:1": 909003,
+            "B5_INT": 909001,
+            "B5_STR": "sentinel",
+            "DT_CELL_GET(\"b5_dt\", 0, \"n\")": 909005,
+            "MAP_GET(\"b5_map\", \"key\")": "sentinel-map",
+            "XML_TOSTR(\"b5_xml\")": "<root value=\"sentinel-xml\" />"
+          }
+        },
+        "wrapperRecovered": true
+      },
+      "truncated-gzip-body": {
+        "artifact": {
+          "exists": true,
+          "sha256": "19b3b021d5f196e6ce07d34288cc8ebf71cd64333dc66416661e0f564eb1215d",
+          "size": 741
+        },
+        "processExitCode": 0,
+        "referenceActual": {
+          "diagnostics": [],
+          "error": {
+            "message": "Unable to read beyond the end of the stream.",
+            "type": "System.IO.EndOfStreamException"
+          },
+          "ok": false,
+          "output": null,
+          "state": null,
+          "termination": null,
+          "watches": null
+        },
+        "rustBatch5Target": "truncated-compressed-body",
+        "stateAfter": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {}
+        },
+        "stateBefore": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {
+            "B5_CINT:0:1": 909004,
+            "B5_I3:1:1:1": 909003,
+            "B5_INT": 909001,
+            "B5_STR": "sentinel",
+            "DT_CELL_GET(\"b5_dt\", 0, \"n\")": 909005,
+            "MAP_GET(\"b5_map\", \"key\")": "sentinel-map",
+            "XML_TOSTR(\"b5_xml\")": "<root value=\"sentinel-xml\" />"
+          }
+        },
+        "wrapperRecovered": true
+      },
+      "truncated-header": {
+        "artifact": {
+          "exists": true,
+          "sha256": "5579cc91fd890c3d1f3e72c58e43a541f77dc04d14fffbc7b05eea2b3e18dd2c",
+          "size": 12
+        },
+        "processExitCode": 0,
+        "referenceActual": {
+          "diagnostics": [],
+          "error": {
+            "message": "Cannot detect numerical values",
+            "type": "MinorShift.Emuera.Runtime.Utils.FileEE"
+          },
+          "ok": false,
+          "output": null,
+          "state": null,
+          "termination": null,
+          "watches": null
+        },
+        "rustBatch5Target": "truncated-header",
+        "stateAfter": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {}
+        },
+        "stateBefore": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {
+            "B5_CINT:0:1": 909004,
+            "B5_I3:1:1:1": 909003,
+            "B5_INT": 909001,
+            "B5_STR": "sentinel",
+            "DT_CELL_GET(\"b5_dt\", 0, \"n\")": 909005,
+            "MAP_GET(\"b5_map\", \"key\")": "sentinel-map",
+            "XML_TOSTR(\"b5_xml\")": "<root value=\"sentinel-xml\" />"
+          }
+        },
+        "wrapperRecovered": true
+      },
+      "unknown-tag-0x08": {
+        "artifact": {
+          "exists": true,
+          "sha256": "2cd716c0728b49a0167703be64768e32b2fdc8d7239d64031da323e836d8d23e",
+          "size": 4330
+        },
+        "processExitCode": 0,
+        "referenceActual": {
+          "diagnostics": [],
+          "error": {
+            "message": "Data is abnormal",
+            "type": "MinorShift.Emuera.Runtime.Utils.FileEE"
+          },
+          "ok": false,
+          "output": null,
+          "state": null,
+          "termination": null,
+          "watches": null
+        },
+        "rustBatch5Target": "unknown-type-tag",
+        "stateAfter": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {}
+        },
+        "stateBefore": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {
+            "B5_CINT:0:1": 909004,
+            "B5_I3:1:1:1": 909003,
+            "B5_INT": 909001,
+            "B5_STR": "sentinel",
+            "DT_CELL_GET(\"b5_dt\", 0, \"n\")": 909005,
+            "MAP_GET(\"b5_map\", \"key\")": "sentinel-map",
+            "XML_TOSTR(\"b5_xml\")": "<root value=\"sentinel-xml\" />"
+          }
+        },
+        "wrapperRecovered": true
+      },
+      "zip-bomb-16mib-plus-one": {
+        "artifact": {
+          "exists": true,
+          "sha256": "6604e5a13e0daaf02360737877a12edeabd5ec465819d66d9a4cb2d55a8e173b",
+          "size": 16344
+        },
+        "processExitCode": 0,
+        "referenceActual": {
+          "diagnostics": [],
+          "error": {
+            "message": "Unable to read beyond the end of the stream.",
+            "type": "System.IO.EndOfStreamException"
+          },
+          "ok": false,
+          "output": null,
+          "state": null,
+          "termination": null,
+          "watches": null
+        },
+        "rustBatch5Target": "decompressed-bytes-limit",
+        "stateAfter": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {}
+        },
+        "stateBefore": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {
+            "B5_CINT:0:1": 909004,
+            "B5_I3:1:1:1": 909003,
+            "B5_INT": 909001,
+            "B5_STR": "sentinel",
+            "DT_CELL_GET(\"b5_dt\", 0, \"n\")": 909005,
+            "MAP_GET(\"b5_map\", \"key\")": "sentinel-map",
+            "XML_TOSTR(\"b5_xml\")": "<root value=\"sentinel-xml\" />"
+          }
+        },
+        "wrapperRecovered": true
+      }
+    },
+    "driverManifest": [
+      {
+        "exists": true,
+        "path": "snake_batch5_oracle.py",
+        "sha256": "d45e47b68577bcf882733ddeecbeb85980c9bb07f762aa9fbd5817b8c0fc2637",
+        "size": 39376
+      }
+    ],
+    "fixtureManifest": [
+      {
+        "exists": true,
+        "path": "README.md",
+        "sha256": "13fbdacd2fd876be0da8500eefefaea0484d7433902740ec7b986cfe41ec4665",
+        "size": 2210
+      },
+      {
+        "exists": true,
+        "path": "cases.json",
+        "sha256": "3eef42e32780c16780002012877a6aeb8c1478849b71431647b091ee419e66a0",
+        "size": 1952
+      },
+      {
+        "exists": true,
+        "path": "csv/CHARA0.CSV",
+        "sha256": "319cfc96aed2fb32f7da0cbdb75be1cb4d3636e34065663bded50d85c54c8f74",
+        "size": 41
+      },
+      {
+        "exists": true,
+        "path": "csv/GAMEBASE.CSV",
+        "sha256": "95353220575f3b498adde6390210279ad059833abd4620abef33469c80140c05",
+        "size": 97
+      },
+      {
+        "exists": true,
+        "path": "csv/VarExt.csv",
+        "sha256": "94ff48cf0b07a786037d7aec4cc40bdb0a48ea7242fda84eff508eefd74248ba",
+        "size": 125
+      },
+      {
+        "exists": true,
+        "path": "emuera.config",
+        "sha256": "7969dd402e88db9a14c481a0044882e1c680a7d0f05355a10ff191ae154fd49f",
+        "size": 503
+      },
+      {
+        "exists": true,
+        "path": "erb/batch5.erb",
+        "sha256": "7e5cf55060dfa35d8b2745032f2acbb327e56ce535ee4e6fffcaf3b934351e98",
+        "size": 2559
+      },
+      {
+        "exists": true,
+        "path": "erb/batch5.erh",
+        "sha256": "25fcb00f667c94f8f3005ce6fb22e7abce1fd6c0671f9ba9c9ff1c185e2fa771",
+        "size": 578
+      },
+      {
+        "exists": true,
+        "path": "erb/gui_audio.erb",
+        "sha256": "e7e3cce3e27cb16a4e2fbf31381c45165c3ecd17ede417a942cf1ebb09eee35d",
+        "size": 4291
+      },
+      {
+        "exists": true,
+        "path": "overlays/float.erb",
+        "sha256": "977faf981c0ef47459bd0afc9b20ef6c4798bcebc498bedbd225737acb84a7f3",
+        "size": 73
+      },
+      {
+        "exists": true,
+        "path": "overlays/float.erh",
+        "sha256": "eb8f836d6f6a7ae27a2e28c61422ff24c8a84c290cb900f5bace560d7f593267",
+        "size": 24
+      },
+      {
+        "exists": true,
+        "path": "overlays/original/batch5.erb",
+        "sha256": "c8e4e49ea84bf5c996de250d69ddbd0cee8c61dc42c4cae630425807cba4581c",
+        "size": 730
+      },
+      {
+        "exists": true,
+        "path": "overlays/original/batch5.erh",
+        "sha256": "159e606c9264806c16194bdf3bb45a63069b85003a39845c03940fd89e434373",
+        "size": 548
+      },
+      {
+        "exists": true,
+        "path": "overlays/text/batch5.erb",
+        "sha256": "71771534e055ce013df132b0311977149306a74856c8c8eae5d3a9866afacb67",
+        "size": 476
+      },
+      {
+        "exists": true,
+        "path": "overlays/text/batch5.erh",
+        "sha256": "9f38650008bd96cdb1a83a2482325506f1adbd5a7d97aa78e1f7e3fc05e92188",
+        "size": 131
+      },
+      {
+        "exists": true,
+        "path": "setting.json",
+        "sha256": "b98fdde339296769944fe832fa8c53b169c322f27739eaf04f85046f7fc8a814",
+        "size": 22
+      }
+    ],
+    "float": {
+      "artifact": {
+        "codec": "binary",
+        "dataCount": 0,
+        "exists": true,
+        "magicHex": "894552410d0a1a0a",
+        "sha256": "55617f8f6548763f428df67083232656e60c333507b2eb43fd610d9fe6c841fa",
+        "size": 1219,
+        "version": 1808
+      },
+      "load": {
+        "diagnostics": [],
+        "error": null,
+        "ok": true,
+        "output": [
+          "B5_LOAD_DONE"
+        ],
+        "position": {
+          "file": "batch5.erb",
+          "line": "11"
+        },
+        "state": "WaitInput",
+        "termination": "waitingInput",
+        "watches": {
+          "B5_FLOAT": 1.25
+        }
+      },
+      "referenceActual": "accepted",
+      "rustBatch5Target": "reject-unsupported-float-tag",
+      "write": {
+        "diagnostics": [],
+        "error": null,
+        "ok": true,
+        "output": [
+          "Now Loading...",
+          "BATCH5_READY"
+        ],
+        "state": "WaitInput",
+        "termination": "completed",
+        "watches": {
+          "RESULT": 0
+        }
+      }
+    },
+    "formatVersion": 2,
+    "languageSignatures": {
+      "original": [
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "GETSOUNDORBGMINFO cannot be interpreted",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = GETSOUNDORBGMINFO()"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "GETSOUNDORBGMINFO cannot be interpreted",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = GETSOUNDORBGMINFO(0, 1, 2)"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "GETSOUNDORBGMINFO cannot be interpreted",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = GETSOUNDORBGMINFO(\"x\")"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "ISPLAYINGSOUND cannot be interpreted",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = ISPLAYINGSOUND()"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "ISPLAYINGSOUND cannot be interpreted",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = ISPLAYINGSOUND(0, 1)"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "ISPLAYINGSOUND cannot be interpreted",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = ISPLAYINGSOUND(\"x\")"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "SOUNDCONTROL cannot be interpreted",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = SOUNDCONTROL(0)"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "SOUNDCONTROL cannot be interpreted",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = SOUNDCONTROL(0, 3, 100, 0, 1)"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "SOUNDCONTROL cannot be interpreted",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = SOUNDCONTROL(\"x\", 0)"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "ISPLAYINGBGM cannot be interpreted",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = ISPLAYINGBGM(0)"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "BGMCONTROL cannot be interpreted",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = BGMCONTROL()"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "BGMCONTROL cannot be interpreted",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = BGMCONTROL(3, 100, 0, 1)"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "BGMCONTROL cannot be interpreted",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = BGMCONTROL(\"x\")"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "GETSOUNDORBGMINFO cannot be interpreted",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = GETSOUNDORBGMINFO(0, 99)"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "SOUNDCONTROL cannot be interpreted",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = SOUNDCONTROL(0, 99)"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "BGMCONTROL cannot be interpreted",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = BGMCONTROL(99)"
+        }
+      ],
+      "snake": [
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "GETSOUNDORBGMINFO: Required 1 arguments",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = GETSOUNDORBGMINFO()"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "GETSOUNDORBGMINFO: Too many arguments",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = GETSOUNDORBGMINFO(0, 1, 2)"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "GETSOUNDORBGMINFO: The 1 argument is not integer",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = GETSOUNDORBGMINFO(\"x\")"
+        },
+        {
+          "result": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = ISPLAYINGSOUND()"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "ISPLAYINGSOUND: Too many arguments",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = ISPLAYINGSOUND(0, 1)"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "ISPLAYINGSOUND: The 1 argument is not integer",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = ISPLAYINGSOUND(\"x\")"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "SOUNDCONTROL: Arguments format is invalid | format 1: SOUNDCONTROL: Required 2 arguments but passed 1 | format 2: SOUNDCONTROL: Required 3 arguments",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = SOUNDCONTROL(0)"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "SOUNDCONTROL: Arguments format is invalid | format 1: SOUNDCONTROL: Required 2 arguments but passed 5 | format 2: SOUNDCONTROL: Too many arguments",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = SOUNDCONTROL(0, 3, 100, 0, 1)"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "SOUNDCONTROL: Arguments format is invalid | format 1: SOUNDCONTROL: The 1 argument is not integer | format 2: SOUNDCONTROL: Required 3 arguments",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = SOUNDCONTROL(\"x\", 0)"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "ISPLAYINGBGM: Not required arguments",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = ISPLAYINGBGM(0)"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "BGMCONTROL: Arguments format is invalid | format 1: BGMCONTROL: Required 1 arguments but passed 0 | format 2: BGMCONTROL: Required 2 arguments",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = BGMCONTROL()"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "BGMCONTROL: Arguments format is invalid | format 1: BGMCONTROL: Required 1 arguments but passed 4 | format 2: BGMCONTROL: Too many arguments",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = BGMCONTROL(3, 100, 0, 1)"
+        },
+        {
+          "result": {
+            "diagnostics": [
+              {
+                "level": 2,
+                "message": "BGMCONTROL: Arguments format is invalid | format 1: BGMCONTROL: The 1 argument is not integer | format 2: BGMCONTROL: Required 2 arguments",
+                "position": {
+                  "file": "",
+                  "line": -1
+                }
+              }
+            ],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = BGMCONTROL(\"x\")"
+        },
+        {
+          "result": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = GETSOUNDORBGMINFO(0, 99)"
+        },
+        {
+          "result": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = SOUNDCONTROL(0, 99)"
+        },
+        {
+          "result": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": null,
+            "position": {
+              "file": "",
+              "line": "-1"
+            },
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "source": "RESULT = BGMCONTROL(99)"
+        }
+      ]
+    },
+    "referenceExecutables": {
+      "original": {
+        "file": {
+          "exists": true,
+          "sha256": "a49da4a2086a7ab766a28644184ba8d7c4c9c0a839c67b6a94bd54df944b8dda",
+          "size": 162304
+        },
+        "wrapper": {
+          "branch": "master",
+          "commit": "ffe560dad2fe480c8babddcae0122137350bf021",
+          "dirty": false
+        }
+      },
+      "snake": {
+        "file": {
+          "exists": true,
+          "sha256": "6caa1eebb7a781e6c42fed97e3109d33da27dfd2e7d8c7f22cba1b88d9d1c642",
+          "size": 151552
+        },
+        "wrapper": {
+          "branch": "main-skiasharp",
+          "commit": "0c50ccbe0c2434567ef527d72a54c967bd576f2a",
+          "dirty": false
+        }
+      }
+    },
+    "semanticBaselines": {
+      "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+      "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+    },
+    "sharedOriginalComparison": {
+      "original": {
+        "binary": {
+          "globalArtifact": {
+            "codec": "binary",
+            "dataCount": 0,
+            "exists": true,
+            "magicHex": "894552410d0a1a0a",
+            "sha256": "9eeff1a29ef3bc6732d353cea4df51c85e3f14ba0245958d3d087a442c8e8ecf",
+            "size": 415,
+            "version": 1808
+          },
+          "globalLoad": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": [
+              "Now Loading...",
+              "Elapsed time:8.814ms",
+              "Elapsed time:13.742ms",
+              "Elapsed time:18.912ms",
+              "BATCH5_SHARED_READY"
+            ],
+            "state": "WaitInput",
+            "termination": "completed",
+            "watches": {
+              "B5_GI2:1:0": 620,
+              "B5_GI3:1:1:1": 638,
+              "B5_GINT:0": 601,
+              "B5_GINT:1": -602,
+              "B5_GS2:0:1": "global-s2",
+              "B5_GS3:1:0:1": "global-s3",
+              "B5_GSCALAR": 603,
+              "B5_GSSCALAR": "global-scalar",
+              "B5_GSTR:0": "global-zero",
+              "B5_GSTR:1": "全局-one"
+            }
+          },
+          "globalWrite": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": [
+              "Now Loading...",
+              "Elapsed time:8.962ms",
+              "Elapsed time:13.992ms",
+              "Elapsed time:19.133ms",
+              "BATCH5_SHARED_READY"
+            ],
+            "state": "WaitInput",
+            "termination": "completed",
+            "watches": {
+              "RESULT": 0
+            }
+          },
+          "normalArtifact": {
+            "codec": "binary",
+            "dataCount": 0,
+            "exists": true,
+            "magicHex": "894552410d0a1a0a",
+            "sha256": "bd271522bde230d07191806bfb2c96768d75a438d730276f6a76e63156a3e3e0",
+            "size": 1836,
+            "version": 1808
+          },
+          "normalLoad": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": [],
+            "position": {
+              "file": "batch5.erb",
+              "line": "3"
+            },
+            "state": "WaitInput",
+            "termination": "waitingInput",
+            "watches": {
+              "B5_CINT:0:1": 402,
+              "B5_CSTR:0:1": "角色-one",
+              "B5_I1:1": -102,
+              "B5_I2:1:0": 203,
+              "B5_I3:1:1:1": 308,
+              "B5_INT": 505001,
+              "B5_S1:2": "s1-two",
+              "B5_S2:1:0": "s2-one-zero",
+              "B5_S3:1:1:0": "s3-b",
+              "B5_STR": "normal-文字"
+            }
+          },
+          "normalWrite": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": [
+              "Now Loading...",
+              "Elapsed time:9.089ms",
+              "Elapsed time:13.951ms",
+              "Elapsed time:18.866ms",
+              "BATCH5_SHARED_READY"
+            ],
+            "state": "WaitInput",
+            "termination": "completed",
+            "watches": {
+              "RESULT": 0
+            }
+          }
+        },
+        "text": {
+          "globalArtifact": {
+            "codec": "text",
+            "exists": true,
+            "marker": "__EMUERA_1808_STRAT__",
+            "sha256": "72a97b7c1e0796605c6c87d61651129c1ca419c0b4787ff10a79b219c1fce98a",
+            "size": 307,
+            "version": 1808
+          },
+          "globalLoad": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": [
+              "Now Loading...",
+              "Elapsed time:9.278ms",
+              "Elapsed time:14.203ms",
+              "Elapsed time:19.399ms",
+              "BATCH5_TEXT_READY"
+            ],
+            "state": "WaitInput",
+            "termination": "completed",
+            "watches": {
+              "B5_GINT:1": -602,
+              "B5_GSCALAR": 603,
+              "B5_GSSCALAR": "global-scalar",
+              "B5_GSTR:1": "全局-one"
+            }
+          },
+          "globalWrite": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": [
+              "Now Loading...",
+              "Elapsed time:8.727ms",
+              "Elapsed time:13.787ms",
+              "Elapsed time:18.993ms",
+              "BATCH5_TEXT_READY"
+            ],
+            "state": "WaitInput",
+            "termination": "completed",
+            "watches": {
+              "RESULT": 0
+            }
+          },
+          "normalArtifact": {
+            "codec": "text",
+            "exists": true,
+            "marker": "__EMUERA_1808_STRAT__",
+            "sha256": "835a21eeadd0247ecfd813ba1c8016dc6638436b2ed9b0b9706dbb42f3781f26",
+            "size": 1544,
+            "version": 1808
+          },
+          "normalLoad": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": [],
+            "position": {
+              "file": "batch5.erb",
+              "line": "3"
+            },
+            "state": "WaitInput",
+            "termination": "waitingInput",
+            "watches": {
+              "CFLAG:0:0": 402,
+              "CSTR:0:0": "角色-one",
+              "FLAG:0": 505001,
+              "SAVESTR:0": "normal-文字"
+            }
+          },
+          "normalWrite": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": [
+              "Now Loading...",
+              "Elapsed time:8.844ms",
+              "Elapsed time:13.802ms",
+              "Elapsed time:19.11ms",
+              "BATCH5_TEXT_READY"
+            ],
+            "state": "WaitInput",
+            "termination": "completed",
+            "watches": {
+              "RESULT": 0
+            }
+          }
+        }
+      },
+      "snake": {
+        "binary": {
+          "globalArtifact": {
+            "codec": "binary",
+            "dataCount": 0,
+            "exists": true,
+            "magicHex": "894552410d0a1a0a",
+            "sha256": "9eeff1a29ef3bc6732d353cea4df51c85e3f14ba0245958d3d087a442c8e8ecf",
+            "size": 415,
+            "version": 1808
+          },
+          "globalLoad": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": [
+              "Now Loading...",
+              "BATCH5_SHARED_READY"
+            ],
+            "state": "WaitInput",
+            "termination": "completed",
+            "watches": {
+              "B5_GI2:1:0": 620,
+              "B5_GI3:1:1:1": 638,
+              "B5_GINT:0": 601,
+              "B5_GINT:1": -602,
+              "B5_GS2:0:1": "global-s2",
+              "B5_GS3:1:0:1": "global-s3",
+              "B5_GSCALAR": 603,
+              "B5_GSSCALAR": "global-scalar",
+              "B5_GSTR:0": "global-zero",
+              "B5_GSTR:1": "全局-one"
+            }
+          },
+          "globalWrite": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": [
+              "Now Loading...",
+              "BATCH5_SHARED_READY"
+            ],
+            "state": "WaitInput",
+            "termination": "completed",
+            "watches": {
+              "RESULT": 0
+            }
+          },
+          "normalArtifact": {
+            "codec": "binary",
+            "dataCount": 0,
+            "exists": true,
+            "magicHex": "894552410d0a1a0a",
+            "sha256": "bd271522bde230d07191806bfb2c96768d75a438d730276f6a76e63156a3e3e0",
+            "size": 1836,
+            "version": 1808
+          },
+          "normalLoad": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": [
+              "B5_LOAD_DONE"
+            ],
+            "position": {
+              "file": "batch5.erb",
+              "line": "11"
+            },
+            "state": "WaitInput",
+            "termination": "waitingInput",
+            "watches": {
+              "B5_CINT:0:1": 402,
+              "B5_CSTR:0:1": "角色-one",
+              "B5_I1:1": -102,
+              "B5_I2:1:0": 203,
+              "B5_I3:1:1:1": 308,
+              "B5_INT": 505001,
+              "B5_S1:2": "s1-two",
+              "B5_S2:1:0": "s2-one-zero",
+              "B5_S3:1:1:0": "s3-b",
+              "B5_STR": "normal-文字"
+            }
+          },
+          "normalWrite": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": [
+              "Now Loading...",
+              "BATCH5_SHARED_READY"
+            ],
+            "state": "WaitInput",
+            "termination": "completed",
+            "watches": {
+              "RESULT": 0
+            }
+          }
+        },
+        "text": {
+          "globalArtifact": {
+            "codec": "text",
+            "exists": true,
+            "marker": "__EMUERA_1808_STRAT__",
+            "sha256": "cb9814d3017a4ec1f4d2ffc8f790de6348b43ec487d12c25387167e8417a84fc",
+            "size": 364,
+            "version": 1808
+          },
+          "globalLoad": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": [
+              "Now Loading...",
+              "BATCH5_TEXT_READY"
+            ],
+            "state": "WaitInput",
+            "termination": "completed",
+            "watches": {
+              "B5_GINT:1": -602,
+              "B5_GSCALAR": 603,
+              "B5_GSSCALAR": "global-scalar",
+              "B5_GSTR:1": "全局-one"
+            }
+          },
+          "globalWrite": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": [
+              "Now Loading...",
+              "BATCH5_TEXT_READY"
+            ],
+            "state": "WaitInput",
+            "termination": "completed",
+            "watches": {
+              "RESULT": 0
+            }
+          },
+          "normalArtifact": {
+            "codec": "text",
+            "exists": true,
+            "marker": "__EMUERA_1808_STRAT__",
+            "sha256": "ea06c40d147d8b89b0d8b451663460ae65bdff4d7eea17a0a933ff2fa13ce03a",
+            "size": 1281,
+            "version": 1808
+          },
+          "normalLoad": {
+            "diagnostics": [],
+            "error": {
+              "message": "Unexpected end of save data",
+              "type": "MinorShift.Emuera.Runtime.Utils.FileEE"
+            },
+            "ok": false,
+            "output": null,
+            "state": null,
+            "termination": null,
+            "watches": null
+          },
+          "normalWrite": {
+            "diagnostics": [],
+            "error": null,
+            "ok": true,
+            "output": [
+              "Now Loading...",
+              "BATCH5_TEXT_READY",
+              "An unexpected error occurred while saving with SAVEDATA instruction"
+            ],
+            "state": "WaitInput",
+            "termination": "completed",
+            "watches": {
+              "RESULT": 0
+            }
+          }
+        }
+      }
+    },
+    "snakeFormats": {
+      "binary": {
+        "globalArtifact": {
+          "codec": "binary",
+          "dataCount": 0,
+          "exists": true,
+          "magicHex": "894552410d0a1a0a",
+          "sha256": "a2f724e11ec89d78d9b6b41dc9ec68a9838ffb483c37d974ae827d24aaf201de",
+          "size": 2942,
+          "version": 1808
+        },
+        "globalLoad": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {
+            "B5_GI2:1:0": 620,
+            "B5_GI3:1:1:1": 638,
+            "B5_GINT:0": 601,
+            "B5_GINT:1": -602,
+            "B5_GS2:0:1": "global-s2",
+            "B5_GS3:1:0:1": "global-s3",
+            "B5_GSCALAR": 603,
+            "B5_GSSCALAR": "global-scalar",
+            "B5_GSTR:0": "global-zero",
+            "B5_GSTR:1": "全局-one",
+            "DT_CELL_GET(\"b5_global_dt\", 0, \"n\")": 606,
+            "DT_CELL_GETS(\"b5_global_dt\", 0, \"s\")": "global-dt",
+            "MAP_GET(\"b5_global_map\", \"key\")": "global-map",
+            "XML_TOSTR(\"b5_global_xml\")": "<root value=\"global-xml\" />"
+          }
+        },
+        "globalWrite": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {
+            "RESULT": 0
+          }
+        },
+        "normalArtifact": {
+          "codec": "binary",
+          "dataCount": 0,
+          "exists": true,
+          "magicHex": "894552410d0a1a0a",
+          "sha256": "626fa4ba951d8c10bd0ad4fea1cf17455e2b9839b2fbdfdb463c6a71d705b1c9",
+          "size": 4330,
+          "version": 1808
+        },
+        "normalLoad": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "B5_LOAD_DONE"
+          ],
+          "position": {
+            "file": "batch5.erb",
+            "line": "11"
+          },
+          "state": "WaitInput",
+          "termination": "waitingInput",
+          "watches": {
+            "B5_CINT:0:1": 402,
+            "B5_CSTR:0:1": "角色-one",
+            "B5_I1:1": -102,
+            "B5_I2:1:0": 203,
+            "B5_I3:1:1:1": 308,
+            "B5_INT": 505001,
+            "B5_S1:2": "s1-two",
+            "B5_S2:1:0": "s2-one-zero",
+            "B5_S3:1:1:0": "s3-b",
+            "B5_STR": "normal-文字",
+            "DT_CELL_GET(\"b5_dt\", 0, \"n\")": 505,
+            "DT_CELL_GETS(\"b5_dt\", 0, \"s\")": "normal-dt",
+            "MAP_GET(\"b5_map\", \"key\")": "normal-map",
+            "XML_TOSTR(\"b5_xml\")": "<root value=\"normal-xml\" />"
+          }
+        },
+        "normalWrite": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {
+            "RESULT": 0
+          }
+        }
+      },
+      "gzip": {
+        "globalArtifact": {
+          "codec": "gzip",
+          "dataCount": 0,
+          "exists": true,
+          "magicHex": "894552415a49500a",
+          "sha256": "71a6ebf404827f975a26e7b4eb42974e4e414a38948e4ba400c8487c0b1e380d",
+          "size": 878,
+          "version": 1808
+        },
+        "globalLoad": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {
+            "B5_GI2:1:0": 620,
+            "B5_GI3:1:1:1": 638,
+            "B5_GINT:0": 601,
+            "B5_GINT:1": -602,
+            "B5_GS2:0:1": "global-s2",
+            "B5_GS3:1:0:1": "global-s3",
+            "B5_GSCALAR": 603,
+            "B5_GSSCALAR": "global-scalar",
+            "B5_GSTR:0": "global-zero",
+            "B5_GSTR:1": "全局-one",
+            "DT_CELL_GET(\"b5_global_dt\", 0, \"n\")": 606,
+            "DT_CELL_GETS(\"b5_global_dt\", 0, \"s\")": "global-dt",
+            "MAP_GET(\"b5_global_map\", \"key\")": "global-map",
+            "XML_TOSTR(\"b5_global_xml\")": "<root value=\"global-xml\" />"
+          }
+        },
+        "globalWrite": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {
+            "RESULT": 0
+          }
+        },
+        "normalArtifact": {
+          "codec": "gzip",
+          "dataCount": 0,
+          "exists": true,
+          "magicHex": "894552415a49500a",
+          "sha256": "ccaed6315195f3c7835a7eaa8c298e3884e984846b4e4921affdc8af864246c9",
+          "size": 1483,
+          "version": 1808
+        },
+        "normalLoad": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "B5_LOAD_DONE"
+          ],
+          "position": {
+            "file": "batch5.erb",
+            "line": "11"
+          },
+          "state": "WaitInput",
+          "termination": "waitingInput",
+          "watches": {
+            "B5_CINT:0:1": 402,
+            "B5_CSTR:0:1": "角色-one",
+            "B5_I1:1": -102,
+            "B5_I2:1:0": 203,
+            "B5_I3:1:1:1": 308,
+            "B5_INT": 505001,
+            "B5_S1:2": "s1-two",
+            "B5_S2:1:0": "s2-one-zero",
+            "B5_S3:1:1:0": "s3-b",
+            "B5_STR": "normal-文字",
+            "DT_CELL_GET(\"b5_dt\", 0, \"n\")": 505,
+            "DT_CELL_GETS(\"b5_dt\", 0, \"s\")": "normal-dt",
+            "MAP_GET(\"b5_map\", \"key\")": "normal-map",
+            "XML_TOSTR(\"b5_xml\")": "<root value=\"normal-xml\" />"
+          }
+        },
+        "normalWrite": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {
+            "RESULT": 0
+          }
+        }
+      },
+      "text": {
+        "globalArtifact": {
+          "codec": "text",
+          "exists": true,
+          "marker": "__EMUERA_1808_STRAT__",
+          "sha256": "cb9814d3017a4ec1f4d2ffc8f790de6348b43ec487d12c25387167e8417a84fc",
+          "size": 364,
+          "version": 1808
+        },
+        "globalLoad": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_TEXT_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {
+            "B5_GINT:1": -602,
+            "B5_GSCALAR": 603,
+            "B5_GSSCALAR": "global-scalar",
+            "B5_GSTR:1": "全局-one"
+          }
+        },
+        "globalWrite": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_TEXT_READY"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {
+            "RESULT": 0
+          }
+        },
+        "normalArtifact": {
+          "codec": "text",
+          "exists": true,
+          "marker": "__EMUERA_1808_STRAT__",
+          "sha256": "ea06c40d147d8b89b0d8b451663460ae65bdff4d7eea17a0a933ff2fa13ce03a",
+          "size": 1281,
+          "version": 1808
+        },
+        "normalLoad": {
+          "diagnostics": [],
+          "error": {
+            "message": "Unexpected end of save data",
+            "type": "MinorShift.Emuera.Runtime.Utils.FileEE"
+          },
+          "ok": false,
+          "output": null,
+          "state": null,
+          "termination": null,
+          "watches": null
+        },
+        "normalWrite": {
+          "diagnostics": [],
+          "error": null,
+          "ok": true,
+          "output": [
+            "Now Loading...",
+            "BATCH5_TEXT_READY",
+            "An unexpected error occurred while saving with SAVEDATA instruction"
+          ],
+          "state": "WaitInput",
+          "termination": "completed",
+          "watches": {
+            "RESULT": 0
+          }
+        }
+      }
+    },
+    "snakeTw": {
+      "repository": {
+        "branch": "main",
+        "commit": "667b9cd0b838211cd0f1db4a151b876aaea6fa2f",
+        "dirty": true,
+        "statusPorcelainV1ZSha256": "e8f02c08899392dc50d5003f176b833e8fc2c601e03394ff68608de9813f05a5"
+      },
+      "saves": {
+        "sav/global.sav": {
+          "codec": "gzip",
+          "dataCount": 0,
+          "exists": true,
+          "magicHex": "894552415a49500a",
+          "sha256": "56f80b52a8a6c8fc7dd080f9a69967758fb83df966a45330123bbc3d8a1e37cf",
+          "size": 539,
+          "version": 1808
+        },
+        "sav/save1000.sav": {
+          "codec": "gzip",
+          "dataCount": 0,
+          "exists": true,
+          "magicHex": "894552415a49500a",
+          "sha256": "442b1d41d3d17f2dbfdb6587ae521361bf07174f653affdc0bb82a9693dae0a2",
+          "size": 54050,
+          "version": 1808
+        }
+      },
+      "setting": {
+        "UseNewRandom": true,
+        "identity": {
+          "exists": true,
+          "sha256": "2475a87529e9de4e98a9b2bb24f3d34b85a67ec5bfef2110f8de1b918784eaf5",
+          "size": 117
+        }
+      }
+    },
+    "toolchain": {
+      "cargo": "cargo 1.96.1 (356927216 2026-06-26)",
+      "dotnet": "10.0.301",
+      "node": "v24.20.0",
+      "npm": "11.19.0",
+      "platform": "macOS-26.6.2-arm64-arm-64bit",
+      "python": "3.9.6",
+      "rustc": "rustc 1.96.1 (31fca3adb 2026-06-26)\nbinary: rustc\ncommit-hash: 31fca3adb283cc9dfd56b49cdee9a96eb9c96ffd\ncommit-date: 2026-06-26\nhost: aarch64-apple-darwin\nrelease: 1.96.1\nLLVM version: 22.1.2",
+      "wine": "wine-11.16 (Staging)"
+    },
+    "workspace": {
+      "core": {
+        "branch": "codex/snake-compatibility",
+        "commit": "1f2f876f5fcd3f14ad8253df22b65831625402c6",
+        "dirty": true
+      },
+      "tui": {
+        "branch": "codex/snake-compatibility",
+        "commit": "4b046b7aba4e8470efb904f054cced973714d25a",
+        "dirty": false
+      },
+      "web": {
+        "branch": "codex/snake-compatibility",
+        "commit": "3fd8e1b3dadc44a5492b2915f82f7379aff8cd54",
+        "dirty": false
+      }
+    }
+  }
+}
