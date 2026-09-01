@@ -1088,7 +1088,9 @@ fn project_build_reports_real_workload_progress() {
         assert!(
             values
                 .windows(2)
-                .all(|pair| pair[0].completed <= pair[1].completed),
+                // Several analyzer substages intentionally share the public Analyzing stage;
+                // each substage starts a fresh real-work counter at zero.
+                .all(|pair| pair[1].completed == 0 || pair[0].completed <= pair[1].completed),
             "{stage:?} regressed"
         );
     }

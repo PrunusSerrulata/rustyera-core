@@ -708,6 +708,11 @@ fn exact_compiled_cache_load_does_not_require_a_manifest() {
                 FilePayload::Utf8(value) if file.relative_path == "reraconfig.toml" => {
                     !value.is_empty() && era_config::ReraConfigDocument::parse(value).is_ok()
                 }
+                FilePayload::Utf8(value)
+                    if file.category == FileCategory::ResourceManifest =>
+                {
+                    !value.is_empty()
+                }
                 FilePayload::Utf8(value) => value.is_empty() && value.capacity() == 0,
                 FilePayload::Bytes(value) => value.as_slice().is_empty(),
                 FilePayload::IoError(_) | FilePayload::ExternalResource(_) => true,

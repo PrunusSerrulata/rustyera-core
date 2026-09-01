@@ -1211,6 +1211,7 @@ fn transient_effects_have_an_independent_idempotent_stream() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn protocol_46_audio_targets_effects_and_observations_are_exact() {
     assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
     assert_eq!(AUDIO_OBSERVATION_OPERATION, "audio_observation");
@@ -1289,8 +1290,8 @@ fn protocol_46_audio_targets_effects_and_observations_are_exact() {
             "duration_ms":2500,
             "position_ms":1234,
             "state":"paused",
-            "volume_millionths":500000,
-            "rate_millionths":2500000,
+            "volume_millionths":500_000,
+            "rate_millionths":2_500_000,
             "preserve_pitch":false,
             "frontend_monotonic_time_ns":999
         })
@@ -1323,9 +1324,9 @@ fn protocol_46_audio_targets_effects_and_observations_are_exact() {
             "action":"pause",
             "resource_id":"tone",
             "repeat_count":1,
-            "volume_millionths":500000,
+            "volume_millionths":500_000,
             "revision":9,
-            "rate_millionths":1500000,
+            "rate_millionths":1_500_000,
             "preserve_pitch":false
         })
     );
@@ -1356,10 +1357,10 @@ fn protocol_46_audio_targets_effects_and_observations_are_exact() {
             "channel":{"type":"bgm"},
             "resource_id":"theme",
             "repeat_count":-1,
-            "volume_millionths":500000,
+            "volume_millionths":500_000,
             "state":"playing",
             "revision":9,
-            "rate_millionths":1000000,
+            "rate_millionths":1_000_000,
             "preserve_pitch":true
         })
     );
