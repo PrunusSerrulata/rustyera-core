@@ -788,45 +788,88 @@ SQL 子集**，不代表完整蛇版 TW 已可进入标题、新游戏或存档�
 
 ## 批次 4：主玩法 presentation、图像、scene 与自身存档闭环
 
-计划入口：[改造思路 / 批次 4](SNAKE_EMUERA_MIGRATION_PLAN.md#batch-4)。状态：待登记；负责人 / 最近更新：待填写。
+计划入口：[改造思路 / 批次 4](SNAKE_EMUERA_MIGRATION_PLAN.md#batch-4)；实施入口：
+[批次 4 分批实施方案](SNAKE_EMUERA_BATCH_4_IMPLEMENTATION_PLAN.md)。状态：**已完成首个可玩与
+RustyEra 自有存档闭环**；负责人 / 最近更新：Codex / 2026-09-01。
 
 ### 具体实施方案
 
-- 目标、S/D/C/N 编号、范围与明确不做项：待填写。
-- 前置批次/子项、已通过门禁和对应证据：待填写；区分可并行实现与必须汇合的集成验收。
-- 受影响仓库/模块、接口与数据格式、profile/cache/save/service 版本变化：待填写。
-- 分项步骤、文件/hunk 归属、共享基础依赖、资源隔离与提交划分：待填写。
-- 验收目标、最小 fixture、获准测试范围、风险/回退方案与用户时限：待填写。
+- 依次完成 4.0 契约冻结、4.1 canonical HTML/scene、4.2 图形资源、4.3 CBG/ImageLayer 与脚本 API、
+  4.4a TUI 降级边界、4.4b Web/Tauri compositor、4.5 envelope v2/RNG/SQL 恢复、4.6 编译收敛，
+  最后由 4.7 在真实蛇版 TW 汇合。Runtime protocol 最终为 45.0，snake profile identity 为
+  `emuera.skia.snake@11/11`；自有存档使用校验覆盖完整状态的 envelope v2。
+- core 冻结前端无关 SceneState/SceneDelta、稳定行/viewport、Canvas/Sprite/CBG/ImageLayer、HTML
+  测量/pointer/pixel service 及保存恢复；Web/Tauri 实现像素投影和真实设备命中，TUI 只提供文本
+  近似并对像素长度、物理坐标和命中能力明确拒绝。图形模型、前端投影和保存闭环分仓提交。
+- 4.7 使用 `games/eratw-sub-modding` 最新工作副本的独立复制，固定 SimHei、静态颜色地图 2、
+  seed `123456` 和 clock `2026-01-01T00:00:00Z`。路线从真实标题、QOL/SQL、新游戏、地图/私室、
+  自定义与三轮角色 UPDATE 推进到第 1 日，再由独立客户端加载自有存档并比较 typed state、scene、
+  RNG 与 SQL durable revisions；不修改游戏本体或蛇版 Emuera。
+- 明确不做外部蛇版/ERAZIP 存档导入、Float、完整音频、像素级跨客户端一致性和蛇版 mtime/binary
+  lazyloading。真实游戏缺失 BBAS 资源时只接受其实际零行路径；不补造数据。用户明确取消全过程
+  60 分钟测试墙钟上限，但全量次数、静态先于动态和 Web/Tauri 5 秒完整快照门禁保持不变。
 
 ### 所作改动
 
 | 功能/修复项编号 | 组件与文件 | 实际改动及理由 | 契约/兼容性影响 | commit 与依赖 |
 |---|---|---|---|---|
-| 待填写 | 待填写 | 待填写 | 待填写 | 待填写 |
+| 4.0–4.3 | core protocol、HTML、scene、资源与 VM | 扩展 HTML AST、稳定 scene/delta、Canvas/Sprite/CBG/ImageLayer、pointer/line/pixel 查询及蛇版实际调用 API | Runtime 42→45；profile identity 升至 11/11 | core `11ea5ffd..569f64a` 中对应分项提交 |
+| 4.4a | TUI renderer、RuntimeWorker、能力协商 | 将文本/标题/菜单确定性投影到终端；像素查询保持 unsupported | 不虚报图形能力；最终绑定 core `569f64a` | TUI `13fab3af..4b046b7`，最终 pin `4b046b7` |
+| 4.4b | Web viewport、compositor、input、资源生命周期 | 实现 scene depth/sequence、稳定滚动、命中与设备 latch；修复尺寸查询导致的页面跳动并保持滚动条按需出现 | Web/WASM/Tauri 共享 Runtime 45 场景；不预留永久 scrollbar gutter | Web `7e946c2b..3fd8e1b`，viewport `3b64c13`/`17eb8f8`/`afeeecf` |
+| 4.5 | core save/restore 与三端 storage | envelope v2 原子保存/恢复变量 shape、角色、GLOBAL、SFMT RNG、SQL durable revision 和 scene | 旧/错 profile/损坏候选提交前拒绝；扩展作用域隔离 | core 至 `f141c6d`；前端绑定包含在各自范围 |
+| 4.6 | core 编译器/analyzer/runtime | 补齐真实项目表达式、调用、变量索引与后置 API 的编译/能力处置，并优化调试变量分页 | 真实 15,766 源输入完成编译，不以删脚本或首错退出掩盖问题 | core final `569f64a`；TUI `4b046b7`；Web pin `410ad1d` |
+| 4.7-SQL | Web SQLite Worker | 只读 scalar/reader 不再导出、hash 并发布完整持久数据库，写语句仍走原子发布 | SQL v1 与 durable revision 不变；降低真实初始化重复 I/O | Web `6033423` |
+| 4.7-input | Web runtime store | 原生 atomic message-skip 前等待真实右键 mouseup 及 device submission，避免观察 MOUSEB 的脚本等待丢边沿 | 输入协议不变；物理设备顺序与蛇版行为一致 | Web `cc8b31e` |
+| 4.7-evidence | Web/Tauri test lifecycle | 为隔离 runner 提供一次性原生 state export 目的地，数据仍经产品 chunk writer | 仅测试构建可用，不改变发布 UI/存档格式 | Web `3fd8e1b` |
 
 ### 审查与验收结果
 
-- 实现/测试输入 revision、工作目录、环境、游戏/资源 hash、profile/seed：待填写。
-- 重构审查是否触发、唯一审查记录、结论及要求落实情况：待填写；未触发须说明。
-- 首条测试命令时间、已用/剩余墙钟预算、首次全量启动记录：待填写。
-- Oracle 选择与理由、语义基准和 wrapper revision：待填写；按范围分别记录原版与蛇版，或说明不适用。
+- 最终源码为 core `569f64a99599c1d89312b3d9c92fcec90e9b8c3a`、TUI
+  `4b046b7aba4e8470efb904f054cced973714d25a`、Web
+  `3fd8e1b3dadc44a5492b2915f82f7379aff8cd54`。蛇版 TW Git 基线为 `667b9cd0…a6fa2f`，
+  冻结复制为 16,664 文件 / 901 MiB，文件清单摘要 `9137adbf…42116`；运行副本仅把字体改成
+  SimHei。profile/seed/clock 如上，静态地图选择 2。
+- 整批所需正式重构审查只启动一次；前一批残留审计按用户要求不计入本批次数。审查提出的职责
+  拆分、边界清理与重复工作消除均在首条测试前落实，测试开始后没有再次启动审查。表达式语义以
+  `emuera_lazyloading_selfmodified_version` 的实际 parser/analyzer/runtime 实现为基准，不凭错误文本
+  猜测；UI/存档闭环则以真实蛇版 TW 运行状态及 RustyEra versioned protocol 为 oracle。
+- 用户取消 60 分钟墙钟限制；项目加载与 cache export 允许连续 4 个 5 秒相同完整快照，其余阶段
+  保持首个相同 5 秒快照即失败。项目加载不再首错退出，而是收集全部 diagnostics；失败后只复验
+  直接受影响集合，没有重复任何已经使用过的完整 suite。
+- 最终 TUI C ABI dylib SHA-256 为 `0ce7a98e…221e9`；Tauri binary / webdriver manifest SHA-256
+  分别为 `e89a5a34…29476` / `cc5e2e83…fffc47`，build identity 绑定 core `569f64a`、WASM
+  revision `f435c721…a45d0`。最终 producer/consumer 与 cache matrix 均以 strict reuse 使用该产物。
 
 | 验收项 / 静态或动态阶段 | 命令与 fixture | 预期 | 首次结果 / 退出码 / 时间 | 修复后定向复验 | 证据与结论 |
 |---|---|---|---|---|---|
-| 待填写 | 待填写 | 待填写 | 待填写 | 待填写 | 待填写 |
+| core 首次完整 suite | 完整 core pytest/contract 集合 | 当前 core 全量通过 | **70 passed / 1 failed**；失败为 analyzer deferred-index 的旧断言 | 只重跑变量分页、编译器/analyzer/runtime 最小集合并通过；Clippy/格式门禁通过 | 未把失败后的定向复验描述为第二次全量 |
+| TUI 首次完整 pytest | 当前 worktree `pytest` | TUI 与当前 C ABI 契约一致 | **530 passed / 9 failed / 5 skipped**；9 项来自测试装入旧 C ABI/协议，不是最终 pin 产品差异 | 以 core `569f64a` release C ABI 重建后，真实蛇版 ingestion 1 passed、HTML length capability 拒绝 1 passed、pin/About 2 passed，Ruff/ctypes/PyInstaller load 均通过 | TUI 明确拒绝 `html-length-v2`，未伪造像素测量 |
+| Web 静态与完整 Vitest | focused Vitest、typecheck、ESLint、Prettier、build；一次完整 Vitest | 产品/类型/格式/构建门禁通过 | focused 受影响集合通过；完整 Vitest **103 files / 1440 tests passed** | 右键顺序精确回归 1 passed；readonly SQL 与 test lifecycle 受影响集合通过 | 另一次过宽的单文件 Vitest 有 3 个环境/resize 无关失败，精确受影响用例通过；未重跑全量 |
+| 真实 producer 路线 | external Tauri spec；SimHei、静态地图 2 | 标题→QOL/SQL→新游戏→地图/hover/click/NF→1999→私室0→100→`0/右键、0/右键、0/右键`→第1日→自有保存 | 路线迭代暴露 readonly SQL 全库发布、物理右键释放、错误按钮状态 wait 及 test evidence 传输问题 | 最终 producer 到第1日并导出 58,247-byte save，SHA `d5e6fc92…4291d`；fault=null | 厨房 8 在真实脚本无可见/可证明内部状态变化，移除错误 wait；滚动/hover 不用于决定按钮定位，提交使用脚本值 |
+| 关闭、重启与加载 | 两个独立 strict-reuse consumer | 两次加载产生相同状态与 scene | baseline 与 final consumer 均 exit 0，**1 passing / 45s** | 两份 post-load 59,141-byte save 完全相同，SHA `6de4937c…1f4f`；scene 对比相同 | `DAY=1`、`MONEY=99999`、`TIME=0`、`MASTER=0`、`TARGET=1`、`GLOBAL=0`、`GLOBALS=\"\"`、`NO@0=0`、`NAME/CALLNAME@0=你`、`BASE@0:0=2000`、`CFLAG@0:0=0`；RNG/SQL revision 随 envelope 精确恢复 |
+| 冷暖缓存与摘要失效 | 单一隔离 Tauri runner：cold→warm→warm→`TITLE.ERB` 追加 CRLF | warm 真实命中且快于 cold；变更源码后拒绝旧 cache；输出一致 | 早期错误断言把 metadata trust=false 当作 source-index reuse，随后完整 evidence 达 16 MiB 导致 WebDriver socket 超时 | bounded summary 后 exit 0，**1 passing / 55s**；12,694ms→4,555ms/4,819ms→14,580ms，hit false/true/true/false，四段输出一致 | 最大 resident 5,119,377,408B；physical footprint 49,152B；默认不信任 metadata，四段均安全 hash 15,766 文件；最终 stdout SHA `65f85927…46558` |
+| BBAS 与能力边界 | 真实项目资源/零行路径 | 不补造缺失资源且可继续首个可玩路线 | `bbas_map_schema.xml`、`bbas_map.xml` 仍缺失 | 零行初始化实际继续到第1日，故不构成最终外部阻塞 | 外部文件缺失按实记录；TUI 像素能力显式 unsupported |
 
 ### 未完成项、阻塞与计划偏差
 
 | 项目 | 未完成原因 / 依赖 | 影响与已验证边界 | 下一步及解除条件 | 是否需更新改造思路 |
 |---|---|---|---|---|
-| 待填写 | 待填写 | 待填写 | 待填写 | 待填写 |
+| 动画地图重绘 | 真实动画地图会短暂闪现后被旧内容覆盖，用户明确要求本轮改用静态地图 | 静态地图 2、hover/click/NF、私室与第1日路线已通过；动画 repaint 不计入本批结论 | 后续单独定位动画 scene 生命周期/旧投影覆盖 | 否，静态地图满足本批真实路线，问题已明确登记 |
+| 外部存档、Float、完整音频 | 属批次 5/6 或明确不做项 | 自有 Integer/String/角色/GLOBAL/RNG/SQL/scene 闭环已完成 | 按后续批次方案实施，不扩大 4.7 测试 | 否 |
+| 跨客户端像素一致性 | TUI 无像素渲染器，计划要求能力边界而非伪等价 | Web/Tauri 完整图形路线；TUI 文本摄取及 unsupported 拒绝通过 | 如需像素级基线仅在图形客户端单独建立 | 否 |
 
 ### 交付与续做入口
 
-- 本批结论、已完成与未验证范围、是否满足整批验收：待填写。
-- 各组件提交、分项对应关系、发布/迁移注意事项、CHANGELOG_PENDING 更新情况：待填写。
-- 当前轮次/起止时间、最近观察状态或指标、材料与复现命令、下一步恢复入口：待填写。
-- 临时材料保留/清理、相关进程停止与资源释放情况：待填写。
+- Batch 4 满足整批验收并达到首个可玩里程碑：Web/Tauri 完成真实标题到第1日、自有保存、关闭重启
+  加载与前端无关 scene/state 对比且无 trap；冷暖 cache 与源码摘要失效通过；TUI 未虚报像素能力。
+  动画地图 repaint、外部存档、Float 与完整音频仍按上表排除，不能从本结论推导已支持。
+- 最终组件头为 core `569f64a`、TUI `4b046b7`、Web `3fd8e1b`；分项产品提交见表，core/TUI/Web
+  仍是独立仓库。根 `CHANGELOG_PENDING.md` 在本批收尾另行追加 4.7 产品行为并独立提交；没有 version
+  bump、push、主线合并或自动启动批次 5。
+- 4.7 原始证据在验收完成后按用户要求精简；最终摘要保留输入/产物/save/cache hash、首次全量与
+  定向复验结论。历史 stdout、DOM/runtime 快照、可再生构建与所有隔离游戏副本随后清理，工具、
+  环境、主工作树依赖、蛇版 Emuera 和 `games/eratw-sub-modding` 本体不删除。实际释放空间在本次
+  最终交付与精简摘要中登记。
 
 <a id="batch-5"></a>
 

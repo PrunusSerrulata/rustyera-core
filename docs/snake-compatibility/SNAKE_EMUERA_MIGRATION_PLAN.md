@@ -144,6 +144,8 @@ Browser/Tauri 完成真实服务，TUI 本批对像素测量/pointer/canvas 明�
 
 前置：批次 2 的输入/计时器/RNG 契约，以及批次 3 的 SQL 与数据库保存策略。图形实现可在批次 2 后独立推进，但完整游戏验收必须等批次 3 就绪。
 
+状态（2026-09-01）：已按[批次 4 分批实施方案](SNAKE_EMUERA_BATCH_4_IMPLEMENTATION_PLAN.md)完成；真实蛇版 TW 的静态地图路线已推进到第 1 日，并完成自有存档、关闭重启加载、scene/state 对比及冷暖缓存/源码摘要失效验收。动画地图重绘、外部存档、Float 与完整音频仍按后续批次处理，详见[实施记录](SNAKE_EMUERA_IMPLEMENTATION_LOG.md#批次-4主玩法-presentation图像scene-与自身存档闭环)。
+
 - 实施 D14/D15 和 C04/C05/C08：扩展 canonical HTML AST、SceneLayer、CanvasReplay、line anchor 和资源 service。
 - 上述模型就绪后实施 D09 的 sprite/CBG 新重载和 S14 `EXISTSIMAGELAYER`；保留旧 arity，查询必须读取实际 scene，不能提前返回伪造值。
 - 补蛇版 TW 活动使用的 `HTML_PRINTC/LC`、font/img/div 属性、CBG、sprite、动画和 pointer 坐标；在本批复验 S04 对新增标签和 viewport/scene revision 的测量、命中与像素采样。
