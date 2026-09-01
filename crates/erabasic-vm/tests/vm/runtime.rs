@@ -1061,6 +1061,36 @@ fn debugger_pause_step_and_variable_batch_are_coherent_and_atomic() {
 }
 
 #[test]
+fn debugger_variable_pages_preserve_order_and_terminal_cursor() {
+    let entry = SymbolKey::derive("test.function", b"debug-pages");
+    let first = SymbolKey::derive("test.variable", b"first");
+    let second = SymbolKey::derive("test.variable", b"second");
+    let mut second_global = global(second, vec![1]);
+    second_global.name = "SECOND".into();
+    let artifact = artifact(
+        vec![function(
+            entry,
+            "DEBUG_PAGES",
+            vec![opcode::return_value(false)],
+        )],
+        vec![global(first, vec![1]), second_global],
+    );
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let stop = vm.request_pause().unwrap();
+
+    let first_page = vm.variables(stop.token, None, 1).unwrap();
+    assert_eq!(first_page.values.len(), 1);
+    assert_eq!(first_page.values[0].target.target.variable, first);
+    assert_eq!(first_page.next_cursor, Some(1));
+
+    let second_page = vm.variables(stop.token, first_page.next_cursor, 1).unwrap();
+    assert_eq!(second_page.values.len(), 1);
+    assert_eq!(second_page.values[0].target.target.variable, second);
+    assert_eq!(second_page.next_cursor, None);
+}
+
+#[test]
 fn incompatible_hot_reload_is_rejected_atomically() {
     let (base, _, variable) = call_artifact(1, vec![2]);
     let mut target = base.clone();

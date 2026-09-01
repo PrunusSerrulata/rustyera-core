@@ -554,72 +554,7 @@ impl VmDebugInspect for Vm {
     ) -> Result<VmDebugPage<VmDebugVariable>, VmError> {
         self.validate_stop(stop)?;
         let (start, limit) = page_bounds(cursor, limit)?;
-        let mut references = Vec::new();
-        for (generation_id, generation) in &self.generations {
-            for definition in &generation.artifact.globals {
-                let indices = vec![0; definition.dimensions.len()];
-                match definition.storage {
-                    BytecodeStorage::Character => {
-                        for character in 0..self.memory.characters.len() {
-                            references.push(VmDebugVariableRef {
-                                target: PlaceDescriptor {
-                                    backing: None,
-                                    variable: definition.key,
-                                    indices: indices.clone(),
-                                    character: Some(character as u64),
-                                    fiber: None,
-                                    frame: None,
-                                },
-                                generation: *generation_id,
-                            });
-                        }
-                    }
-                    BytecodeStorage::FunctionLocal => {
-                        for fiber in self.fibers.values() {
-                            for frame in &fiber.frames {
-                                if frame.generation == *generation_id
-                                    && frame.locals.contains_key(&definition.key)
-                                {
-                                    references.push(VmDebugVariableRef {
-                                        target: PlaceDescriptor {
-                                            backing: None,
-                                            variable: definition.key,
-                                            indices: indices.clone(),
-                                            character: None,
-                                            fiber: Some(fiber.id),
-                                            frame: Some(frame.id),
-                                        },
-                                        generation: *generation_id,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    _ => references.push(VmDebugVariableRef {
-                        target: PlaceDescriptor {
-                            backing: None,
-                            variable: definition.key,
-                            indices,
-                            character: None,
-                            fiber: None,
-                            frame: None,
-                        },
-                        generation: *generation_id,
-                    }),
-                }
-            }
-        }
-        let consumed = start.saturating_add(limit).min(references.len());
-        let values = references
-            .get(start..consumed)
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|reference| self.read_debug_variable(reference).ok())
-            .collect::<Vec<_>>();
-        Ok(VmDebugPage {
-            values,
-            next_cursor: (consumed < references.len()).then_some(consumed),
-        })
+        Ok(debug_variable_page(self, start, limit))
     }
 
     fn read_variable(
@@ -630,6 +565,140 @@ impl VmDebugInspect for Vm {
         self.validate_stop(stop)?;
         self.read_debug_variable(target)
     }
+}
+
+fn debug_variable_page(vm: &Vm, start: usize, limit: usize) -> VmDebugPage<VmDebugVariable> {
+    let end = start.saturating_add(limit);
+    let mut position = 0usize;
+    let mut values = Vec::with_capacity(limit);
+    let mut has_more = false;
+    'generations: for (generation_id, generation) in &vm.generations {
+        for definition in &generation.artifact.globals {
+            let indices = vec![0; definition.dimensions.len()];
+            match definition.storage {
+                BytecodeStorage::Character => {
+                    let character_count = vm.memory.characters.len();
+                    let skip = start.saturating_sub(position).min(character_count);
+                    position = position.saturating_add(skip);
+                    for character in skip..character_count {
+                        if !collect_debug_variable(
+                            vm,
+                            &VmDebugVariableRef {
+                                target: PlaceDescriptor {
+                                    backing: None,
+                                    variable: definition.key,
+                                    indices: indices.clone(),
+                                    character: Some(character as u64),
+                                    fiber: None,
+                                    frame: None,
+                                },
+                                generation: *generation_id,
+                            },
+                            &mut position,
+                            start,
+                            end,
+                            &mut values,
+                            &mut has_more,
+                        ) {
+                            break 'generations;
+                        }
+                    }
+                }
+                BytecodeStorage::FunctionLocal => {
+                    for fiber in vm.fibers.values() {
+                        for frame in &fiber.frames {
+                            if frame.generation == *generation_id
+                                && frame.locals.contains_key(&definition.key)
+                            {
+                                if position < start {
+                                    position = position.saturating_add(1);
+                                } else if !collect_debug_variable(
+                                    vm,
+                                    &VmDebugVariableRef {
+                                        target: PlaceDescriptor {
+                                            backing: None,
+                                            variable: definition.key,
+                                            indices: indices.clone(),
+                                            character: None,
+                                            fiber: Some(fiber.id),
+                                            frame: Some(frame.id),
+                                        },
+                                        generation: *generation_id,
+                                    },
+                                    &mut position,
+                                    start,
+                                    end,
+                                    &mut values,
+                                    &mut has_more,
+                                ) {
+                                    break 'generations;
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    if position < start {
+                        position = position.saturating_add(1);
+                    } else if !collect_debug_variable(
+                        vm,
+                        &VmDebugVariableRef {
+                            target: PlaceDescriptor {
+                                backing: None,
+                                variable: definition.key,
+                                indices,
+                                character: None,
+                                fiber: None,
+                                frame: None,
+                            },
+                            generation: *generation_id,
+                        },
+                        &mut position,
+                        start,
+                        end,
+                        &mut values,
+                        &mut has_more,
+                    ) {
+                        break 'generations;
+                    }
+                }
+            }
+        }
+    }
+    finish_debug_variable_page(values, has_more, end)
+}
+
+fn finish_debug_variable_page(
+    values: Vec<VmDebugVariable>,
+    has_more: bool,
+    end: usize,
+) -> VmDebugPage<VmDebugVariable> {
+    VmDebugPage {
+        values,
+        next_cursor: has_more.then_some(end),
+    }
+}
+
+fn collect_debug_variable(
+    vm: &Vm,
+    reference: &VmDebugVariableRef,
+    position: &mut usize,
+    start: usize,
+    end: usize,
+    values: &mut Vec<VmDebugVariable>,
+    has_more: &mut bool,
+) -> bool {
+    if *position >= end {
+        *has_more = true;
+        return false;
+    }
+    if *position >= start
+        && let Ok(value) = vm.read_debug_variable(reference)
+    {
+        values.push(value);
+    }
+    *position = position.saturating_add(1);
+    true
 }
 
 impl VmDebugControl for Vm {
