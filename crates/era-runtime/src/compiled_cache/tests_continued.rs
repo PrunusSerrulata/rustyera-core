@@ -760,7 +760,7 @@ fn profile_identity_survives_cache_and_full_project_without_cross_profile_keys()
         erabasic_compat::SQL_SERVICE_CONTRACT_NAME,
         erabasic_compat::SQL_LIMITS_CONTRACT_NAME,
         erabasic_compat::SCENE_CONTRACT_NAME,
-        erabasic_compat::SAVE_STATE_CONTRACT_NAME,
+        erabasic_compat::AUDIO_SERVICE_CONTRACT_NAME,
     ] {
         let mut different_service = project.clone();
         bump_compatibility_service_version(&mut different_service.compatibility, contract);

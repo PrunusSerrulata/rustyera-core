@@ -11,6 +11,8 @@ extern "C" {
 
 #define ERA_RUNTIME_ABI_MAJOR 3u
 #define ERA_RUNTIME_ABI_MINOR 9u
+#define ERA_RUNTIME_PROTOCOL_MAJOR 46u
+#define ERA_RUNTIME_PROTOCOL_MINOR 0u
 
 #define ERA_DEBUG_SCOPE_VARIABLES_READ (UINT64_C(1) << 0)
 #define ERA_DEBUG_SCOPE_VARIABLES_WRITE (UINT64_C(1) << 1)
@@ -115,7 +117,7 @@ typedef EraStatus (*EraSessionAllocateCompiledCacheFn)(EraCallHeader, EraSession
                                                         size_t, EraOwnedBuffer *);
 typedef EraStatus (*EraSessionCommitCompiledCacheFn)(EraCallHeader, EraSessionHandle,
                                                       EraOwnedBuffer, uint64_t *);
-/* Runtime protocol 36 requires ProjectManifest CBOR map key 2 to contain its resolved
+/* Runtime protocol 46 requires ProjectManifest CBOR map key 2 to contain its resolved
    compatibility identity. ResolveProjectCompatibility (72/73) uses session_submit/poll;
    no new C function-table entry is required. */
 typedef EraStatus (*EraSessionStageProjectManifestFn)(EraCallHeader, EraSessionHandle,

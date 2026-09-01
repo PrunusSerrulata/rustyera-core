@@ -6,6 +6,8 @@
 use std::ffi::{c_char, c_void};
 
 pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 3, minor: 9 };
+pub const ERA_RUNTIME_PROTOCOL_MAJOR: u16 = 46;
+pub const ERA_RUNTIME_PROTOCOL_MINOR: u16 = 0;
 pub const ERA_RUNTIME_GET_API_SYMBOL: &str = "era_runtime_get_api";
 
 pub const ERA_DEBUG_SCOPE_VARIABLES_READ: u64 = 1 << 0;
@@ -207,7 +209,7 @@ pub type EraFunctionPointer = *const c_void;
 /// owned output starts with the little-endian `u64` truncation offset followed by bytes to append.
 /// `reserved[7]` in ABI 3.8 stages one CBOR-encoded project manifest for the next source-only
 /// project-load command. The implementation copies and decodes the input before returning.
-/// Runtime protocol 37 requires this manifest's resolved compatibility identity at CBOR key 2.
+/// Runtime protocol 46 requires this manifest's resolved compatibility identity at CBOR key 2.
 /// Compatibility resolution uses messages 72/73 through submit/poll without another C entry.
 #[repr(C)]
 pub struct EraRuntimeApi {

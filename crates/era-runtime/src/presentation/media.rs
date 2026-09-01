@@ -1,30 +1,38 @@
 use super::{PresentationModel, rgb_color};
-use era_runtime_protocol::{AudioState, LogicalLength, ResourceReplay, TooltipFormat};
+use era_runtime_protocol::{
+    AudioChannelV1, AudioPlaybackStateV1, AudioState, LogicalLength, ResourceReplay, TooltipFormat,
+};
 
 impl PresentationModel {
-    pub(crate) fn play_sound(&mut self) {
+    pub(crate) fn play_sound(&mut self) -> u64 {
         self.sound_playing = true;
         self.bump();
+        self.revision
     }
 
-    pub(crate) fn stop_sound(&mut self) {
+    pub(crate) fn stop_sound(&mut self) -> u64 {
         self.sound_playing = false;
         self.bump();
+        self.revision
     }
 
-    pub(crate) fn set_sound_volume(&mut self, volume: i64) {
+    pub(crate) fn set_sound_volume(&mut self, volume: i64) -> u64 {
         self.sound_volume_millionths =
             u32::try_from(volume.clamp(0, 100)).unwrap_or_default() * 10_000;
         self.bump();
+        self.revision
     }
 
     pub(crate) fn sound_or_bgm_info(&self, channel: i64, information: i64) -> i64 {
         let (playing, volume) = if channel == -1 {
             self.audio
                 .iter()
-                .find(|state| state.channel_id == 1)
+                .find(|state| state.channel == AudioChannelV1::Bgm)
                 .map_or((false, 100), |state| {
-                    (state.playing, i64::from(state.volume_millionths / 10_000))
+                    (
+                        state.state == AudioPlaybackStateV1::Playing,
+                        i64::from(state.volume_millionths / 10_000),
+                    )
                 })
         } else if channel == 0 {
             (
@@ -42,27 +50,31 @@ impl PresentationModel {
         }
     }
 
-    pub(crate) fn play_bgm(&mut self, resource_id: String) {
+    pub(crate) fn play_bgm(&mut self, resource_id: String) -> u64 {
         self.audio.clear();
         self.audio.push(AudioState {
-            channel_id: 1,
+            channel: AudioChannelV1::Bgm,
             resource_id,
             repeat_count: -1,
             volume_millionths: 1_000_000,
-            playing: true,
+            state: AudioPlaybackStateV1::Playing,
             revision: self.revision.saturating_add(1),
+            rate_millionths: 1_000_000,
+            preserve_pitch: true,
         });
         self.delivery.dirty.audio = true;
         self.bump();
+        self.revision
     }
 
-    pub(crate) fn stop_bgm(&mut self) {
+    pub(crate) fn stop_bgm(&mut self) -> u64 {
         self.audio.clear();
         self.delivery.dirty.audio = true;
         self.bump();
+        self.revision
     }
 
-    pub(crate) fn set_bgm_volume(&mut self, volume: i64) {
+    pub(crate) fn set_bgm_volume(&mut self, volume: i64) -> u64 {
         let volume = volume.clamp(0, 100);
         for state in &mut self.audio {
             state.volume_millionths = u32::try_from(volume).unwrap_or_default() * 10_000;
@@ -70,6 +82,7 @@ impl PresentationModel {
         }
         self.delivery.dirty.audio = true;
         self.bump();
+        self.revision
     }
 
     pub(crate) fn projects_audio(&self) -> bool {

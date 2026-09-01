@@ -4,7 +4,9 @@ use era_protocol::{
 };
 use era_runtime_protocol as runtime_protocol;
 use era_runtime_protocol::{
-    AdvanceTime, AudioEffect, AudioEffectAction, CanvasPixelRequest, CanvasPoint, CanvasReplay,
+    AUDIO_OBSERVATION_OPERATION, AUDIO_OBSERVATION_OPERATION_VERSION, AdvanceTime, AudioChannelV1,
+    AudioEffect, AudioEffectAction, AudioObservationRequestV1, AudioObservationResponseV1,
+    AudioPlaybackStateV1, AudioState, CanvasPixelRequest, CanvasPoint, CanvasReplay,
     CanvasReplayCommand, CanvasSize, CellWidthIntent, ClientPreferenceLayers, Color,
     ConfigurationApplication, ConfigurationChange, ConfigurationClientProfile,
     ConfigurationUpdateCommitted, ConfigurationUpdateOutcome, ConfigurationValueKind,
@@ -176,7 +178,7 @@ fn protocol_45_scene_and_cell_intents_have_stable_json_cbor_and_cddl() {
     ] {
         assert!(schema.contains(definition));
     }
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
 }
 
 #[test]
@@ -413,7 +415,7 @@ fn protocol_44_scene_interactions_and_line_geometry_have_stable_contracts() {
         GET_LINE_GEOMETRY_OPERATION_VERSION,
         ProtocolVersion::new(1, 0)
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
     let schema = include_str!("../schema/runtime.cddl");
     assert!(schema.contains("get-line-geometry-v1-request"));
     assert!(schema.contains("get-line-geometry-v1-response"));
@@ -508,7 +510,7 @@ fn protocol_40_round_trips_input_environment_wait_and_ordered_device_contracts()
         .unwrap(),
         pump
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
     let schema = include_str!("../schema/runtime.cddl");
     for definition in [
         "environment-capability",
@@ -539,7 +541,7 @@ fn protocol_24_carries_backend_authoritative_logs() {
         RuntimeMessage::decode_payload(98, &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
 }
 
 #[test]
@@ -572,7 +574,7 @@ fn protocol_38_carries_correlated_secondary_vm_faults() {
         RuntimeMessage::decode_payload(message.tag(), &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
     let schema = include_str!("../schema/runtime.cddl");
     assert!(schema.contains("runtime-vm-fault-detail"));
     assert_eq!(
@@ -607,7 +609,7 @@ fn protocol_34_carries_diagnostic_notification_guidance() {
         serde_json::to_value(&message).unwrap()["value"]["notification"],
         "log_only"
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
 }
 
 #[test]
@@ -630,7 +632,7 @@ fn protocol_35_carries_the_encoded_journal_byte_limit_at_map_key_six() {
     assert!(include_str!("../schema/runtime.cddl").contains(
         "runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint, 6: uint }"
     ));
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
 }
 
 #[test]
@@ -776,7 +778,7 @@ fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
         RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
         macro_command
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
 }
 
 #[test]
@@ -785,7 +787,7 @@ fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
         PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
     };
 
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
     let opacity = RationalOpacity {
         numerator: 128,
         denominator: 255,
@@ -950,8 +952,40 @@ fn storage_write_is_correlated_and_idempotent() {
 }
 
 #[test]
+fn protocol_46_legacy_profile_save_is_read_delete_only() {
+    let namespace = StorageNamespace::LegacyProfileSave;
+    for operation in [
+        StorageOperation::Read,
+        StorageOperation::List {
+            pattern: Some("save*.sav".into()),
+            recursive: false,
+        },
+        StorageOperation::Delete {
+            precondition: era_runtime_protocol::StoragePrecondition::Any,
+        },
+        StorageOperation::Stat,
+        StorageOperation::ReadRange {
+            offset: 0,
+            maximum_bytes: 64,
+            change_token: None,
+        },
+    ] {
+        assert!(
+            namespace.permits(&operation),
+            "legacy read/delete operation {operation:?}"
+        );
+    }
+    assert!(!namespace.permits(&StorageOperation::Write {
+        data: ProtocolBytes::new(vec![1]),
+        atomic_replace: true,
+        precondition: era_runtime_protocol::StoragePrecondition::Any,
+    }));
+    assert_eq!(encode_canonical(&namespace).unwrap(), vec![0x06]);
+}
+
+#[test]
 fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
     assert_eq!(
         StorageOperation::Write {
             data: ProtocolBytes::new(vec![1]),
@@ -990,7 +1024,7 @@ fn paths_are_platform_independent_and_cannot_escape() {
 
 #[test]
 fn protocol_version_is_independent_from_wire_version() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
     assert_eq!(StateExportKind::InputReplay as u8, 4);
 }
 
@@ -1151,11 +1185,14 @@ fn transient_effects_have_an_independent_idempotent_stream() {
         effects: vec![EffectEvent {
             effect_id: 4,
             kind: EffectKind::Audio(AudioEffect {
-                channel_id: 0,
+                channel: AudioChannelV1::Sound(0),
                 action: AudioEffectAction::Play,
                 resource_id: Some("click".into()),
                 repeat_count: 1,
                 volume_millionths: 1_000_000,
+                revision: 9,
+                rate_millionths: 1_000_000,
+                preserve_pitch: true,
             }),
         }],
     });
@@ -1171,6 +1208,204 @@ fn transient_effects_have_an_independent_idempotent_stream() {
     };
     let encoded = encode_canonical(&acknowledgement).expect("encode effect outcome");
     assert_eq!(decode_canonical(&encoded), Ok(acknowledgement));
+}
+
+#[test]
+fn protocol_46_audio_targets_effects_and_observations_are_exact() {
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
+    assert_eq!(AUDIO_OBSERVATION_OPERATION, "audio_observation");
+    assert_eq!(
+        AUDIO_OBSERVATION_OPERATION_VERSION,
+        ProtocolVersion::new(1, 0)
+    );
+    assert_eq!(AudioChannelV1::sound(9), Some(AudioChannelV1::Sound(9)));
+    assert_eq!(AudioChannelV1::sound(10), None);
+    assert!(!AudioChannelV1::Sound(10).is_valid());
+    let current = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    assert_eq!((current.semantic_version, current.policy_version), (12, 12));
+    assert_eq!(
+        current.save_codec,
+        erabasic_compat::SNAKE_INTEROP_SAVE_CODEC
+    );
+    assert!(current.services.iter().any(|service| {
+        service.name == erabasic_compat::AUDIO_SERVICE_CONTRACT_NAME && service.version == 1
+    }));
+    let legacy = erabasic_compat::CompatibilityIdentity::legacy_snake_owned_save_v11();
+    assert!(legacy.is_legacy_snake_owned_save_v11());
+    assert!(legacy.validate().is_err());
+    for identity in [&current, &legacy] {
+        let encoded = encode_canonical(identity).unwrap();
+        assert_eq!(
+            decode_canonical::<erabasic_compat::CompatibilityIdentity>(&encoded).as_ref(),
+            Ok(identity)
+        );
+    }
+
+    let request = AudioObservationRequestV1 {
+        channel: AudioChannelV1::Sound(3),
+        expected_revision: 7,
+    };
+    assert_eq!(
+        serde_json::to_value(request).unwrap(),
+        serde_json::json!({"channel":{"type":"sound","channel":3},"expected_revision":7})
+    );
+    let encoded = encode_canonical(&request).unwrap();
+    assert_eq!(
+        encoded,
+        vec![0xa2, 0x00, 0x82, 0x00, 0x81, 0x03, 0x01, 0x07]
+    );
+    assert_eq!(decode_canonical(&encoded), Ok(request));
+
+    let response = AudioObservationResponseV1 {
+        channel: AudioChannelV1::Bgm,
+        revision: 7,
+        duration_ms: 2_500,
+        position_ms: 1_234,
+        state: AudioPlaybackStateV1::Paused,
+        volume_millionths: 500_000,
+        rate_millionths: 2_500_000,
+        preserve_pitch: false,
+        frontend_monotonic_time_ns: 999,
+    };
+    let bgm_request = AudioObservationRequestV1 {
+        channel: AudioChannelV1::Bgm,
+        expected_revision: 7,
+    };
+    assert!(response.is_fresh_for(bgm_request));
+    assert!(
+        !AudioObservationResponseV1 {
+            revision: 8,
+            ..response
+        }
+        .is_fresh_for(bgm_request)
+    );
+    assert_eq!(
+        serde_json::to_value(response).unwrap(),
+        serde_json::json!({
+            "channel":{"type":"bgm"},
+            "revision":7,
+            "duration_ms":2500,
+            "position_ms":1234,
+            "state":"paused",
+            "volume_millionths":500000,
+            "rate_millionths":2500000,
+            "preserve_pitch":false,
+            "frontend_monotonic_time_ns":999
+        })
+    );
+    let encoded = encode_canonical(&response).unwrap();
+    assert_eq!(
+        encoded,
+        vec![
+            0xa9, 0x00, 0x82, 0x01, 0x80, 0x01, 0x07, 0x02, 0x19, 0x09, 0xc4, 0x03, 0x19, 0x04,
+            0xd2, 0x04, 0x02, 0x05, 0x1a, 0x00, 0x07, 0xa1, 0x20, 0x06, 0x1a, 0x00, 0x26, 0x25,
+            0xa0, 0x07, 0xf4, 0x08, 0x19, 0x03, 0xe7,
+        ]
+    );
+    assert_eq!(decode_canonical(&encoded), Ok(response));
+
+    let effect = AudioEffect {
+        channel: AudioChannelV1::Sound(3),
+        action: AudioEffectAction::Pause,
+        resource_id: Some("tone".into()),
+        repeat_count: 1,
+        volume_millionths: 500_000,
+        revision: 9,
+        rate_millionths: 1_500_000,
+        preserve_pitch: false,
+    };
+    assert_eq!(
+        serde_json::to_value(&effect).unwrap(),
+        serde_json::json!({
+            "channel":{"type":"sound","channel":3},
+            "action":"pause",
+            "resource_id":"tone",
+            "repeat_count":1,
+            "volume_millionths":500000,
+            "revision":9,
+            "rate_millionths":1500000,
+            "preserve_pitch":false
+        })
+    );
+    let encoded = encode_canonical(&effect).unwrap();
+    assert_eq!(
+        encoded,
+        vec![
+            0xa8, 0x00, 0x82, 0x00, 0x81, 0x03, 0x01, 0x03, 0x02, 0x64, b't', b'o', b'n', b'e',
+            0x03, 0x01, 0x04, 0x1a, 0x00, 0x07, 0xa1, 0x20, 0x05, 0x09, 0x06, 0x1a, 0x00, 0x16,
+            0xe3, 0x60, 0x07, 0xf4,
+        ]
+    );
+    assert_eq!(decode_canonical(&encoded), Ok(effect));
+
+    let state = AudioState {
+        channel: AudioChannelV1::Bgm,
+        resource_id: "theme".into(),
+        repeat_count: -1,
+        volume_millionths: 500_000,
+        state: AudioPlaybackStateV1::Playing,
+        revision: 9,
+        rate_millionths: 1_000_000,
+        preserve_pitch: true,
+    };
+    assert_eq!(
+        serde_json::to_value(&state).unwrap(),
+        serde_json::json!({
+            "channel":{"type":"bgm"},
+            "resource_id":"theme",
+            "repeat_count":-1,
+            "volume_millionths":500000,
+            "state":"playing",
+            "revision":9,
+            "rate_millionths":1000000,
+            "preserve_pitch":true
+        })
+    );
+    let encoded = encode_canonical(&state).unwrap();
+    assert_eq!(
+        encoded,
+        vec![
+            0xa8, 0x00, 0x82, 0x01, 0x80, 0x01, 0x65, b't', b'h', b'e', b'm', b'e', 0x02, 0x20,
+            0x03, 0x1a, 0x00, 0x07, 0xa1, 0x20, 0x04, 0x01, 0x05, 0x09, 0x06, 0x1a, 0x00, 0x0f,
+            0x42, 0x40, 0x07, 0xf5,
+        ]
+    );
+    assert_eq!(decode_canonical(&encoded), Ok(state));
+
+    let schema = include_str!("../schema/runtime.cddl");
+    for definition in [
+        "audio-channel-v1 = [0, [0..9]] / [1, []]",
+        "audio-state = {",
+        "audio-effect-action = 0..5",
+        "audio-observation-request-v1",
+        "audio-observation-response-v1",
+        "storage-namespace = 0..6",
+    ] {
+        assert!(schema.contains(definition), "CDDL omitted {definition}");
+    }
+
+    for (tag, action) in [
+        AudioEffectAction::Play,
+        AudioEffectAction::Stop,
+        AudioEffectAction::SetVolume,
+        AudioEffectAction::Pause,
+        AudioEffectAction::Resume,
+        AudioEffectAction::SetRate,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            encode_canonical(&action).unwrap(),
+            vec![u8::try_from(tag).unwrap()]
+        );
+        assert_eq!(
+            decode_canonical::<AudioEffectAction>(&encode_canonical(&action).unwrap()),
+            Ok(action)
+        );
+    }
 }
 
 #[test]
@@ -1624,7 +1859,7 @@ fn protocol_41_carries_safe_sql_v1_without_native_paths_or_handles() {
     );
     assert_eq!(SqlLimitsV1::FIXED.maximum_connections, 8);
     assert_eq!(SqlLimitsV1::FIXED.execution_budget_ms, 5_000);
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(45, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
     let schema = include_str!("../schema/runtime.cddl");
     assert!(schema.contains("sql-request-v1"));
     assert!(schema.contains("sql-response-v1"));

@@ -28,23 +28,22 @@ impl RuntimeSession {
                     VmHostCompletion::Ready(HostReady::empty()),
                 );
             };
-            if bgm {
-                self.presentation.play_bgm(resource.clone());
+            let revision = if bgm {
+                self.presentation.play_bgm(resource.clone())
             } else {
-                self.presentation.play_sound();
-            }
+                self.presentation.play_sound()
+            };
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
-            if bgm {
-                self.emit_presentation()?;
-            }
+            self.emit_bgm_presentation(bgm)?;
             if self.presentation.projects_audio() && self.client_audio_available {
-                return self.emit_effect(EffectKind::Audio(AudioEffect {
-                    channel_id: u64::from(bgm),
-                    action: AudioEffectAction::Play,
-                    resource_id: Some(resource),
-                    repeat_count: if bgm { -1 } else { 1 },
-                    volume_millionths: 1_000_000,
-                }));
+                return self.emit_effect(EffectKind::Audio(audio_effect(
+                    bgm,
+                    AudioEffectAction::Play,
+                    Some(resource),
+                    if bgm { -1 } else { 1 },
+                    1_000_000,
+                    revision,
+                )));
             }
             if self.presentation.projects_audio() {
                 return self.emit_audio_unavailable();
@@ -54,23 +53,22 @@ impl RuntimeSession {
         if matches!(name.as_str(), "STOPBGM" | "STOPSOUND") {
             *status = HostDispatchStatus::Handled;
             let bgm = name == "STOPBGM";
-            if bgm {
-                self.presentation.stop_bgm();
+            let revision = if bgm {
+                self.presentation.stop_bgm()
             } else {
-                self.presentation.stop_sound();
-            }
+                self.presentation.stop_sound()
+            };
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
-            if bgm {
-                self.emit_presentation()?;
-            }
+            self.emit_bgm_presentation(bgm)?;
             if self.presentation.projects_audio() && self.client_audio_available {
-                return self.emit_effect(EffectKind::Audio(AudioEffect {
-                    channel_id: u64::from(bgm),
-                    action: AudioEffectAction::Stop,
-                    resource_id: None,
-                    repeat_count: 0,
-                    volume_millionths: 0,
-                }));
+                return self.emit_effect(EffectKind::Audio(audio_effect(
+                    bgm,
+                    AudioEffectAction::Stop,
+                    None,
+                    0,
+                    0,
+                    revision,
+                )));
             }
             if self.presentation.projects_audio() {
                 return self.emit_audio_unavailable();
@@ -81,24 +79,24 @@ impl RuntimeSession {
             *status = HostDispatchStatus::Handled;
             let bgm = name == "SETBGMVOLUME";
             let volume = integer_argument_value(&request.arguments, 0)?;
-            if bgm {
-                self.presentation.set_bgm_volume(volume);
+            let revision = if bgm {
+                self.presentation.set_bgm_volume(volume)
             } else {
-                self.presentation.set_sound_volume(volume);
-            }
+                self.presentation.set_sound_volume(volume)
+            };
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
-            if bgm {
-                self.emit_presentation()?;
-            }
+            self.emit_bgm_presentation(bgm)?;
             if self.presentation.projects_audio() && self.client_audio_available {
-                return self.emit_effect(EffectKind::Audio(AudioEffect {
-                    channel_id: u64::from(bgm),
-                    action: AudioEffectAction::SetVolume,
-                    resource_id: None,
-                    repeat_count: 0,
-                    volume_millionths: u32::try_from(volume.clamp(0, 100)).unwrap_or_default()
-                        * 10_000,
-                }));
+                let volume_millionths =
+                    u32::try_from(volume.clamp(0, 100)).unwrap_or_default() * 10_000;
+                return self.emit_effect(EffectKind::Audio(audio_effect(
+                    bgm,
+                    AudioEffectAction::SetVolume,
+                    None,
+                    0,
+                    volume_millionths,
+                    revision,
+                )));
             }
             if self.presentation.projects_audio() {
                 return self.emit_audio_unavailable();
@@ -148,5 +146,36 @@ impl RuntimeSession {
                 writes: Vec::new(),
             }),
         )
+    }
+
+    fn emit_bgm_presentation(&mut self, bgm: bool) -> Result<(), RuntimeError> {
+        if bgm {
+            self.emit_presentation()?;
+        }
+        Ok(())
+    }
+}
+
+fn audio_effect(
+    bgm: bool,
+    action: AudioEffectAction,
+    resource_id: Option<String>,
+    repeat_count: i64,
+    volume_millionths: u32,
+    revision: u64,
+) -> AudioEffect {
+    AudioEffect {
+        channel: if bgm {
+            AudioChannelV1::Bgm
+        } else {
+            AudioChannelV1::Sound(0)
+        },
+        action,
+        resource_id,
+        repeat_count,
+        volume_millionths,
+        revision,
+        rate_millionths: 1_000_000,
+        preserve_pitch: true,
     }
 }

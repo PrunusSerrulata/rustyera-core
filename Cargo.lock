@@ -263,6 +263,7 @@ name = "era-runtime-ffi"
 version = "0.8.0"
 dependencies = [
  "era-protocol",
+ "era-runtime-protocol",
 ]
 
 [[package]]

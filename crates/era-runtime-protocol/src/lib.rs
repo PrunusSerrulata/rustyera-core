@@ -3,6 +3,7 @@
 //! This development protocol intentionally has no backward-compatibility promise until
 //! a frontend exists. Filesystem, clock, rendering and device work remain outside it.
 
+mod audio;
 mod compatibility;
 mod configuration;
 mod effect;
@@ -22,6 +23,10 @@ mod sql;
 pub mod storage_pattern;
 mod value;
 
+pub use audio::{
+    AUDIO_SOUND_CHANNEL_COUNT, AudioChannelV1, AudioObservationRequestV1,
+    AudioObservationResponseV1, AudioPlaybackStateV1,
+};
 pub use compatibility::{
     CompatibilityDiagnosticContext, ProjectCompatibilityResolved, RequiredCapability,
     ResolveProjectCompatibility,
@@ -39,7 +44,9 @@ pub use effect::{
 };
 pub use era_protocol::ProtocolBytes;
 pub use erabasic_compat::{
-    CompatibilityIdentity, CompatibilityProfileId, CompatibilityServiceContract,
+    AUDIO_SERVICE_CONTRACT_NAME, AUDIO_SERVICE_CONTRACT_VERSION, CompatibilityIdentity,
+    CompatibilityProfileId, CompatibilityServiceContract, LEGACY_SNAKE_OWNED_SAVE_CODEC,
+    SNAKE_INTEROP_SAVE_CODEC,
 };
 pub use erabasic_html::{
     HtmlAlignment, HtmlAttribute, HtmlBoxModel, HtmlColorMatrix, HtmlDisplayMode, HtmlDocument,
@@ -97,7 +104,8 @@ pub use project::{
     SourceLocation, SubmittedFile, validate_relative_path,
 };
 pub use service::{
-    CancelExternalRequest, CanvasPixelRequest, CanvasPixelResponse, DECODE_CANVAS_IMAGE_OPERATION,
+    AUDIO_OBSERVATION_OPERATION, AUDIO_OBSERVATION_OPERATION_VERSION, CancelExternalRequest,
+    CanvasPixelRequest, CanvasPixelResponse, DECODE_CANVAS_IMAGE_OPERATION,
     DECODE_CANVAS_IMAGE_OPERATION_VERSION, DecodeCanvasImageRequest, DecodeCanvasImageResponse,
     ENCODE_CANVAS_PNG_OPERATION, ENCODE_CANVAS_PNG_OPERATION_VERSION, EncodeCanvasPngRequest,
     EncodeCanvasPngResponse, ExternalRequestKind, GET_DISPLAY_LINE_OPERATION,

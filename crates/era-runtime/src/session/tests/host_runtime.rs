@@ -1,4 +1,5 @@
 use super::*;
+use era_runtime_protocol::AudioPlaybackStateV1;
 
 #[test]
 fn goto_into_case_body_emits_a_nonfatal_warning_and_continues() {
@@ -728,6 +729,7 @@ fn retired_drawing_backend_queries_keep_the_reference_compatibility_value() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn audio_commands_project_canonical_sound_directory_resources() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     let snake = snake_compile_identity();
@@ -814,22 +816,29 @@ fn audio_commands_project_canonical_sound_directory_resources() {
 
     assert_audio_effect(
         &messages,
-        1,
+        AudioChannelV1::Bgm,
         AudioEffectAction::Play,
         Some("sound/theme.mp3"),
     );
     for resource in ["sound/door.mp3", "sound/knock.mp3"] {
-        assert_audio_effect(&messages, 0, AudioEffectAction::Play, Some(resource));
+        assert_audio_effect(
+            &messages,
+            AudioChannelV1::Sound(0),
+            AudioEffectAction::Play,
+            Some(resource),
+        );
     }
     for action in [AudioEffectAction::SetVolume, AudioEffectAction::Stop] {
-        assert_audio_effect(&messages, 0, action, None);
+        assert_audio_effect(&messages, AudioChannelV1::Sound(0), action, None);
     }
     let audio = session.presentation.snapshot().audio;
     assert_eq!(audio.len(), 1);
-    assert_eq!(audio[0].channel_id, 1);
+    assert_eq!(audio[0].channel, AudioChannelV1::Bgm);
     assert_eq!(audio[0].resource_id, "sound/theme.mp3");
     assert_eq!(audio[0].volume_millionths, 1_000_000);
-    assert!(audio[0].playing);
+    assert_eq!(audio[0].state, AudioPlaybackStateV1::Playing);
+    assert_eq!(audio[0].rate_millionths, 1_000_000);
+    assert!(audio[0].preserve_pitch);
     assert_audio_query_results(&session);
 }
 
@@ -851,7 +860,7 @@ fn assert_audio_query_results(session: &RuntimeSession) {
 
 fn assert_audio_effect(
     messages: &[RuntimeMessage],
-    channel_id: u64,
+    channel: AudioChannelV1,
     action: AudioEffectAction,
     resource_id: Option<&str>,
 ) {
@@ -862,14 +871,17 @@ fn assert_audio_effect(
                 if batch.effects.iter().any(|effect| matches!(
                     &effect.kind,
                     EffectKind::Audio(audio)
-                        if audio.channel_id == channel_id
+                        if audio.channel == channel
                             && audio.action == action
+                            && audio.revision > 0
+                            && audio.rate_millionths == 1_000_000
+                            && audio.preserve_pitch
                             && resource_id.is_none_or(|expected| {
                                 audio.resource_id.as_deref() == Some(expected)
                             })
                 ))
         )),
-        "missing channel {channel_id} {action:?} audio effect for {resource_id:?}: {messages:#?}"
+        "missing channel {channel:?} {action:?} audio effect for {resource_id:?}: {messages:#?}"
     );
 }
 

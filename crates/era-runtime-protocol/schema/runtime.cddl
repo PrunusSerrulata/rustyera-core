@@ -1,4 +1,4 @@
-; Runtime channel version: 45.0.
+; Runtime channel version: 46.0.
 ; RuntimeMessage is encoded as a minicbor enum [stable-tag, typed-body].
 runtime-message =
   [0, client-hello] /
@@ -33,8 +33,8 @@ runtime-message =
   [38, input-undo-state] /
   [40, presentation-snapshot] /
   [41, presentation-delta] /
-  [42, any] /
-  [43, any] /
+  [42, effect-batch] /
+  [43, effect-acknowledgement] /
   [50, storage-request] /
   [51, storage-response] /
   [52, service-request] /
@@ -265,7 +265,7 @@ get-line-geometry-v1-response = {
   0: projection-query-context, 1: uint, 2: int, 3: int, 4: int
 }
 presentation-snapshot = {
-  0: uint, 1: tstr, 2: presentation-history, 3: scene-state-v1, 4: [* any],
+  0: uint, 1: tstr, 2: presentation-history, 3: scene-state-v1, 4: [* audio-state],
   5: any / null, 6: presentation-settings, 7: any, 8: resource-replay,
   9: [* html-document], 10: redraw-state
 }
@@ -315,7 +315,7 @@ presentation-operation =
   [2, []] /
   [3, [tstr]] /
   [4, [scene-delta-v1]] /
-  [5, [[* any]]] /
+  [5, [[* audio-state]]] /
   [6, [any / null]] /
   [7, [uint, display-line]] /
   [8, [presentation-settings]] /
@@ -325,7 +325,31 @@ presentation-operation =
   [12, [redraw-state]] /
   [13, [uint]] /
   [14, [uint]]
-storage-request = { 0: uint, 1: uint, 2: tstr, 3: storage-operation, 4: tstr, 5: uint / null }
+audio-channel-v1 = [0, [0..9]] / [1, []]
+audio-playback-state-v1 = 0..2
+audio-state = {
+  0: audio-channel-v1, 1: tstr, 2: int, 3: uint,
+  4: audio-playback-state-v1, 5: uint, 6: uint, 7: bool
+}
+audio-effect-action = 0..5
+audio-effect = {
+  0: audio-channel-v1, 1: audio-effect-action, 2: tstr / null, 3: int,
+  4: uint, 5: uint, 6: uint, 7: bool
+}
+effect-kind =
+  [0, [audio-effect]] /
+  [1, [tstr]] /
+  [2, [{ 0: tstr, 1: bool }]] /
+  [3, [tstr, any]] /
+  [4, []] /
+  [5, [uint]]
+effect-event = { 0: uint, 1: effect-kind }
+effect-batch = { 0: [* effect-event] }
+effect-outcome-status = 0..2
+effect-outcome = { 0: uint, 1: effect-outcome-status, 2: tstr / null }
+effect-acknowledgement = { 0: [* effect-outcome] }
+storage-namespace = 0..6
+storage-request = { 0: uint, 1: storage-namespace, 2: tstr, 3: storage-operation, 4: tstr, 5: uint / null }
 storage-response = { 0: uint, 1: any }
 storage-operation =
   [0] /
@@ -337,6 +361,11 @@ storage-operation =
 storage-precondition = [0] / [1] / [2, tstr]
 service-request = { 0: uint, 1: service-kind, 2: tstr, 3: any, 4: bstr, 5: uint / null }
 service-response = { 0: uint, 1: any }
+audio-observation-request-v1 = { 0: audio-channel-v1, 1: uint }
+audio-observation-response-v1 = {
+  0: audio-channel-v1, 1: uint, 2: uint, 3: uint, 4: audio-playback-state-v1,
+  5: uint, 6: uint, 7: bool, 8: uint
+}
 sql-limits-v1 = {
   0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint,
   6: uint, 7: uint, 8: uint, 9: uint, 10: uint
@@ -392,6 +421,8 @@ sql-response-v1 = {
 ; Protocol 44 adds CBG hover/hit-map scene interactions and revision-bound line geometry.
 ; Protocol 45 makes scene document origins and every mutable resource dependency exact-revision
 ; bound, including historical replay closure.
+; Protocol 46 adds the read/delete-only legacy profile-save namespace, exact audio targets,
+; revisioned pause/resume/rate effects, and audio_observation v1 request/response payloads.
 ; It retains Protocol 41 safe SQL v1 payloads and ServiceKind 11 with the existing descriptor,
 ; digest, chunking, and cancellation flow. It retains Protocol 24 authoritative logs,
 ; Protocol 23 snapshot purposes, source-identity-first project loading,

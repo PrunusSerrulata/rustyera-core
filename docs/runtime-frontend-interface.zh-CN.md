@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `45.0`。源码入口：
+> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `46.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | C ABI 3.9 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
-| Runtime 协议 45.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
+| Runtime 协议 46.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
 
 破坏性变更必须提升相应版本，并同步 Schema、C 头、文档与测试。数字消息标记已经是
@@ -93,6 +93,8 @@ get_api → create → ClientHello → ServerHello
 
 所有结构均为 C 布局；未写入的 `reserved` 必须置零。`EraCallHeader` 字段是
 `struct_size: uint32_t` 和 `abi_version: { major: uint16_t, minor: uint16_t }`。
+头文件同时公开 `ERA_RUNTIME_PROTOCOL_MAJOR=46`、`ERA_RUNTIME_PROTOCOL_MINOR=0`；协议升级
+不改变 C 函数表形状，C 调用方仍通过 `session_submit/session_poll` 传输统一 CBOR 信封。
 
 | 类型 | 字段及含义 | 所有权/约束 |
 | --- | --- | --- |
@@ -576,7 +578,7 @@ SetButtonGeneration、TrimLines。
 | `PresentationSettings` | drawable_width、drawable_height、line_height、background、button_focus_foreground、maximum_physical_lines、prevent_button_wrap、legacy_nonbutton_wrap、text_line_background? |
 | `PresentationHistory` | logical_lines 和可重放 operations；snapshot 不是无限审计日志 |
 | `RedrawState` | enabled |
-| `AudioState` | channel_id、resource_id、repeat_count、volume_millionths、playing、revision |
+| `AudioState` | `Sound(0..9)`/`Bgm` target、resource_id、repeat_count、volume_millionths、Stopped/Playing/Paused、revision、rate_millionths、preserve_pitch |
 | `TooltipSettings` | foreground/background、delay_ms、duration_ms、font、font_millipoints、custom、原始 format、images、normalized_format |
 
 `DisplayRun` 变体：
@@ -703,8 +705,11 @@ text_box_layout}`；layout 的 width=0 表示配置默认宽度。
 effect 是短暂命令，不替代 snapshot 中可恢复的 audio/scene 状态。`EffectBatch` 含
 `EffectEvent {effect_id, kind}`；kind 是 Audio、StartAnimation、Video、
 Extension(name,value)、OpenConfiguration、PresentNow{presentation_revision}。
-Audio 字段为 channel、Play/Stop/SetVolume、resource?、repeat_count、
-volume_millionths；Video 是 resource/skippable。
+Audio target 是 `Sound(0..9)` 或独立的 `Bgm`；effect 字段为 target、
+Play/Stop/SetVolume/Pause/Resume/SetRate、resource?、repeat_count、volume_millionths、
+revision、rate_millionths 与 preserve_pitch。一次性 sound 仍是短暂 effect；可恢复的 BGM
+期望状态留在 presentation snapshot。前端必须按 target/revision 应用，不能把迟到 effect
+覆盖到新一代播放器状态。Video 是 resource/skippable。
 
 每个已知 effect ID 只能在一个 `EffectAcknowledgement` 中出现一次，outcome 为
 Completed/Failed/Cancelled 和可空 message。未知、重复结果会被拒绝；非 Completed
@@ -715,7 +720,9 @@ Completed/Failed/Cancelled 和可空 message。未知、重复结果会被拒绝
 ### 9.1 Storage
 
 所有实际文件 I/O 都由前端完成。namespace：Project、Save、GlobalSave、Data、Log、
-Resource。`StorageRequest` 字段为 `request_id, namespace, relative_path, operation,
+Resource、LegacyProfileSave。最后一项只用于读取或删除旧 profile 私有存档，允许
+Read/List/Stat/ReadRange/Delete，禁止 Write；新的权威存档只能写 Save/GlobalSave。
+`StorageRequest` 字段为 `request_id, namespace, relative_path, operation,
 idempotency_key, deadline_ns?`。同一幂等键重试必须具有相同效果。
 
 operation：
@@ -766,6 +773,7 @@ Error{code,message}。不要返回 JSON、平台对象或错误栈。
 | Canvas | `sample_canvas_pixel` | context + canvas/revision/point → context + revision/ARGB |
 | Canvas | `decode_canvas_image` | encoded bytes → width/height |
 | Canvas | `encode_canvas_png` | canvas/revision → encoded bytes |
+| Audio | `audio_observation` | `AudioObservationRequestV1` → `AudioObservationResponseV1` |
 | Sql | `rustyera.sql` | `SqlRequestV1` → `SqlResponseV1` |
 | Extension | 动态声明的 operation | `ExtensionInvocation` → `ExtensionResult` |
 
@@ -778,6 +786,11 @@ index 不跨边界，runtime 验证响应的三个 revision 与 line_id 后计�
 `ServiceFailure`；少数宿主路径有源码明确的兼容降级，因此前端仍应返回真实 Error，
 不能自行伪造成功。
 
+`Audio/audio_observation@1.0` 请求携带 `Sound(0..9)`/`Bgm` target 与 expected revision；
+响应原样携带 target/revision、整数毫秒 duration/position、Stopped/Playing/Paused、
+millionths 音量与速率、preserve-pitch 和前端单调时间戳。target 或 revision 不一致是 stale
+response，不能提交给 VM；时间戳只排序外部观察，不推进逻辑游戏时间。
+
 `Sql/rustyera.sql@1.0` 是蛇版兼容身份要求的安全 SQL 服务。协议只传 session epoch 限定的
 provider/connection/reader 逻辑句柄、项目 Resource ID 与摘要、不可变数据库修订和类型化
 `Null/Integer/String` 值；不得传操作系统路径、任意连接字符串或 provider 原生句柄。请求
@@ -788,11 +801,15 @@ provider/connection/reader 逻辑句柄、项目 Resource ID 与摘要、不可�
 8 MiB 参数总量、1 MiB 单元格、64 MiB 单数据库、100,000 行/8 MiB MAP 数据、1,000,000
 reader 行与 5 秒 provider 执行预算。
 
-蛇版 profile semantic/policy v10 同时固定 `rustyera.sql@1` 与
-`rustyera.sql.limits@1` 身份；这两个服务身份参与项目与编译缓存 key。前端没有精确协商
+蛇版 profile semantic/policy v12 固定 `rustyera.sql@1`、`rustyera.sql.limits@1`、
+`rustyera.scene@1` 与 `rustyera.audio@1`，`save_codec` 为
+`snake_emuera1808_interop_v1`；这些字段参与项目、缓存和 snapshot identity。该 v12 identity
+约定标准传统存档不拥有 GLOBAL、SFMT RNG 或 SQL revision，精确 SQL/RNG 仍只属于 VM
+snapshot；实际 codec 路由与编解码在子批次 5.2 接入。精确 v11
+identity（`rustyera_envelope_v2:emuera1808` + `rustyera.save_state@1`）只供旧 RERASAV
+迁移解码器识别，不是当前可写 identity。前端没有精确协商
 `Sql/rustyera.sql@1.0` 时，兼容身份解析和项目加载会在读取项目源码、storage 或缓存前返回
-`runtime.missing_sql_service`。当前 3.1 仅建立协议、编译目录和加载前门禁；runtime-owned
-SQL 调度与 provider 生命周期由后续子批次接入。
+`runtime.missing_sql_service`；音频服务的实际查询门禁由音频运行时接入阶段执行。
 
 ### 9.3 状态传输
 

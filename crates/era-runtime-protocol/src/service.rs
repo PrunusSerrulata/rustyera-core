@@ -39,6 +39,30 @@ pub enum StorageNamespace {
     Log,
     #[n(5)]
     Resource,
+    /// Read/delete-only access to the former profile-private save directory.
+    #[n(6)]
+    LegacyProfileSave,
+}
+
+impl StorageNamespace {
+    /// Whether this namespace permits the requested operation.
+    ///
+    /// Legacy profile saves are migration inputs: they can be inspected or deleted after a
+    /// successful migration, but new data must never be written back to that namespace.
+    #[must_use]
+    pub const fn permits(self, operation: &StorageOperation) -> bool {
+        match self {
+            Self::LegacyProfileSave => matches!(
+                operation,
+                StorageOperation::Read
+                    | StorageOperation::List { .. }
+                    | StorageOperation::Delete { .. }
+                    | StorageOperation::Stat
+                    | StorageOperation::ReadRange { .. }
+            ),
+            _ => true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -230,6 +254,8 @@ pub const LOCAL_DATE_TIME_OPERATION: &str = "local_date_time";
 pub const LOCAL_DATE_TIME_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const RANDOM_SEED_OPERATION: &str = "random_seed";
 pub const RANDOM_SEED_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const AUDIO_OBSERVATION_OPERATION: &str = "audio_observation";
+pub const AUDIO_OBSERVATION_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const IMAGE_METADATA_OPERATION: &str = "image_metadata";
 pub const IMAGE_METADATA_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const IMAGE_PIXEL_OPERATION: &str = "image_pixel";

@@ -5,7 +5,7 @@ mod text;
 use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use crate::{InputWait, InteractionToken};
+use crate::{AudioChannelV1, AudioPlaybackStateV1, InputWait, InteractionToken};
 
 pub use replay::{
     CanvasReplay, CanvasReplayCommand, PresentationSnapshot, ResourceReplay, SpriteFrameReplay,
@@ -429,7 +429,7 @@ pub struct RedrawState {
 #[cbor(map)]
 pub struct AudioState {
     #[n(0)]
-    pub channel_id: u64,
+    pub channel: AudioChannelV1,
     #[n(1)]
     pub resource_id: String,
     #[n(2)]
@@ -437,9 +437,13 @@ pub struct AudioState {
     #[n(3)]
     pub volume_millionths: u32,
     #[n(4)]
-    pub playing: bool,
+    pub state: AudioPlaybackStateV1,
     #[n(5)]
     pub revision: u64,
+    #[n(6)]
+    pub rate_millionths: u32,
+    #[n(7)]
+    pub preserve_pitch: bool,
 }
 
 /// Canonical tooltip policy. A frontend may project the font and timing to its
