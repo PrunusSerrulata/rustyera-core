@@ -1,4 +1,4 @@
-//! Profile ownership around existing codecs, without altering the Emuera 1808 wire format.
+//! Read-only migration support around the interoperable Emuera 1808 wire format.
 
 use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
 
@@ -25,79 +25,8 @@ fn envelope_checksum(bytes: &[u8]) -> Result<blake3::Hash, SaveCodecError> {
     Ok(checksum.finalize())
 }
 
-/// Preserve reference interoperability or wrap a snake save with its exact policy identity.
-///
-/// # Errors
-/// Returns an error for unsupported identities, encoding failures, or size limits.
-pub fn wrap_compatible_save(
-    payload: Vec<u8>,
-    identity: &CompatibilityIdentity,
-    limits: SaveCodecLimits,
-) -> Result<Vec<u8>, SaveCodecError> {
-    wrap_compatible_save_with_state(payload, &[], identity, limits)
-}
-
-/// Preserve reference bytes or wrap a snake save with canonical runtime-owned state.
-///
-/// The state is deliberately opaque to the traditional codec crate. Its caller owns the
-/// canonical schema, while this envelope authenticates the identity, state, and legacy payload
-/// as one unit.
-///
-/// # Errors
-/// Returns an error for unsupported identities or size limits.
-pub fn wrap_compatible_save_with_state(
-    payload: Vec<u8>,
-    state: &[u8],
-    identity: &CompatibilityIdentity,
-    limits: SaveCodecLimits,
-) -> Result<Vec<u8>, SaveCodecError> {
-    identity
-        .validate()
-        .map_err(|error| invalid(error.to_string()))?;
-    if payload.len() > limits.maximum_bytes {
-        return Err(SaveCodecError::LimitExceeded("maximum bytes"));
-    }
-    if identity.profile == CompatibilityProfileId::EmueraEm {
-        if !state.is_empty() {
-            return Err(invalid(
-                "reference-compatible saves cannot carry runtime-owned state",
-            ));
-        }
-        return Ok(payload);
-    }
-    let encoded = minicbor::to_vec(identity).map_err(|error| invalid(error.to_string()))?;
-    let total = HEADER_BYTES
-        .checked_add(encoded.len())
-        .and_then(|size| size.checked_add(state.len()))
-        .and_then(|size| size.checked_add(payload.len()))
-        .ok_or(SaveCodecError::LimitExceeded("maximum bytes"))?;
-    if encoded.len() > MAXIMUM_IDENTITY_BYTES || total > limits.maximum_bytes {
-        return Err(SaveCodecError::LimitExceeded("maximum bytes"));
-    }
-    let mut result = Vec::with_capacity(total);
-    result.extend_from_slice(MAGIC);
-    result.extend_from_slice(&VERSION.to_le_bytes());
-    result.extend_from_slice(
-        &u32::try_from(encoded.len())
-            .unwrap_or(u32::MAX)
-            .to_le_bytes(),
-    );
-    result.extend_from_slice(&u64::try_from(state.len()).unwrap_or(u64::MAX).to_le_bytes());
-    result.extend_from_slice(
-        &u64::try_from(payload.len())
-            .unwrap_or(u64::MAX)
-            .to_le_bytes(),
-    );
-    result.extend_from_slice(&[0; 32]);
-    result.extend_from_slice(&encoded);
-    result.extend_from_slice(state);
-    result.extend_from_slice(&payload);
-    let checksum = envelope_checksum(&result)?;
-    result[32..HEADER_BYTES].copy_from_slice(checksum.as_bytes());
-    Ok(result)
-}
-
 struct EnvelopePrefix<'a> {
+    identity: CompatibilityIdentity,
     state: &'a [u8],
     payload: &'a [u8],
     expected_state_bytes: usize,
@@ -105,12 +34,11 @@ struct EnvelopePrefix<'a> {
     checksum: &'a [u8],
 }
 
-fn envelope_prefix<'a>(
-    bytes: &'a [u8],
-    identity: &CompatibilityIdentity,
+fn envelope_prefix(
+    bytes: &[u8],
     complete: bool,
     limits: SaveCodecLimits,
-) -> Result<Option<EnvelopePrefix<'a>>, SaveCodecError> {
+) -> Result<Option<EnvelopePrefix<'_>>, SaveCodecError> {
     if bytes.len() > limits.maximum_bytes {
         return Err(SaveCodecError::LimitExceeded("maximum bytes"));
     }
@@ -170,15 +98,8 @@ fn envelope_prefix<'a>(
     if canonical.as_slice() != &bytes[HEADER_BYTES..start] {
         return Err(invalid("save identity is not encoded canonically"));
     }
-    received
-        .validate()
-        .map_err(|error| invalid(error.to_string()))?;
-    if &received != identity {
-        return Err(invalid(format!(
-            "save compatibility differs: expected {identity:?}, received {received:?}"
-        )));
-    }
     Ok(Some(EnvelopePrefix {
+        identity: received,
         state: &bytes[start..payload_start.min(bytes.len())],
         payload: &bytes[payload_start.min(bytes.len())..],
         expected_state_bytes: state_bytes,
@@ -187,17 +108,29 @@ fn envelope_prefix<'a>(
     }))
 }
 
-/// Validated profile-owned envelope contents.
+/// Validated interoperable bytes or exact read-only legacy migration envelope contents.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CompatibleSaveEnvelope<'a> {
     pub state: &'a [u8],
     pub payload: &'a [u8],
+    pub source: CompatibleSaveSource,
+}
+
+/// Origin of bytes accepted by the compatibility boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompatibleSaveSource {
+    /// Bare Emuera 1808 bytes. The envelope boundary is shared; profile-specific Text layouts
+    /// are selected later by the runtime adapter.
+    Interoperable1808,
+    /// Exact snake identity 11 `RERASAV` v2 input retained for one-way migration.
+    LegacySnakeOwnedV11,
 }
 
 /// Validate ownership and checksum before exposing both runtime state and legacy payload.
 ///
 /// # Errors
-/// Rejects bare snake saves, old envelopes, wrong identities, corruption, and limits.
+/// Accepts bare Emuera 1808 bytes for current profiles and the exact snake-v11 migration
+/// envelope in a current snake session. Every other envelope identity is rejected.
 pub fn unwrap_compatible_envelope<'a>(
     bytes: &'a [u8],
     identity: &CompatibilityIdentity,
@@ -210,32 +143,36 @@ pub fn unwrap_compatible_envelope<'a>(
         return Err(SaveCodecError::LimitExceeded("maximum bytes"));
     }
     if !bytes.starts_with(MAGIC) {
-        return if identity.profile == CompatibilityProfileId::EmueraEm {
-            Ok(CompatibleSaveEnvelope {
-                state: &[],
-                payload: bytes,
-            })
-        } else {
-            Err(invalid(
-                "emuera.skia.snake requires a profile-owned save envelope; legacy import is unsupported",
-            ))
-        };
+        return Ok(CompatibleSaveEnvelope {
+            state: &[],
+            payload: bytes,
+            source: CompatibleSaveSource::Interoperable1808,
+        });
     }
-    let prefix = envelope_prefix(bytes, identity, true, limits)?
-        .ok_or_else(|| invalid("truncated save envelope"))?;
+    let prefix =
+        envelope_prefix(bytes, true, limits)?.ok_or_else(|| invalid("truncated save envelope"))?;
+    if identity.profile != CompatibilityProfileId::EmueraSkiaSnake
+        || !prefix.identity.is_legacy_snake_owned_save_v11()
+    {
+        return Err(invalid(format!(
+            "save compatibility differs: current profile is {identity:?}, envelope is {:?}",
+            prefix.identity
+        )));
+    }
     if envelope_checksum(bytes)?.as_bytes() != prefix.checksum {
         return Err(invalid("save envelope checksum differs"));
     }
     Ok(CompatibleSaveEnvelope {
         state: prefix.state,
         payload: prefix.payload,
+        source: CompatibleSaveSource::LegacySnakeOwnedV11,
     })
 }
 
 /// Validate identity and checksum before exposing the original codec bytes.
 ///
 /// # Errors
-/// Rejects wrong profiles, legacy saves in snake sessions, malformed envelopes, and limits.
+/// Rejects unsupported envelopes, corruption, and limits.
 pub fn unwrap_compatible_save<'a>(
     bytes: &'a [u8],
     identity: &CompatibilityIdentity,
@@ -265,9 +202,17 @@ pub fn inspect_compatible_metadata(
         let raw = unwrap_compatible_save(bytes, identity, limits)?;
         return inspect_metadata(raw, complete, limits);
     }
-    let Some(prefix) = envelope_prefix(bytes, identity, complete, limits)? else {
+    let Some(prefix) = envelope_prefix(bytes, complete, limits)? else {
         return Ok(SaveMetadataInspection::NeedMore);
     };
+    if identity.profile != CompatibilityProfileId::EmueraSkiaSnake
+        || !prefix.identity.is_legacy_snake_owned_save_v11()
+    {
+        return Err(invalid(format!(
+            "save compatibility differs: current profile is {identity:?}, envelope is {:?}",
+            prefix.identity
+        )));
+    }
     if prefix.state.len() != prefix.expected_state_bytes
         || prefix.payload.len() != prefix.expected_payload_bytes
     {
@@ -283,13 +228,36 @@ pub fn inspect_compatible_metadata(
 mod tests {
     use super::*;
 
+    fn envelope_for(identity: &CompatibilityIdentity, payload: &[u8], state: &[u8]) -> Vec<u8> {
+        let encoded = minicbor::to_vec(identity).unwrap();
+        let mut result = Vec::new();
+        result.extend_from_slice(MAGIC);
+        result.extend_from_slice(&VERSION.to_le_bytes());
+        result.extend_from_slice(&u32::try_from(encoded.len()).unwrap().to_le_bytes());
+        result.extend_from_slice(&u64::try_from(state.len()).unwrap().to_le_bytes());
+        result.extend_from_slice(&u64::try_from(payload.len()).unwrap().to_le_bytes());
+        result.extend_from_slice(&[0; 32]);
+        result.extend_from_slice(&encoded);
+        result.extend_from_slice(state);
+        result.extend_from_slice(payload);
+        let checksum = envelope_checksum(&result).unwrap();
+        result[32..HEADER_BYTES].copy_from_slice(checksum.as_bytes());
+        result
+    }
+
+    fn legacy_envelope(payload: &[u8], state: &[u8]) -> Vec<u8> {
+        envelope_for(
+            &CompatibilityIdentity::legacy_snake_owned_save_v11(),
+            payload,
+            state,
+        )
+    }
+
     #[test]
     fn unknown_envelope_and_policy_versions_reject_before_payload_use() {
         let snake = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
         let limits = SaveCodecLimits::default();
-        let encoded =
-            wrap_compatible_save_with_state(b"1\n2\nfixture\n".to_vec(), b"state", &snake, limits)
-                .unwrap();
+        let encoded = legacy_envelope(b"1\n2\nfixture\n", b"state");
         let mut unknown_version = encoded.clone();
         unknown_version[8..12].copy_from_slice(&1_u32.to_le_bytes());
         for complete in [false, true] {
@@ -319,9 +287,8 @@ mod tests {
         assert!(unwrap_compatible_envelope(&legacy_v1, &snake, limits).is_err());
         assert!(inspect_compatible_metadata(&legacy_v1, true, &snake, limits).is_err());
 
-        let mut unsupported = snake.clone();
+        let mut unsupported = CompatibilityIdentity::legacy_snake_owned_save_v11();
         unsupported.policy_version += 1;
-        assert!(wrap_compatible_save(Vec::new(), &unsupported, limits).is_err());
         let identity_bytes = minicbor::to_vec(&unsupported).unwrap();
         let previous_len = u32::from_le_bytes(encoded[12..16].try_into().unwrap()) as usize;
         let mut unknown_policy = encoded[..HEADER_BYTES].to_vec();
@@ -338,6 +305,9 @@ mod tests {
                 inspect_compatible_metadata(&unknown_policy, complete, &snake, limits).is_err()
             );
         }
+
+        let current_identity = envelope_for(&snake, b"1\n2\ncurrent\n", b"state");
+        assert!(unwrap_compatible_envelope(&current_identity, &snake, limits).is_err());
     }
 
     #[test]
@@ -347,23 +317,20 @@ mod tests {
         let limits = SaveCodecLimits::default();
         let raw = b"1\n2\nfixture\n".to_vec();
         assert_eq!(
-            wrap_compatible_save(raw.clone(), &reference, limits).unwrap(),
+            unwrap_compatible_save(&raw, &reference, limits).unwrap(),
             raw
         );
-        assert!(
-            wrap_compatible_save_with_state(raw.clone(), b"state", &reference, limits).is_err()
-        );
-        assert!(unwrap_compatible_save(&raw, &snake, limits).is_err());
-        let encoded = wrap_compatible_save(raw.clone(), &snake, limits).unwrap();
+        assert_eq!(unwrap_compatible_save(&raw, &snake, limits).unwrap(), raw);
+        let encoded = legacy_envelope(&raw, b"canonical-owned-state");
         assert_eq!(
             unwrap_compatible_save(&encoded, &snake, limits).unwrap(),
             raw
         );
-        assert!(
+        assert_eq!(
             unwrap_compatible_envelope(&encoded, &snake, limits)
                 .unwrap()
-                .state
-                .is_empty()
+                .source,
+            CompatibleSaveSource::LegacySnakeOwnedV11
         );
         assert!(unwrap_compatible_save(&encoded, &reference, limits).is_err());
         for length in 0..encoded.len() {
@@ -382,8 +349,7 @@ mod tests {
             SaveMetadataInspection::Complete { .. }
         ));
 
-        let owned =
-            wrap_compatible_save_with_state(raw, b"canonical-owned-state", &snake, limits).unwrap();
+        let owned = encoded;
         let decoded = unwrap_compatible_envelope(&owned, &snake, limits).unwrap();
         assert_eq!(decoded.state, b"canonical-owned-state");
         assert_eq!(decoded.payload, b"1\n2\nfixture\n");
@@ -399,7 +365,8 @@ mod tests {
             assert!(unwrap_compatible_envelope(&damaged_boundary, &snake, limits).is_err());
         }
 
-        let canonical_identity = minicbor::to_vec(&snake).unwrap();
+        let canonical_identity =
+            minicbor::to_vec(CompatibilityIdentity::legacy_snake_owned_save_v11()).unwrap();
         assert!(canonical_identity[0] & 0xe0 == 0xa0);
         let mut noncanonical_identity = canonical_identity;
         noncanonical_identity[0] = 0xbf;

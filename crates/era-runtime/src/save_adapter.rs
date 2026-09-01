@@ -123,6 +123,7 @@ pub(crate) struct DecodedEraSave {
     pub(crate) opaque_extensions: Vec<OpaqueSaveExtension>,
     pub(crate) structured_extensions: Vec<StructuredExtension>,
     pub(crate) owned_state: Option<DecodedOwnedSaveState>,
+    pub(crate) source: era_runtime_save::CompatibleSaveSource,
 }
 
 pub(crate) struct DecodedOwnedSaveState {
@@ -178,12 +179,21 @@ pub(crate) fn decode_scoped_save(
         &artifact.manifest.compatibility,
         SaveCodecLimits::default(),
     )?;
-    let mut decoded = decode_scoped_payload(envelope.payload, artifact, kind)?;
-    match (artifact.manifest.compatibility.profile, kind) {
-        (CompatibilityProfileId::EmueraSkiaSnake, SaveFileKind::Normal) => {
+    let dialect = match envelope.source {
+        era_runtime_save::CompatibleSaveSource::Interoperable1808 => {
+            Text1808Dialect::for_current_artifact(artifact)
+        }
+        era_runtime_save::CompatibleSaveSource::LegacySnakeOwnedV11 => {
+            Text1808Dialect::LegacyRustyEraOwnedV11
+        }
+    };
+    let mut decoded = decode_scoped_payload(envelope.payload, artifact, kind, dialect)?;
+    decoded.source = envelope.source;
+    match (envelope.source, kind) {
+        (era_runtime_save::CompatibleSaveSource::LegacySnakeOwnedV11, SaveFileKind::Normal) => {
             if envelope.state.is_empty() {
                 return Err(SaveCodecError::InvalidFormat(
-                    "snake ordinary save is missing OwnedSaveStateV1".into(),
+                    "legacy snake ordinary save is missing OwnedSaveStateV1".into(),
                 ));
             }
             let owned = decode_owned_state(envelope.state, artifact)?;
@@ -196,9 +206,11 @@ pub(crate) fn decode_scoped_save(
             }
             decoded.owned_state = Some(owned);
         }
-        (CompatibilityProfileId::EmueraSkiaSnake, _) if !envelope.state.is_empty() => {
+        (era_runtime_save::CompatibleSaveSource::LegacySnakeOwnedV11, _)
+            if !envelope.state.is_empty() =>
+        {
             return Err(SaveCodecError::InvalidFormat(
-                "scoped snake save unexpectedly contains ordinary owned state".into(),
+                "scoped legacy snake save unexpectedly contains ordinary owned state".into(),
             ));
         }
         _ => {}
@@ -210,13 +222,14 @@ fn decode_scoped_payload(
     bytes: &[u8],
     artifact: &BytecodeArtifact,
     kind: SaveFileKind,
+    dialect: Text1808Dialect,
 ) -> Result<DecodedEraSave, SaveCodecError> {
     let document = if bytes.starts_with(&[0x89]) {
         decode_sparse(bytes, SaveCodecLimits::default())?
     } else {
         decode_text_with_layout(
             bytes,
-            &text_layout(artifact, kind)?,
+            &text_layout(artifact, kind, dialect)?,
             SaveCodecLimits::default(),
         )?
     };
@@ -244,6 +257,7 @@ fn decode_scoped_payload(
         opaque_extensions,
         structured_extensions,
         owned_state: None,
+        source: era_runtime_save::CompatibleSaveSource::Interoperable1808,
     })
 }
 
@@ -266,6 +280,7 @@ fn decode_owned_state(
         state.global_payload.as_ref(),
         artifact,
         SaveFileKind::Global,
+        Text1808Dialect::LegacyRustyEraOwnedV11,
     )?;
     Ok(DecodedOwnedSaveState {
         global_state: global.state,
@@ -466,26 +481,17 @@ pub(crate) fn encode_era_save(
     opaque_extensions: Vec<OpaqueSaveExtension>,
     format: SaveFormat,
 ) -> Result<Vec<u8>, SaveCodecError> {
-    if artifact.manifest.compatibility.profile == CompatibilityProfileId::EmueraSkiaSnake {
-        return Err(SaveCodecError::InvalidFormat(
-            "snake ordinary saves require canonical OwnedSaveStateV1".into(),
-        ));
-    }
-    let payload = encode_scoped_payload(
+    encode_scoped_payload(
         state,
         artifact,
         SaveFileKind::Normal,
         description,
         opaque_extensions,
         format,
-    )?;
-    era_runtime_save::wrap_compatible_save(
-        payload,
-        &artifact.manifest.compatibility,
-        SaveCodecLimits::default(),
     )
 }
 
+#[cfg(test)]
 pub(crate) fn encode_owned_era_save(
     state: &EraState,
     artifact: &BytecodeArtifact,
@@ -495,27 +501,71 @@ pub(crate) fn encode_owned_era_save(
     format: SaveFormat,
 ) -> Result<Vec<u8>, SaveCodecError> {
     if artifact.manifest.compatibility.profile != CompatibilityProfileId::EmueraSkiaSnake {
-        return encode_era_save(state, artifact, description, opaque_extensions, format);
+        return Err(SaveCodecError::InvalidFormat(
+            "legacy owned-save fixtures require the snake profile".into(),
+        ));
     }
     validate_owned_state(owned_state)?;
-    let payload = encode_scoped_payload(
+    let payload = encode_scoped_payload_with_layout_flavor(
         state,
         artifact,
         SaveFileKind::Normal,
         description,
         opaque_extensions,
         format,
+        Text1808Dialect::LegacyRustyEraOwnedV11,
     )?;
     let owned_state = era_protocol::encode_canonical(owned_state)
         .map_err(|error| SaveCodecError::InvalidFormat(error.to_string()))?;
-    era_runtime_save::wrap_compatible_save_with_state(
-        payload,
-        &owned_state,
-        &artifact.manifest.compatibility,
-        SaveCodecLimits::default(),
-    )
+    encode_legacy_owned_envelope_for_test(&payload, &owned_state)
 }
 
+#[cfg(test)]
+fn encode_legacy_owned_envelope_for_test(
+    payload: &[u8],
+    state: &[u8],
+) -> Result<Vec<u8>, SaveCodecError> {
+    const MAGIC: &[u8; 8] = b"RERASAV\0";
+    const HEADER_BYTES: usize = 64;
+    const CHECKSUM_DOMAIN: &[u8] = b"rustyera.rerasav.envelope.v2\0";
+    let identity = erabasic_compat::CompatibilityIdentity::legacy_snake_owned_save_v11();
+    let encoded = minicbor::to_vec(identity)
+        .map_err(|error| SaveCodecError::InvalidFormat(error.to_string()))?;
+    let total = HEADER_BYTES
+        .checked_add(encoded.len())
+        .and_then(|size| size.checked_add(state.len()))
+        .and_then(|size| size.checked_add(payload.len()))
+        .ok_or(SaveCodecError::LimitExceeded("maximum bytes"))?;
+    if total > SaveCodecLimits::default().maximum_bytes {
+        return Err(SaveCodecError::LimitExceeded("maximum bytes"));
+    }
+    let mut result = Vec::with_capacity(total);
+    result.extend_from_slice(MAGIC);
+    result.extend_from_slice(&2_u32.to_le_bytes());
+    result.extend_from_slice(
+        &u32::try_from(encoded.len())
+            .unwrap_or(u32::MAX)
+            .to_le_bytes(),
+    );
+    result.extend_from_slice(&u64::try_from(state.len()).unwrap_or(u64::MAX).to_le_bytes());
+    result.extend_from_slice(
+        &u64::try_from(payload.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    result.extend_from_slice(&[0; 32]);
+    result.extend_from_slice(&encoded);
+    result.extend_from_slice(state);
+    result.extend_from_slice(payload);
+    let mut checksum = blake3::Hasher::new();
+    checksum.update(CHECKSUM_DOMAIN);
+    checksum.update(&result[..32]);
+    checksum.update(&result[HEADER_BYTES..]);
+    result[32..HEADER_BYTES].copy_from_slice(checksum.finalize().as_bytes());
+    Ok(result)
+}
+
+#[cfg(test)]
 pub(crate) fn encode_scoped_save_payload(
     state: &EraState,
     artifact: &BytecodeArtifact,
@@ -541,6 +591,26 @@ fn encode_scoped_payload(
     description: String,
     opaque_extensions: Vec<OpaqueSaveExtension>,
     format: SaveFormat,
+) -> Result<Vec<u8>, SaveCodecError> {
+    encode_scoped_payload_with_layout_flavor(
+        state,
+        artifact,
+        kind,
+        description,
+        opaque_extensions,
+        format,
+        Text1808Dialect::for_current_artifact(artifact),
+    )
+}
+
+fn encode_scoped_payload_with_layout_flavor(
+    state: &EraState,
+    artifact: &BytecodeArtifact,
+    kind: SaveFileKind,
+    description: String,
+    opaque_extensions: Vec<OpaqueSaveExtension>,
+    format: SaveFormat,
+    dialect: Text1808Dialect,
 ) -> Result<Vec<u8>, SaveCodecError> {
     let encoded_characters = state
         .characters
@@ -572,7 +642,7 @@ fn encode_scoped_payload(
     if format == SaveFormat::Text1808 {
         encode_text_with_layout(
             &document,
-            &text_layout(artifact, kind)?,
+            &text_layout(artifact, kind, dialect)?,
             SaveCodecLimits::default(),
         )
     } else {
@@ -588,38 +658,40 @@ pub(crate) fn encode_scoped_save(
     opaque_extensions: Vec<OpaqueSaveExtension>,
     format: SaveFormat,
 ) -> Result<Vec<u8>, SaveCodecError> {
-    if kind == SaveFileKind::Normal
-        && artifact.manifest.compatibility.profile == CompatibilityProfileId::EmueraSkiaSnake
-    {
-        return Err(SaveCodecError::InvalidFormat(
-            "snake ordinary saves require canonical OwnedSaveStateV1".into(),
-        ));
-    }
-    let payload = encode_scoped_payload(
+    encode_scoped_payload(
         state,
         artifact,
         kind,
         description,
         opaque_extensions,
         format,
-    )?;
-    era_runtime_save::wrap_compatible_save(
-        payload,
-        &artifact.manifest.compatibility,
-        SaveCodecLimits::default(),
     )
 }
 
 fn text_layout(
     artifact: &BytecodeArtifact,
     kind: SaveFileKind,
+    dialect: Text1808Dialect,
 ) -> Result<Text1808Layout, SaveCodecError> {
     let mut base_variables = Vec::new();
     let mut base_character_variables = Vec::new();
-    // The first eight dictionaries are Emuera built-ins. Version 1808 appends six user-defined
-    // array dictionaries (string/integer for ranks one through three).
-    let mut extended_groups = vec![Vec::new(); 14];
-    let mut extended_character_groups = vec![Vec::new(); 6];
+    // Ordinary saves begin with eight built-in String/Integer dictionaries. Version 1808 then
+    // appends user arrays for ranks one through three. Snake inserts one Float dictionary after
+    // each user String/Integer pair; the empty placeholders keep later supported groups aligned.
+    let extended_count = dialect.shared_group_count(kind);
+    let character_count = dialect.character_group_count();
+    let mut extended_groups = vec![Vec::new(); extended_count];
+    let mut extended_character_groups = vec![Vec::new(); character_count];
+    let mut unsupported_extended_groups = vec![false; extended_count];
+    let mut unsupported_extended_character_groups = vec![false; character_count];
+    if dialect == Text1808Dialect::Snake1808 {
+        for index in dialect.float_shared_groups(kind) {
+            unsupported_extended_groups[*index] = true;
+        }
+        for index in dialect.float_character_groups() {
+            unsupported_extended_character_groups[*index] = true;
+        }
+    }
     for definition in &artifact.globals {
         let schema = artifact
             .project_data
@@ -649,7 +721,7 @@ fn text_layout(
             }
             if matches!(definition.name.as_str(), "GLOBAL" | "GLOBALS") {
                 base_variables.push(variable);
-            } else if let Some(index) = extended_group(&variable) {
+            } else if let Some(index) = dialect.global_group(&variable) {
                 extended_groups[index].push(variable);
             }
             continue;
@@ -671,14 +743,22 @@ fn text_layout(
         } else if let Some(index) = extended_group(&variable) {
             if character {
                 // Reference text saves never added the later binary-only user character section.
-                if !user_defined && index < extended_character_groups.len() {
-                    extended_character_groups[index].push(variable);
+                if !user_defined {
+                    let character_index = if dialect == Text1808Dialect::Snake1808 {
+                        dialect.character_group(&variable)
+                    } else {
+                        Some(index)
+                    };
+                    if let Some(index) = character_index
+                        && index < extended_character_groups.len()
+                    {
+                        extended_character_groups[index].push(variable);
+                    }
                 }
             } else if user_defined && !variable.dimensions.is_empty() {
-                let user_index = 8
-                    + (variable.dimensions.len() - 1) * 2
-                    + usize::from(variable.value_type == Text1808ValueType::Integer);
-                extended_groups[user_index].push(variable);
+                if let Some(user_index) = dialect.user_shared_group(&variable) {
+                    extended_groups[user_index].push(variable);
+                }
             } else {
                 extended_groups[index].push(variable);
             }
@@ -690,7 +770,88 @@ fn text_layout(
         base_character_variables,
         extended_groups,
         extended_character_groups,
+        unsupported_extended_groups,
+        unsupported_extended_character_groups,
     })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Text1808Dialect {
+    Reference1808,
+    Snake1808,
+    LegacyRustyEraOwnedV11,
+}
+
+impl Text1808Dialect {
+    fn for_current_artifact(artifact: &BytecodeArtifact) -> Self {
+        if artifact.manifest.compatibility.profile == CompatibilityProfileId::EmueraSkiaSnake {
+            Self::Snake1808
+        } else {
+            Self::Reference1808
+        }
+    }
+
+    const fn shared_group_count(self, kind: SaveFileKind) -> usize {
+        match (self, kind) {
+            (Self::Snake1808, SaveFileKind::Global) => 9,
+            (Self::Snake1808, _) => 17,
+            (Self::Reference1808, SaveFileKind::Global) => 6,
+            (Self::Reference1808 | Self::LegacyRustyEraOwnedV11, _) => 14,
+        }
+    }
+
+    const fn character_group_count(self) -> usize {
+        match self {
+            Self::Snake1808 => 9,
+            Self::Reference1808 | Self::LegacyRustyEraOwnedV11 => 6,
+        }
+    }
+
+    const fn float_shared_groups(self, kind: SaveFileKind) -> &'static [usize] {
+        match (self, kind) {
+            (Self::Snake1808, SaveFileKind::Global) => &[2, 5, 8],
+            (Self::Snake1808, _) => &[10, 13, 16],
+            _ => &[],
+        }
+    }
+
+    const fn float_character_groups(self) -> &'static [usize] {
+        match self {
+            Self::Snake1808 => &[2, 5, 8],
+            Self::Reference1808 | Self::LegacyRustyEraOwnedV11 => &[],
+        }
+    }
+
+    fn global_group(self, variable: &Text1808Variable) -> Option<usize> {
+        if self == Self::LegacyRustyEraOwnedV11 {
+            return extended_group(variable);
+        }
+        let rank = variable.dimensions.len();
+        let width = if self == Self::Snake1808 { 3 } else { 2 };
+        (1..=3).contains(&rank).then_some(
+            (rank - 1) * width + usize::from(variable.value_type == Text1808ValueType::Integer),
+        )
+    }
+
+    fn user_shared_group(self, variable: &Text1808Variable) -> Option<usize> {
+        let rank = variable.dimensions.len();
+        if !(1..=3).contains(&rank) {
+            return None;
+        }
+        let width = if self == Self::Snake1808 { 3 } else { 2 };
+        Some(
+            8 + (rank - 1) * width + usize::from(variable.value_type == Text1808ValueType::Integer),
+        )
+    }
+
+    fn character_group(self, variable: &Text1808Variable) -> Option<usize> {
+        if self != Self::Snake1808 {
+            return None;
+        }
+        let rank = variable.dimensions.len();
+        (rank <= 2)
+            .then_some(rank * 3 + usize::from(variable.value_type == Text1808ValueType::Integer))
+    }
 }
 
 fn extended_group(variable: &Text1808Variable) -> Option<usize> {
@@ -721,9 +882,82 @@ mod tests {
     use super::entries::decode_value;
     use super::*;
 
+    fn text_variable_for_mapping(value_type: Text1808ValueType, rank: usize) -> Text1808Variable {
+        Text1808Variable {
+            name: "MAPPED".into(),
+            value_type,
+            dimensions: vec![2; rank],
+        }
+    }
+
+    #[test]
+    fn text_dialects_freeze_reference_snake_and_legacy_group_mappings() {
+        let reference = Text1808Dialect::Reference1808;
+        let snake = Text1808Dialect::Snake1808;
+        let legacy = Text1808Dialect::LegacyRustyEraOwnedV11;
+        assert_eq!(reference.shared_group_count(SaveFileKind::Normal), 14);
+        assert_eq!(reference.shared_group_count(SaveFileKind::Global), 6);
+        assert_eq!(snake.shared_group_count(SaveFileKind::Normal), 17);
+        assert_eq!(snake.shared_group_count(SaveFileKind::Global), 9);
+        assert_eq!(legacy.shared_group_count(SaveFileKind::Normal), 14);
+        assert_eq!(legacy.shared_group_count(SaveFileKind::Global), 14);
+        assert_eq!(reference.character_group_count(), 6);
+        assert_eq!(snake.character_group_count(), 9);
+        assert_eq!(legacy.character_group_count(), 6);
+
+        for (rank, reference_pair, snake_pair) in [
+            (1, [8, 9], [8, 9]),
+            (2, [10, 11], [11, 12]),
+            (3, [12, 13], [14, 15]),
+        ] {
+            for (value_type, offset) in [
+                (Text1808ValueType::String, 0),
+                (Text1808ValueType::Integer, 1),
+            ] {
+                let variable = text_variable_for_mapping(value_type, rank);
+                assert_eq!(
+                    reference.user_shared_group(&variable),
+                    Some(reference_pair[offset])
+                );
+                assert_eq!(snake.user_shared_group(&variable), Some(snake_pair[offset]));
+                assert_eq!(
+                    legacy.user_shared_group(&variable),
+                    Some(reference_pair[offset])
+                );
+                assert_eq!(
+                    reference.global_group(&variable),
+                    Some((rank - 1) * 2 + offset)
+                );
+                assert_eq!(snake.global_group(&variable), Some((rank - 1) * 3 + offset));
+                assert_eq!(legacy.global_group(&variable), Some(rank * 2 + offset));
+            }
+        }
+        for rank in 0..=2 {
+            for (value_type, offset) in [
+                (Text1808ValueType::String, 0),
+                (Text1808ValueType::Integer, 1),
+            ] {
+                let variable = text_variable_for_mapping(value_type, rank);
+                assert_eq!(snake.character_group(&variable), Some(rank * 3 + offset));
+            }
+        }
+        assert_eq!(
+            snake.float_shared_groups(SaveFileKind::Normal),
+            &[10, 13, 16]
+        );
+        assert_eq!(snake.float_shared_groups(SaveFileKind::Global), &[2, 5, 8]);
+        assert_eq!(snake.float_character_groups(), &[2, 5, 8]);
+        assert!(
+            reference
+                .float_shared_groups(SaveFileKind::Normal)
+                .is_empty()
+        );
+        assert!(legacy.float_character_groups().is_empty());
+    }
+
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn snake_scoped_saves_round_trip_and_reference_sessions_reject_them() {
+    fn snake_scoped_saves_are_bare_interoperable_and_v11_owned_saves_are_read_only_inputs() {
         use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
         let mut artifact = BytecodeArtifact {
             manifest: ArtifactManifest::new(Digest::default()),
@@ -752,28 +986,8 @@ mod tests {
             variables: BTreeMap::new(),
             characters: Vec::new(),
         };
-        assert!(
-            encode_era_save(
-                &state,
-                &artifact,
-                "missing-owned-state".into(),
-                Vec::new(),
-                SaveFormat::Binary1808,
-            )
-            .is_err()
-        );
-        assert!(
-            encode_scoped_save(
-                &state,
-                &artifact,
-                SaveFileKind::Normal,
-                "missing-owned-state".into(),
-                Vec::new(),
-                SaveFormat::Binary1808,
-            )
-            .is_err()
-        );
         for kind in [
+            SaveFileKind::Normal,
             SaveFileKind::Global,
             SaveFileKind::Variable,
             SaveFileKind::Character,
@@ -788,11 +1002,31 @@ mod tests {
                     format,
                 )
                 .unwrap();
+                assert!(!encoded.starts_with(b"RERASAV\0"));
                 let restored = decode_scoped_save(&encoded, &artifact, kind).unwrap();
                 assert_eq!(restored.state.unique_code, 1);
                 assert_eq!(restored.description, "profile fixture");
-                assert!(decode_scoped_save(&encoded, &reference, kind).is_err());
+                assert!(decode_scoped_save(&encoded, &reference, kind).is_ok());
             }
+        }
+        for (kind, expected_groups) in [(SaveFileKind::Normal, 17), (SaveFileKind::Global, 9)] {
+            let encoded = encode_scoped_save(
+                &state,
+                &artifact,
+                kind,
+                "text topology".into(),
+                Vec::new(),
+                SaveFormat::Text1808,
+            )
+            .unwrap();
+            let source = std::str::from_utf8(&encoded).unwrap();
+            assert_eq!(source.matches("__EMU_SEPARATOR__").count(), expected_groups);
+            assert_eq!(
+                decode_scoped_save(&encoded, &artifact, kind)
+                    .unwrap()
+                    .source,
+                era_runtime_save::CompatibleSaveSource::Interoperable1808
+            );
         }
         for format in [
             SaveFormat::Text1808,
@@ -825,6 +1059,10 @@ mod tests {
             .unwrap();
             let restored = decode_era_save(&encoded, &artifact).unwrap();
             assert_eq!(restored.description, "ordinary");
+            assert_eq!(
+                restored.source,
+                era_runtime_save::CompatibleSaveSource::LegacySnakeOwnedV11
+            );
             assert_eq!(restored.owned_state.unwrap().sfmt_state, vec![0; 625]);
             if format == SaveFormat::Binary1808 {
                 let mut invalid_sfmt = owned.clone();
@@ -872,12 +1110,48 @@ mod tests {
             }
             let bare = encode_era_save(&state, &reference, "reference".into(), Vec::new(), format)
                 .unwrap();
-            assert!(decode_era_save(&bare, &artifact).is_err());
+            if format == SaveFormat::Text1808 {
+                assert!(decode_era_save(&bare, &artifact).is_err());
+            } else {
+                assert!(decode_era_save(&bare, &artifact).is_ok());
+            }
             assert_eq!(
                 decode_era_save(&bare, &reference).unwrap().description,
                 "reference"
             );
         }
+
+        let legacy_global_payload = encode_scoped_payload_with_layout_flavor(
+            &state,
+            &artifact,
+            SaveFileKind::Global,
+            String::new(),
+            Vec::new(),
+            SaveFormat::Binary1808,
+            Text1808Dialect::LegacyRustyEraOwnedV11,
+        )
+        .unwrap();
+        let legacy_global =
+            encode_legacy_owned_envelope_for_test(&legacy_global_payload, &[]).unwrap();
+        assert_eq!(
+            decode_scoped_save(&legacy_global, &artifact, SaveFileKind::Global)
+                .unwrap()
+                .source,
+            era_runtime_save::CompatibleSaveSource::LegacySnakeOwnedV11
+        );
+        let legacy_ordinary_payload = encode_scoped_payload_with_layout_flavor(
+            &state,
+            &artifact,
+            SaveFileKind::Normal,
+            String::new(),
+            Vec::new(),
+            SaveFormat::Binary1808,
+            Text1808Dialect::LegacyRustyEraOwnedV11,
+        )
+        .unwrap();
+        let missing_owned_state =
+            encode_legacy_owned_envelope_for_test(&legacy_ordinary_payload, &[]).unwrap();
+        assert!(decode_era_save(&missing_owned_state, &artifact).is_err());
 
         let global_payload = encode_scoped_save_payload(
             &state,
@@ -938,21 +1212,16 @@ mod tests {
         .unwrap();
         let mut noncanonical_state = era_protocol::encode_canonical(&owned(3)).unwrap();
         noncanonical_state.push(0);
-        let noncanonical = era_runtime_save::wrap_compatible_save_with_state(
-            ordinary_payload,
-            &noncanonical_state,
-            &artifact.manifest.compatibility,
-            SaveCodecLimits::default(),
-        )
-        .unwrap();
+        let noncanonical =
+            encode_legacy_owned_envelope_for_test(&ordinary_payload, &noncanonical_state).unwrap();
         assert!(decode_era_save(&noncanonical, &artifact).is_err());
 
         let mut extended_state = era_protocol::encode_canonical(&owned(3)).unwrap();
         assert_eq!(extended_state[0], 0xa4);
         extended_state[0] = 0xa5;
         extended_state.extend_from_slice(&[0x04, 0xf6]);
-        let extended = era_runtime_save::wrap_compatible_save_with_state(
-            encode_scoped_save_payload(
+        let extended = encode_legacy_owned_envelope_for_test(
+            &encode_scoped_save_payload(
                 &state,
                 &artifact,
                 SaveFileKind::Normal,
@@ -962,8 +1231,6 @@ mod tests {
             )
             .unwrap(),
             &extended_state,
-            &artifact.manifest.compatibility,
-            SaveCodecLimits::default(),
         )
         .unwrap();
         assert!(decode_era_save(&extended, &artifact).is_err());

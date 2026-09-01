@@ -5,19 +5,10 @@ use super::super::*;
 impl RuntimeSession {
     pub(in super::super) fn begin_candidate_save(
         &mut self,
-        vm: &mut RuntimeVm,
+        _vm: &mut RuntimeVm,
         slot: u32,
         continuation: CandidateSaveContinuation,
     ) -> Result<(), RuntimeError> {
-        if vm.vm().artifact().manifest.compatibility.profile
-            == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake
-            && let Err(blocker) = self.sql.snapshot()
-        {
-            return self.finish_candidate_save_failure(
-                continuation,
-                owned_sql_snapshot_blocker_message(blocker),
-            );
-        }
         let capabilities = self.storage_capabilities;
         if !(capabilities.revisions
             && capabilities.atomic_replace
@@ -288,26 +279,15 @@ impl RuntimeSession {
                 .map_err(|error| RuntimeError::Internal(error.to_string()))?,
         )
         .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        let compatibility = &candidate.vm().artifact().manifest.compatibility;
-        let bytes =
-            if compatibility.profile == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake {
-                self.encode_owned_runtime_save(
-                    &candidate,
-                    description,
-                    ordinary_extensions,
-                    self.traditional_save_format(),
-                )
-            } else {
-                encode_scoped_save(
-                    &candidate.export_era_state(),
-                    candidate.vm().artifact(),
-                    era_runtime_save::SaveFileKind::Normal,
-                    description,
-                    ordinary_extensions,
-                    self.traditional_save_format(),
-                )
-            }
-            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        let bytes = encode_scoped_save(
+            &candidate.export_era_state(),
+            candidate.vm().artifact(),
+            era_runtime_save::SaveFileKind::Normal,
+            description,
+            ordinary_extensions,
+            self.traditional_save_format(),
+        )
+        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         Ok((
             PendingCandidateCommit {
                 state: candidate
@@ -328,6 +308,7 @@ impl RuntimeSession {
         ))
     }
 
+    #[cfg(test)]
     pub(in crate::session) fn encode_owned_runtime_save(
         &self,
         vm: &RuntimeVm,

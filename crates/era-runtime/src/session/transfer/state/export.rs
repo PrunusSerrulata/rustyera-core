@@ -233,13 +233,8 @@ impl RuntimeSession {
             pending.wait.stability == WaitStability::StableInput
                 && pending.wait.deadline_ns.is_none()
         });
-        let owned_traditional_save = request.kind == StateExportKind::TraditionalSave
-            && self.artifact.as_ref().is_some_and(|artifact| {
-                artifact.artifact().manifest.compatibility.profile
-                    == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake
-            });
         let mut reasons = Vec::new();
-        if (request.kind == StateExportKind::VmSnapshot || owned_traditional_save)
+        if request.kind == StateExportKind::VmSnapshot
             && let Err(blocker) = self.sql.snapshot()
         {
             reasons.push(match blocker {
@@ -294,22 +289,13 @@ impl RuntimeSession {
                             .map_err(|error| RuntimeError::Internal(error.to_string()))?,
                     )
                     .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-                    if owned_traditional_save {
-                        self.encode_owned_runtime_save(
-                            vm,
-                            String::new(),
-                            extensions,
-                            self.traditional_save_format(),
-                        )
-                    } else {
-                        encode_era_save(
-                            &vm.export_era_state(),
-                            vm.vm().artifact(),
-                            String::new(),
-                            extensions,
-                            self.traditional_save_format(),
-                        )
-                    }
+                    encode_era_save(
+                        &vm.export_era_state(),
+                        vm.vm().artifact(),
+                        String::new(),
+                        extensions,
+                        self.traditional_save_format(),
+                    )
                     .map_err(|error| RuntimeError::Internal(error.to_string()))?
                 }
                 StateExportKind::VmSnapshot => {

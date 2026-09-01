@@ -400,6 +400,7 @@ impl RuntimeSession {
             era_runtime_save::SaveFileKind::Global,
         )
         .map_err(|error| RuntimeError::Internal(format!("invalid global save: {error}")))?;
+        let source = decoded.source;
         let (prepared, _) = vm
             .prepare_runtime_state_with_extensions(
                 VmRuntimeStateTransaction::OverlayGlobal(Box::new(decoded.state)),
@@ -438,6 +439,7 @@ impl RuntimeSession {
             merge_opaque_extensions(&self.save_extensions, decoded.opaque_extensions);
         self.set_phase(RuntimePhase::Running)?;
         self.install_input_replay(replay_origin);
+        self.emit_snake_save_load_diagnostic(source, SaveLoadScope::Global);
         Ok(())
     }
 
@@ -447,7 +449,7 @@ impl RuntimeSession {
         bytes: &[u8],
         host_request: Option<erabasic_vm::HostRequestId>,
     ) -> Result<(), RuntimeError> {
-        let (decoded, owned_profile) = {
+        let (decoded, snake_profile) = {
             let vm = self
                 .vm
                 .as_ref()
@@ -464,10 +466,10 @@ impl RuntimeSession {
         };
         let decoded = match decoded {
             Ok(decoded) => decoded,
-            Err(error) if owned_profile => {
-                return self.finish_owned_load_failure(
+            Err(error) if snake_profile => {
+                return self.finish_snake_save_load_failure(
                     host_request,
-                    &format!("invalid owned save: {error}"),
+                    &format!("invalid snake save: {error}"),
                 );
             }
             Err(error) => {
@@ -486,11 +488,14 @@ impl RuntimeSession {
         decoded: DecodedEraSave,
         host_request: Option<erabasic_vm::HostRequestId>,
     ) -> Result<(), RuntimeError> {
-        let owned = decoded.owned_state.is_some();
+        let snake = self.vm.as_ref().is_some_and(|vm| {
+            vm.vm().artifact().manifest.compatibility.profile
+                == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake
+        });
         let load = match self.prepare_decoded_ordinary_load(slot, decoded, host_request) {
             Ok(load) => load,
-            Err(error) if owned => {
-                return self.finish_owned_load_failure(host_request, &error.to_string());
+            Err(error) if snake => {
+                return self.finish_snake_save_load_failure(host_request, &error.to_string());
             }
             Err(error) => return Err(error),
         };
@@ -509,6 +514,7 @@ impl RuntimeSession {
             opaque_extensions,
             structured_extensions,
             owned_state,
+            source,
         } = decoded;
         let vm = self
             .vm
@@ -531,6 +537,7 @@ impl RuntimeSession {
                 opaque_extensions,
                 sql: None,
                 host_request,
+                source,
             });
         };
 
@@ -553,6 +560,7 @@ impl RuntimeSession {
             opaque_extensions: prepared.opaque_extensions,
             sql: Some(prepared.sql),
             host_request,
+            source,
         })
     }
 
@@ -564,7 +572,7 @@ impl RuntimeSession {
     ) -> Result<(), RuntimeError> {
         if let Some(connections) = load.sql.take() {
             if let Err(blocker) = self.sql.snapshot() {
-                return self.finish_owned_load_failure(
+                return self.finish_snake_save_load_failure(
                     load.host_request,
                     owned_load_sql_blocker_message(blocker),
                 );
@@ -595,6 +603,7 @@ impl RuntimeSession {
         replacement_sql: Option<SqlRuntimeState>,
     ) -> Result<(), RuntimeError> {
         let mut replacement_sql = replacement_sql;
+        let save_source = load.source;
         let establish_undo = self.undo_replay.is_none();
         let replay_details = if let Some(replay) = &self.undo_replay {
             ReplayOriginDetails::InputUndo {
@@ -737,10 +746,65 @@ impl RuntimeSession {
         if let Some((provider, handles)) = sql_cleanup {
             let _ = self.emit_sql_cleanup_for(provider, &handles);
         }
+        self.emit_snake_save_load_diagnostic(save_source, SaveLoadScope::Ordinary);
         Ok(())
     }
 
-    pub(in super::super) fn finish_owned_load_failure(
+    pub(in crate::session) fn emit_snake_save_load_diagnostic(
+        &mut self,
+        source: era_runtime_save::CompatibleSaveSource,
+        scope: SaveLoadScope,
+    ) {
+        let snake = self.project_snapshot.as_ref().is_some_and(|project| {
+            project.manifest.compatibility.profile
+                == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake
+        });
+        if !snake {
+            return;
+        }
+        let (code, message) = match (source, scope) {
+            (
+                era_runtime_save::CompatibleSaveSource::Interoperable1808,
+                SaveLoadScope::Ordinary,
+            ) => (
+                "runtime.interoperable_save_external_state_preserved",
+                "loaded a standard Emuera 1808 ordinary save; the file has no recoverable RNG or SQL snapshot, so the live SFMT stream and external SQL state were preserved",
+            ),
+            (era_runtime_save::CompatibleSaveSource::Interoperable1808, SaveLoadScope::Global) => (
+                "runtime.interoperable_global_external_state_preserved",
+                "loaded a standard Emuera 1808 GLOBAL save; only GLOBAL scope was overlaid, and the live SFMT stream and external SQL state were preserved",
+            ),
+            (
+                era_runtime_save::CompatibleSaveSource::LegacySnakeOwnedV11,
+                SaveLoadScope::Ordinary,
+            ) => (
+                "runtime.legacy_owned_save_migrated",
+                "loaded the exact snake identity 11 OwnedSaveStateV1 migration format; its GLOBAL, SFMT, and SQL revisions were restored, and the next traditional save will use bare Emuera 1808",
+            ),
+            (
+                era_runtime_save::CompatibleSaveSource::LegacySnakeOwnedV11,
+                SaveLoadScope::Global,
+            ) => (
+                "runtime.legacy_global_save_migrated",
+                "loaded an exact snake identity 11 legacy GLOBAL envelope; only GLOBAL scope was migrated, the live SFMT and SQL state were preserved, and the next GLOBAL save will use bare Emuera 1808",
+            ),
+        };
+        // Loading is already committed at this point. A saturated outbound diagnostic journal
+        // must not turn a successful VM/SQL publication into an apparent restore failure.
+        let _ = self.emit(
+            RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                context: None,
+                code: code.into(),
+                level: RuntimeLogLevel::Info,
+                message: message.into(),
+                source: None,
+                notification: DiagnosticNotification::default(),
+            }),
+            None,
+        );
+    }
+
+    pub(in super::super) fn finish_snake_save_load_failure(
         &mut self,
         host_request: Option<erabasic_vm::HostRequestId>,
         message: &str,
@@ -748,7 +812,7 @@ impl RuntimeSession {
         self.emit(
             RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                 context: None,
-                code: "runtime.owned_save_restore_failed".into(),
+                code: "runtime.snake_save_restore_failed".into(),
                 level: RuntimeLogLevel::Warning,
                 message: message.into(),
                 source: None,

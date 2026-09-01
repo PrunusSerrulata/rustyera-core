@@ -150,33 +150,14 @@ impl RuntimeSession {
                     .map_err(|error| RuntimeError::Internal(error.to_string()))?,
             )
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-            let bytes = if vm.vm().artifact().manifest.compatibility.profile
-                == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake
-            {
-                if let Err(blocker) = self.sql.snapshot() {
-                    return complete_script_fault(
-                        vm,
-                        request,
-                        erabasic_vm::ScriptFaultKind::Operation,
-                        owned_sql_snapshot_blocker_message(blocker),
-                    );
-                }
-                self.encode_owned_runtime_save(
-                    vm,
-                    description.to_owned(),
-                    extensions,
-                    self.traditional_save_format(),
-                )
-            } else {
-                encode_scoped_save(
-                    &vm.export_era_state(),
-                    vm.vm().artifact(),
-                    era_runtime_save::SaveFileKind::Normal,
-                    description.to_owned(),
-                    extensions,
-                    self.traditional_save_format(),
-                )
-            }
+            let bytes = encode_scoped_save(
+                &vm.export_era_state(),
+                vm.vm().artifact(),
+                era_runtime_save::SaveFileKind::Normal,
+                description.to_owned(),
+                extensions,
+                self.traditional_save_format(),
+            )
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
             return self.issue_host_storage(
                 vm,

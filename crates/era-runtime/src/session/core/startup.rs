@@ -114,6 +114,7 @@ impl RuntimeSession {
             opaque_extensions,
             structured_extensions,
             owned_state,
+            source,
         } = decoded;
         if owned_state.is_some()
             && let Err(blocker) = self.sql.snapshot()
@@ -157,6 +158,7 @@ impl RuntimeSession {
                 vm: prepared.vm,
                 opaque_extensions: prepared.opaque_extensions,
                 replay_origin,
+                source,
             };
             return self.begin_owned_traditional_start_sql_restore(message_id, load, prepared.sql);
         }
@@ -189,6 +191,7 @@ impl RuntimeSession {
             vm,
             opaque_extensions,
             replay_origin,
+            source,
         };
         self.complete_traditional_start(load, None)
     }
@@ -205,6 +208,7 @@ impl RuntimeSession {
             mut vm,
             opaque_extensions,
             replay_origin,
+            source,
         } = load;
         self.retained_title_program = None;
         self.save_extensions = opaque_extensions;
@@ -232,7 +236,9 @@ impl RuntimeSession {
         self.vm = Some(vm);
         self.set_phase(RuntimePhase::Running)?;
         self.install_input_replay(replay_origin);
-        self.renew_debug_grant()
+        self.renew_debug_grant()?;
+        self.emit_snake_save_load_diagnostic(source, SaveLoadScope::Ordinary);
+        Ok(())
     }
 
     fn complete_owned_traditional_start(
@@ -244,6 +250,7 @@ impl RuntimeSession {
             vm,
             opaque_extensions,
             replay_origin,
+            source,
         } = load;
         let mut transaction = OwnedReplacementTransaction::capture(self, vm, replacement_sql);
         self.retained_title_program = None;
@@ -293,6 +300,7 @@ impl RuntimeSession {
         let (provider, handles) = transaction.old_sql_cleanup();
         drop(transaction);
         let _ = self.emit_sql_cleanup_for(provider, &handles);
+        self.emit_snake_save_load_diagnostic(source, SaveLoadScope::Ordinary);
         Ok(())
     }
 

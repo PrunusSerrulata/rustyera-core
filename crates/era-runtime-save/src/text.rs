@@ -169,6 +169,7 @@ pub fn decode_text_with_layout(
         read_extended_groups(
             &mut reader,
             &layout.extended_character_groups[..character_group_count],
+            &layout.unsupported_extended_character_groups,
             character,
             limits,
         )?;
@@ -181,9 +182,15 @@ pub fn decode_text_with_layout(
     read_extended_groups(
         &mut reader,
         &layout.extended_groups[..variable_group_count],
+        &layout.unsupported_extended_groups,
         &mut variables,
         limits,
     )?;
+    if reader.lines.next().is_some() {
+        return Err(SaveCodecError::InvalidFormat(
+            "text save contains trailing extended groups or data".into(),
+        ));
+    }
     finish_text_document(
         data,
         layout.kind,
@@ -414,15 +421,25 @@ fn strings_to_value(
 fn read_extended_groups(
     reader: &mut TextReader<'_>,
     groups: &[Vec<Text1808Variable>],
+    unsupported_groups: &[bool],
     entries: &mut Vec<SaveEntry>,
     limits: SaveCodecLimits,
 ) -> Result<(), SaveCodecError> {
-    for group in groups {
+    for (group_index, group) in groups.iter().enumerate() {
         let mut parsed = std::collections::BTreeMap::new();
         loop {
             let line = reader.line("extended group")?;
             if line == SEPARATOR {
                 break;
+            }
+            if unsupported_groups
+                .get(group_index)
+                .copied()
+                .unwrap_or(false)
+            {
+                return Err(SaveCodecError::InvalidFormat(
+                    "unsupported Float value in text save".into(),
+                ));
             }
             let variable = if let Some((name, value)) = line.split_once(':') {
                 let Some(descriptor) = find_layout(group, name) else {

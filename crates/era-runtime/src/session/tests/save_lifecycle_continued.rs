@@ -650,7 +650,7 @@ fn global_fixture_at_load(
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn ordinary_save_load_preserves_reference_rng_but_restores_owned_snake_rng() {
+fn bare_ordinary_save_load_preserves_live_rng_and_restores_randdata_for_both_profiles() {
     fn next_request(session: &mut RuntimeSession) -> StorageRequest {
         for _ in 0..32 {
             session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -748,17 +748,10 @@ fn ordinary_save_load_preserves_reference_rng_but_restores_owned_snake_rng() {
         }
         assert_eq!(session.phase(), RuntimePhase::WaitingInput);
         let vm = session.vm.as_ref().unwrap();
-        // Reference saves retain the live native stream and only restore RANDDATA. Snake-owned
-        // saves restore the authenticated full SFMT snapshot together with ordinary variables.
+        // Bare interoperable saves retain the live native stream and restore RANDDATA for both
+        // profiles; only the explicit INITRAND operation may import RANDDATA into SFMT.
         assert_eq!(randdata(vm), saved_randdata);
-        assert_eq!(
-            vm.export_random_state().unwrap(),
-            if profile == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake {
-                saved_randdata.clone()
-            } else {
-                active.clone()
-            }
-        );
+        assert_eq!(vm.export_random_state().unwrap(), active);
         assert_eq!(
             session.undo_checkpoint.as_ref().unwrap().random_state,
             active
@@ -859,17 +852,15 @@ fn global_storage_missing_file_returns_zero_without_clearing_state() {
 }
 
 #[test]
-fn global_storage_corruption_and_wrong_profile_preserve_vm_and_replay() {
-    for corrupt in [true, false] {
+fn global_storage_corruption_preserves_vm_and_replay() {
+    let mut truncated =
+        global_fixture_at_load(erabasic_compat::CompatibilityProfileId::EmueraEm, true).2;
+    truncated.pop();
+    for bytes in [b"corrupt global save".to_vec(), truncated] {
         let (mut session, read, _) = global_fixture_at_load(
             erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
             true,
         );
-        let bytes = if corrupt {
-            b"corrupt global save".to_vec()
-        } else {
-            global_fixture_at_load(erabasic_compat::CompatibilityProfileId::EmueraEm, true).2
-        };
         let replay = session.input_replay.encode().unwrap();
         let before = session
             .vm

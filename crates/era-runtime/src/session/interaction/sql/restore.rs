@@ -64,20 +64,20 @@ impl RuntimeSession {
     ) -> Result<(), RuntimeError> {
         let host_request = load.host_request;
         if self.pending_sql_snapshot_restore.is_some() {
-            return self.finish_owned_load_failure(
+            return self.finish_snake_save_load_failure(
                 host_request,
                 "another exact SQL restore is already active",
             );
         }
         if connections.len() > era_runtime_protocol::SqlLimitsV1::FIXED.maximum_connections as usize
         {
-            return self.finish_owned_load_failure(
+            return self.finish_snake_save_load_failure(
                 host_request,
                 "owned save exceeds the fixed SQL connection limit",
             );
         }
         if let Err(message) = self.validate_exact_sql_restore(&connections) {
-            return self.finish_owned_load_failure(host_request, message);
+            return self.finish_snake_save_load_failure(host_request, message);
         }
         if connections.is_empty() {
             let mut candidate_sql = self.sql.clone();
@@ -281,7 +281,7 @@ impl RuntimeSession {
                 self.reject(message_id, code, message)
             }
             PendingExactSqlRestoreTarget::OwnedSave { load, .. } => {
-                self.finish_owned_load_failure(load.host_request, message)
+                self.finish_snake_save_load_failure(load.host_request, message)
             }
         };
         if restored.is_ok() {

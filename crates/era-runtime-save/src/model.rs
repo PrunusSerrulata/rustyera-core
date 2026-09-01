@@ -70,6 +70,12 @@ pub struct Text1808Layout {
     pub base_character_variables: Vec<Text1808Variable>,
     pub extended_groups: Vec<Vec<Text1808Variable>>,
     pub extended_character_groups: Vec<Vec<Text1808Variable>>,
+    /// Groups occupied by Float in the selected dialect. Batch 5 consumes empty groups to keep
+    /// the following Integer/String topology aligned and rejects any value in them.
+    #[serde(default)]
+    pub unsupported_extended_groups: Vec<bool>,
+    #[serde(default)]
+    pub unsupported_extended_character_groups: Vec<bool>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

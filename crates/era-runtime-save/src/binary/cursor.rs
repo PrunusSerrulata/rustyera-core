@@ -127,6 +127,16 @@ impl<'a> Cursor<'a> {
                     "unexpected section terminator".into(),
                 ));
             }
+            if matches!(tag, 0x04..=0x07) {
+                return Err(SaveCodecError::InvalidFormat(format!(
+                    "unsupported Float variable type {tag:#x}"
+                )));
+            }
+            if !matches!(tag, 0x00..=0x03 | 0x10..=0x13) {
+                return Err(SaveCodecError::InvalidFormat(format!(
+                    "unknown variable type {tag:#x}"
+                )));
+            }
             self.entries += 1;
             if self.entries > self.limits.maximum_entries {
                 return Err(SaveCodecError::LimitExceeded("maximum entries"));
@@ -137,11 +147,7 @@ impl<'a> Cursor<'a> {
                 0x10 => SaveValue::String(self.string()?),
                 0x01..=0x03 => self.array(tag as usize, false)?,
                 0x11..=0x13 => self.array((tag - 0x10) as usize, true)?,
-                _ => {
-                    return Err(SaveCodecError::InvalidFormat(format!(
-                        "unknown variable type {tag:#x}"
-                    )));
-                }
+                _ => unreachable!("variable tag was classified before reading its key"),
             };
             result.push(SaveEntry { name, value });
         }

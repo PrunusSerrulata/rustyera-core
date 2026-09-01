@@ -115,10 +115,12 @@ use crate::runtime_snapshot::{
     RuntimeSnapshotPayload,
 };
 use crate::save_adapter::{
-    DecodedEraSave, DecodedOwnedSaveState, OwnedDatabaseRevisionV1, OwnedSaveStateV1,
-    decode_era_save, decode_scoped_save, encode_era_save, encode_owned_era_save,
-    encode_scoped_save, encode_scoped_save_payload, merge_opaque_extensions,
-    merge_structured_extensions,
+    DecodedEraSave, DecodedOwnedSaveState, decode_era_save, decode_scoped_save, encode_era_save,
+    encode_scoped_save, merge_opaque_extensions, merge_structured_extensions,
+};
+#[cfg(test)]
+use crate::save_adapter::{
+    OwnedDatabaseRevisionV1, OwnedSaveStateV1, encode_owned_era_save, encode_scoped_save_payload,
 };
 use crate::sql::SqlRuntimeState;
 
@@ -133,6 +135,7 @@ fn configured_character_width_mode(
     }
 }
 
+#[cfg(test)]
 const fn owned_sql_snapshot_blocker_message(
     blocker: crate::sql::SqlSnapshotBlocker,
 ) -> &'static str {
@@ -879,6 +882,7 @@ struct PreparedOrdinaryLoad {
     opaque_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
     sql: Option<Vec<crate::runtime_snapshot::SqlConnectionSnapshot>>,
     host_request: Option<erabasic_vm::HostRequestId>,
+    source: era_runtime_save::CompatibleSaveSource,
 }
 
 struct PreparedOwnedVm {
@@ -906,6 +910,13 @@ struct PreparedTraditionalStart {
     vm: RuntimeVm,
     opaque_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
     replay_origin: ReplayOrigin,
+    source: era_runtime_save::CompatibleSaveSource,
+}
+
+#[derive(Clone, Copy)]
+enum SaveLoadScope {
+    Ordinary,
+    Global,
 }
 
 enum PreparedOrdinaryVm {
