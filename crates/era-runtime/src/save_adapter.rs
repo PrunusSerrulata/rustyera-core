@@ -392,7 +392,14 @@ pub(crate) fn merge_structured_extensions(
     opaque: &[OpaqueSaveExtension],
     structured: Vec<StructuredExtension>,
 ) -> Result<Vec<OpaqueSaveExtension>, SaveCodecError> {
-    let mut output = opaque.to_vec();
+    // Structured extensions are decoded into the VM's ordinary or GLOBAL scope. Rebuild every
+    // recognized record from that scope instead of retaining recognized records collected from
+    // another payload (owned saves carry both scopes through one restore transaction).
+    let mut output = opaque
+        .iter()
+        .filter(|extension| !matches!(extension.type_tag, 0x20..=0x22))
+        .cloned()
+        .collect::<Vec<_>>();
     for value in structured {
         let typed = match value {
             StructuredExtension::Map { key, entries } => SaveExtension::Map { key, entries },
@@ -1057,6 +1064,30 @@ mod tests {
                 entries: vec![("new".into(), "value".into())],
             }
         );
+    }
+
+    #[test]
+    fn structured_merge_drops_recognized_records_absent_from_the_current_scope() {
+        let ordinary = encode_save_extension(
+            &SaveExtension::DataTable {
+                key: "ordinary".into(),
+                schema: "ordinary-schema".into(),
+                data: "ordinary-data".into(),
+            },
+            SaveCodecLimits::default(),
+        )
+        .unwrap();
+        let global = StructuredExtension::DataTable {
+            key: "global".into(),
+            schema: "global-schema".into(),
+            data: "global-data".into(),
+        };
+
+        let merged = merge_structured_extensions(&[ordinary], vec![global]).unwrap();
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].key, "global");
+        assert_eq!(merged[0].type_tag, 0x22);
     }
 
     #[test]
