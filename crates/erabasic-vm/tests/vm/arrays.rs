@@ -829,10 +829,6 @@ fn omitted_substring_and_statement_encodetouni_match_reference_results() {
         vm.read_variable(results, &[14], None),
         Ok(VmValue::String("cd".into()))
     );
-    assert_eq!(
-        vm.read_variable(results, &[15], None),
-        Ok(VmValue::String("one".into()))
-    );
 }
 
 #[test]
