@@ -74,11 +74,10 @@ use erabasic_vm::{
     CharacterWidthMode, DEFAULT_LINE_COLUMNS, EraSaveScope, EraState, HostCallRequest,
     HostCallResult, HostReady, HostWaitStability, HostWrite, ImmediateHostCall,
     ImmediateHostCallResult, PlaceDescriptor, PreparedCandidateState, PreparedRuntimeState,
-    RetainedProgramIndex, RunBudget, RuntimeVm, SnapshotEligibility, StructuredExtension,
-    StructuredScope, VmConfig, VmDiagnosticNotification, VmDriveMode, VmHost, VmHostCompletion,
-    VmHostRequest, VmPortDriveReport, VmPortEvent, VmPortStop, VmRestorePort, VmRuntimeFill,
-    VmRuntimePort, VmRuntimeStatePort, VmRuntimeStateTransaction, VmRuntimeWrite, VmSnapshot,
-    VmValue,
+    RetainedProgramIndex, RunBudget, RuntimeVm, SnapshotEligibility, StructuredScope, VmConfig,
+    VmDiagnosticNotification, VmDriveMode, VmHost, VmHostCompletion, VmHostRequest,
+    VmPortDriveReport, VmPortEvent, VmPortStop, VmRestorePort, VmRuntimeFill, VmRuntimePort,
+    VmRuntimeStatePort, VmRuntimeStateTransaction, VmRuntimeWrite, VmSnapshot, VmValue,
 };
 use serde::{Deserialize, Serialize};
 
@@ -115,12 +114,8 @@ use crate::runtime_snapshot::{
     RuntimeSnapshotPayload,
 };
 use crate::save_adapter::{
-    DecodedEraSave, DecodedOwnedSaveState, decode_era_save, decode_scoped_save, encode_era_save,
-    encode_scoped_save, merge_opaque_extensions, merge_structured_extensions,
-};
-#[cfg(test)]
-use crate::save_adapter::{
-    OwnedDatabaseRevisionV1, OwnedSaveStateV1, encode_owned_era_save, encode_scoped_save_payload,
+    DecodedEraSave, decode_era_save, decode_scoped_save, encode_era_save, encode_scoped_save,
+    merge_opaque_extensions, merge_structured_extensions,
 };
 use crate::sql::SqlRuntimeState;
 
@@ -135,33 +130,12 @@ fn configured_character_width_mode(
     }
 }
 
-#[cfg(test)]
-const fn owned_sql_snapshot_blocker_message(
-    blocker: crate::sql::SqlSnapshotBlocker,
-) -> &'static str {
-    match blocker {
-        crate::sql::SqlSnapshotBlocker::Inflight => {
-            "owned save requires SQL requests to be fully settled"
-        }
-        crate::sql::SqlSnapshotBlocker::Reader => {
-            "owned save requires every SQL reader to be closed"
-        }
-        crate::sql::SqlSnapshotBlocker::Transaction => {
-            "owned save requires every SQL transaction to be committed or rolled back"
-        }
-        crate::sql::SqlSnapshotBlocker::RevisionMissing => {
-            "owned save requires an exact durable revision for every SQL database"
-        }
-    }
-}
-
 mod core;
 mod debug_session;
 mod host_dispatch;
 pub(crate) mod html_query;
 mod interaction;
 mod storage;
-pub(in crate::session) use storage::OwnedReplacementTransaction;
 mod support;
 mod transfer;
 mod undo;
@@ -877,51 +851,10 @@ struct PendingColdProjectLoad {
     compiled_project_cache: Option<Arc<Vec<u8>>>,
 }
 
-struct PreparedOrdinaryLoad {
-    vm: PreparedOrdinaryVm,
-    opaque_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
-    sql: Option<Vec<crate::runtime_snapshot::SqlConnectionSnapshot>>,
-    host_request: Option<erabasic_vm::HostRequestId>,
-    source: era_runtime_save::CompatibleSaveSource,
-}
-
-struct PreparedOwnedVm {
-    vm: RuntimeVm,
-    opaque_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
-    sql: Vec<crate::runtime_snapshot::SqlConnectionSnapshot>,
-}
-
-struct OwnedVmCandidateInput {
-    state: EraState,
-    description: String,
-    opaque_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
-    structured_extensions: Vec<StructuredExtension>,
-    owned: DecodedOwnedSaveState,
-    last_load: OwnedLastLoad,
-}
-
-#[derive(Clone, Copy)]
-enum OwnedLastLoad {
-    None,
-    Slot(i64),
-}
-
-struct PreparedTraditionalStart {
-    vm: RuntimeVm,
-    opaque_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
-    replay_origin: ReplayOrigin,
-    source: era_runtime_save::CompatibleSaveSource,
-}
-
 #[derive(Clone, Copy)]
 enum SaveLoadScope {
     Ordinary,
     Global,
-}
-
-enum PreparedOrdinaryVm {
-    Traditional(Box<PreparedRuntimeState>),
-    Owned(Box<RuntimeVm>),
 }
 
 struct PendingProjectReload {
@@ -942,25 +875,10 @@ struct PendingConfigurationUpdate {
 }
 
 struct PendingSqlSnapshotRestore {
-    target: PendingExactSqlRestoreTarget,
+    message_id: u64,
+    bytes: Vec<u8>,
     candidate_sql: SqlRuntimeState,
     remaining: VecDeque<crate::runtime_snapshot::SqlConnectionSnapshot>,
-}
-
-enum PendingExactSqlRestoreTarget {
-    RuntimeSnapshot {
-        message_id: u64,
-        bytes: Vec<u8>,
-    },
-    OwnedSave {
-        slot: u32,
-        bytes: Vec<u8>,
-        load: PreparedOrdinaryLoad,
-    },
-    OwnedTraditionalStart {
-        message_id: u64,
-        load: Box<PreparedTraditionalStart>,
-    },
 }
 
 struct ReadySqlSnapshotRestore {

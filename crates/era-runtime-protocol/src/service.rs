@@ -39,30 +39,6 @@ pub enum StorageNamespace {
     Log,
     #[n(5)]
     Resource,
-    /// Read/delete-only access to the former profile-private save directory.
-    #[n(6)]
-    LegacyProfileSave,
-}
-
-impl StorageNamespace {
-    /// Whether this namespace permits the requested operation.
-    ///
-    /// Legacy profile saves are migration inputs: they can be inspected or deleted after a
-    /// successful migration, but new data must never be written back to that namespace.
-    #[must_use]
-    pub const fn permits(self, operation: &StorageOperation) -> bool {
-        match self {
-            Self::LegacyProfileSave => matches!(
-                operation,
-                StorageOperation::Read
-                    | StorageOperation::List { .. }
-                    | StorageOperation::Delete { .. }
-                    | StorageOperation::Stat
-                    | StorageOperation::ReadRange { .. }
-            ),
-            _ => true,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

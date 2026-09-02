@@ -952,35 +952,17 @@ fn storage_write_is_correlated_and_idempotent() {
 }
 
 #[test]
-fn protocol_46_legacy_profile_save_is_read_delete_only() {
-    let namespace = StorageNamespace::LegacyProfileSave;
-    for operation in [
-        StorageOperation::Read,
-        StorageOperation::List {
-            pattern: Some("save*.sav".into()),
-            recursive: false,
-        },
-        StorageOperation::Delete {
-            precondition: era_runtime_protocol::StoragePrecondition::Any,
-        },
-        StorageOperation::Stat,
-        StorageOperation::ReadRange {
-            offset: 0,
-            maximum_bytes: 64,
-            change_token: None,
-        },
+fn protocol_46_storage_namespace_wire_values_remain_stable() {
+    for (namespace, wire) in [
+        (StorageNamespace::Project, 0),
+        (StorageNamespace::Save, 1),
+        (StorageNamespace::GlobalSave, 2),
+        (StorageNamespace::Data, 3),
+        (StorageNamespace::Log, 4),
+        (StorageNamespace::Resource, 5),
     ] {
-        assert!(
-            namespace.permits(&operation),
-            "legacy read/delete operation {operation:?}"
-        );
+        assert_eq!(encode_canonical(&namespace).unwrap(), vec![wire]);
     }
-    assert!(!namespace.permits(&StorageOperation::Write {
-        data: ProtocolBytes::new(vec![1]),
-        atomic_replace: true,
-        precondition: era_runtime_protocol::StoragePrecondition::Any,
-    }));
-    assert_eq!(encode_canonical(&namespace).unwrap(), vec![0x06]);
 }
 
 #[test]
@@ -1233,16 +1215,11 @@ fn protocol_46_audio_targets_effects_and_observations_are_exact() {
     assert!(current.services.iter().any(|service| {
         service.name == erabasic_compat::AUDIO_SERVICE_CONTRACT_NAME && service.version == 1
     }));
-    let legacy = erabasic_compat::CompatibilityIdentity::legacy_snake_owned_save_v11();
-    assert!(legacy.is_legacy_snake_owned_save_v11());
-    assert!(legacy.validate().is_err());
-    for identity in [&current, &legacy] {
-        let encoded = encode_canonical(identity).unwrap();
-        assert_eq!(
-            decode_canonical::<erabasic_compat::CompatibilityIdentity>(&encoded).as_ref(),
-            Ok(identity)
-        );
-    }
+    let encoded = encode_canonical(&current).unwrap();
+    assert_eq!(
+        decode_canonical::<erabasic_compat::CompatibilityIdentity>(&encoded),
+        Ok(current)
+    );
 
     let request = AudioObservationRequestV1 {
         channel: AudioChannelV1::Sound(3),
@@ -1382,7 +1359,7 @@ fn protocol_46_audio_targets_effects_and_observations_are_exact() {
         "audio-effect-action = 0..5",
         "audio-observation-request-v1",
         "audio-observation-response-v1",
-        "storage-namespace = 0..6",
+        "storage-namespace = 0..5",
     ] {
         assert!(schema.contains(definition), "CDDL omitted {definition}");
     }

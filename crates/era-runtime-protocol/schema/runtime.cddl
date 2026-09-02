@@ -348,7 +348,7 @@ effect-batch = { 0: [* effect-event] }
 effect-outcome-status = 0..2
 effect-outcome = { 0: uint, 1: effect-outcome-status, 2: tstr / null }
 effect-acknowledgement = { 0: [* effect-outcome] }
-storage-namespace = 0..6
+storage-namespace = 0..5
 storage-request = { 0: uint, 1: storage-namespace, 2: tstr, 3: storage-operation, 4: tstr, 5: uint / null }
 storage-response = { 0: uint, 1: any }
 storage-operation =
@@ -421,8 +421,8 @@ sql-response-v1 = {
 ; Protocol 44 adds CBG hover/hit-map scene interactions and revision-bound line geometry.
 ; Protocol 45 makes scene document origins and every mutable resource dependency exact-revision
 ; bound, including historical replay closure.
-; Protocol 46 adds the read/delete-only legacy profile-save namespace, exact audio targets,
-; revisioned pause/resume/rate effects, and audio_observation v1 request/response payloads.
+; Protocol 46 adds exact audio targets, revisioned pause/resume/rate effects, and
+; audio_observation v1 request/response payloads.
 ; It retains Protocol 41 safe SQL v1 payloads and ServiceKind 11 with the existing descriptor,
 ; digest, chunking, and cancellation flow. It retains Protocol 24 authoritative logs,
 ; Protocol 23 snapshot purposes, source-identity-first project loading,

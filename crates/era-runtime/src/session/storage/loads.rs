@@ -2,283 +2,12 @@
 #[allow(clippy::wildcard_imports)]
 use super::super::*;
 
-pub(in crate::session) struct OwnedReplacementTransaction {
-    old_vm: Option<RuntimeVm>,
-    candidate_vm: Option<RuntimeVm>,
-    old_sql: Option<SqlRuntimeState>,
-    candidate_sql: Option<SqlRuntimeState>,
-    old_controller: SystemController,
-    old_phase: RuntimePhase,
-    old_revision: u64,
-    old_epoch: SessionEpoch,
-    old_operations: PendingOperations,
-    old_device_input: crate::device_input::DeviceInput,
-    old_input_notice_sites: BTreeSet<(String, u64, erabasic_bytecode::SymbolKey, u32)>,
-    old_command_intents: BTreeMap<InteractionToken, VmValue>,
-    old_reusable_system_intents: BTreeMap<InteractionToken, VmValue>,
-    old_next_interaction_id: u64,
-    old_accepted_message_ids: BTreeMap<u64, (u64, blake3::Hash)>,
-    old_accepted_debug_message_ids: BTreeMap<u64, (u64, blake3::Hash)>,
-    old_queued_input: VecDeque<QueuedInput>,
-    old_active_input_source: Option<InputSource>,
-    old_input_controller: InputController,
-    old_system_menu_host_request: Option<erabasic_vm::HostRequestId>,
-    old_save_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
-    old_presentation: PresentationModel,
-    old_pending_presentation_update: bool,
-    old_last_projection_state: Option<ProjectionState>,
-    old_project_snapshot: Option<NormalizedProjectSnapshot>,
-    old_outbound: VecDeque<Vec<u8>>,
-    old_outbound_journal: BTreeMap<u64, Vec<u8>>,
-    old_outbound_journal_bytes: u64,
-    old_effect_journal: BTreeMap<u64, EffectEvent>,
-    old_outbound_sequence: u64,
-    old_next_message_id: u64,
-    old_next_effect_id: u64,
-    old_system_menu: SystemMenuState,
-    old_undo_checkpoint: Option<UndoCheckpoint>,
-    old_undo_replay: Option<UndoReplay>,
-    old_undo_token: Option<InteractionToken>,
-    old_input_replay: InputReplayHistory,
-    old_retained_title_program: Option<RetainedProgramIndex>,
-    old_active_debug_grant: Option<ActiveDebugGrant>,
-    old_next_debug_grant_id: u64,
-    old_debug_outbound_sequence: u64,
-    old_load_slot_paths: Vec<String>,
-    old_occupied_slot_paths: BTreeSet<String>,
-    old_slot_change_tokens: BTreeMap<String, String>,
-    old_slot_labels: BTreeMap<String, String>,
-    old_invalid_slot_paths: BTreeSet<String>,
-    old_system_menu_page: u32,
-}
-
-impl OwnedReplacementTransaction {
-    pub(in crate::session) fn capture(
-        session: &mut RuntimeSession,
-        candidate_vm: RuntimeVm,
-        replacement_sql: SqlRuntimeState,
-    ) -> Self {
-        Self {
-            old_vm: session.vm.take(),
-            candidate_vm: Some(candidate_vm),
-            old_sql: None,
-            candidate_sql: Some(replacement_sql),
-            old_controller: session.controller.clone(),
-            old_phase: session.phase,
-            old_revision: session.revision,
-            old_epoch: session.epoch,
-            old_operations: session.operations.clone(),
-            old_device_input: session.device_input.clone(),
-            old_input_notice_sites: session.input_notice_sites.clone(),
-            old_command_intents: session.command_intents.clone(),
-            old_reusable_system_intents: session.reusable_system_intents.clone(),
-            old_next_interaction_id: session.next_interaction_id,
-            old_accepted_message_ids: session.accepted_message_ids.clone(),
-            old_accepted_debug_message_ids: session.accepted_debug_message_ids.clone(),
-            old_queued_input: session.queued_input.clone(),
-            old_active_input_source: session.active_input_source.clone(),
-            old_input_controller: session.input_controller.clone(),
-            old_system_menu_host_request: session.system_menu_host_request,
-            old_save_extensions: session.save_extensions.clone(),
-            old_presentation: session.presentation.clone(),
-            old_pending_presentation_update: session.pending_presentation_update,
-            old_last_projection_state: session.last_projection_state.clone(),
-            old_project_snapshot: session.project_snapshot.clone(),
-            old_outbound: session.outbound.clone(),
-            old_outbound_journal: session.outbound_journal.clone(),
-            old_outbound_journal_bytes: session.outbound_journal_bytes,
-            old_effect_journal: session.effect_journal.clone(),
-            old_outbound_sequence: session.outbound_sequence,
-            old_next_message_id: session.next_message_id,
-            old_next_effect_id: session.next_effect_id,
-            old_system_menu: session.system_menu,
-            old_undo_checkpoint: session.undo_checkpoint.clone(),
-            old_undo_replay: session.undo_replay.as_ref().map(|replay| UndoReplay {
-                remaining: replay.remaining.clone(),
-                queued_repeats: replay.queued_repeats,
-            }),
-            old_undo_token: session.undo_token,
-            old_input_replay: session.input_replay.clone(),
-            old_retained_title_program: session.retained_title_program.take(),
-            old_active_debug_grant: session.active_debug_grant.clone(),
-            old_next_debug_grant_id: session.next_debug_grant_id,
-            old_debug_outbound_sequence: session.debug_outbound_sequence,
-            old_load_slot_paths: session.load_slot_paths.clone(),
-            old_occupied_slot_paths: session.occupied_slot_paths.clone(),
-            old_slot_change_tokens: session.slot_change_tokens.clone(),
-            old_slot_labels: session.slot_labels.clone(),
-            old_invalid_slot_paths: session.invalid_slot_paths.clone(),
-            old_system_menu_page: session.system_menu_page,
-        }
-    }
-
-    pub(in crate::session) fn candidate_vm(&self) -> &RuntimeVm {
-        self.candidate_vm
-            .as_ref()
-            .expect("owned replacement retains its VM candidate until publication")
-    }
-
-    pub(in crate::session) fn candidate_vm_mut(&mut self) -> &mut RuntimeVm {
-        self.candidate_vm
-            .as_mut()
-            .expect("owned replacement retains its VM candidate until publication")
-    }
-
-    pub(in crate::session) fn publish(&mut self, session: &mut RuntimeSession) {
-        let candidate = self
-            .candidate_sql
-            .take()
-            .expect("owned replacement retains its SQL candidate until publication");
-        self.old_sql = Some(std::mem::replace(&mut session.sql, candidate));
-        session.vm = self.candidate_vm.take();
-    }
-
-    pub(in crate::session) fn old_sql_cleanup(
-        &self,
-    ) -> (
-        era_runtime_protocol::SqlProviderHandleV1,
-        Vec<era_runtime_protocol::SqlConnectionHandleV1>,
-    ) {
-        let old = self
-            .old_sql
-            .as_ref()
-            .expect("owned replacement published SQL before cleanup collection");
-        (
-            old.provider(),
-            old.connections()
-                .map(|(_, connection)| connection.handle)
-                .collect(),
-        )
-    }
-
-    pub(in crate::session) fn rollback(mut self, session: &mut RuntimeSession) {
-        session.vm = self.old_vm.take();
-        let candidate_sql = if let Some(old_sql) = self.old_sql.take() {
-            std::mem::replace(&mut session.sql, old_sql)
-        } else {
-            self.candidate_sql
-                .take()
-                .expect("unpublished owned replacement retains its SQL candidate")
-        };
-        let candidate_provider = candidate_sql.provider();
-        let candidate_handles = candidate_sql.cleanup_handles();
-        session.controller = self.old_controller;
-        session.phase = self.old_phase;
-        session.revision = self.old_revision;
-        session.epoch = self.old_epoch;
-        session.operations = self.old_operations;
-        session.device_input = self.old_device_input;
-        session.input_notice_sites = self.old_input_notice_sites;
-        session.command_intents = self.old_command_intents;
-        session.reusable_system_intents = self.old_reusable_system_intents;
-        session.next_interaction_id = self.old_next_interaction_id;
-        session.accepted_message_ids = self.old_accepted_message_ids;
-        session.accepted_debug_message_ids = self.old_accepted_debug_message_ids;
-        session.queued_input = self.old_queued_input;
-        session.active_input_source = self.old_active_input_source;
-        session.input_controller = self.old_input_controller;
-        session.system_menu_host_request = self.old_system_menu_host_request;
-        session.save_extensions = self.old_save_extensions;
-        session.presentation = self.old_presentation;
-        session.pending_presentation_update = self.old_pending_presentation_update;
-        session.last_projection_state = self.old_last_projection_state;
-        session.project_snapshot = self.old_project_snapshot;
-        session.outbound = self.old_outbound;
-        session.outbound_journal = self.old_outbound_journal;
-        session.outbound_journal_bytes = self.old_outbound_journal_bytes;
-        session.effect_journal = self.old_effect_journal;
-        session.outbound_sequence = self.old_outbound_sequence;
-        session.next_message_id = self.old_next_message_id;
-        session.next_effect_id = self.old_next_effect_id;
-        session.system_menu = self.old_system_menu;
-        session.undo_checkpoint = self.old_undo_checkpoint;
-        session.undo_replay = self.old_undo_replay;
-        session.undo_token = self.old_undo_token;
-        session.input_replay = self.old_input_replay;
-        session.retained_title_program = self.old_retained_title_program;
-        session.active_debug_grant = self.old_active_debug_grant;
-        session.next_debug_grant_id = self.old_next_debug_grant_id;
-        session.debug_outbound_sequence = self.old_debug_outbound_sequence;
-        session.load_slot_paths = self.old_load_slot_paths;
-        session.occupied_slot_paths = self.old_occupied_slot_paths;
-        session.slot_change_tokens = self.old_slot_change_tokens;
-        session.slot_labels = self.old_slot_labels;
-        session.invalid_slot_paths = self.old_invalid_slot_paths;
-        session.system_menu_page = self.old_system_menu_page;
-        for handle in candidate_handles {
-            session.retain_sql_cleanup(candidate_provider, handle);
-        }
-    }
+struct PreparedOrdinaryLoad {
+    prepared: Box<PreparedRuntimeState>,
+    opaque_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
 }
 
 impl RuntimeSession {
-    pub(in crate::session) fn prepare_owned_vm_candidate(
-        mut candidate: RuntimeVm,
-        input: OwnedVmCandidateInput,
-    ) -> Result<PreparedOwnedVm, RuntimeError> {
-        let OwnedVmCandidateInput {
-            state,
-            description,
-            opaque_extensions,
-            structured_extensions,
-            owned,
-            last_load,
-        } = input;
-        let transaction = match last_load {
-            OwnedLastLoad::None => VmRuntimeStateTransaction::RestoreOrdinary(Box::new(state)),
-            OwnedLastLoad::Slot(slot) => VmRuntimeStateTransaction::RestoreOrdinaryWithLastLoad {
-                state: Box::new(state),
-                slot,
-                text: description,
-            },
-        };
-        let (ordinary, _) = candidate
-            .prepare_runtime_state_with_extensions(
-                transaction,
-                StructuredScope::Ordinary,
-                &structured_extensions,
-            )
-            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        candidate
-            .commit_runtime_state(ordinary)
-            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        let reset_global = candidate
-            .prepare_runtime_state(VmRuntimeStateTransaction::ResetGlobalData)
-            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        candidate
-            .commit_runtime_state(reset_global)
-            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        let (global, _) = candidate
-            .prepare_runtime_state_with_extensions(
-                VmRuntimeStateTransaction::OverlayGlobal(Box::new(owned.global_state)),
-                StructuredScope::Global,
-                &owned.global_structured_extensions,
-            )
-            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        candidate
-            .commit_runtime_state(global)
-            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        candidate
-            .restore_random_state(&owned.sfmt_state)
-            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        Ok(PreparedOwnedVm {
-            vm: candidate,
-            opaque_extensions: merge_opaque_extensions(
-                &opaque_extensions,
-                owned.global_opaque_extensions,
-            ),
-            sql: owned
-                .databases
-                .into_iter()
-                .map(|database| crate::runtime_snapshot::SqlConnectionSnapshot {
-                    logical_name: database.logical_name,
-                    identity: database.identity,
-                    durable_revision: database.exact_durable_revision,
-                })
-                .collect(),
-        })
-    }
-
     pub(in super::super) fn resume_storage_host_value(
         &mut self,
         request: erabasic_vm::HostRequestId,
@@ -400,7 +129,6 @@ impl RuntimeSession {
             era_runtime_save::SaveFileKind::Global,
         )
         .map_err(|error| RuntimeError::Internal(format!("invalid global save: {error}")))?;
-        let source = decoded.source;
         let (prepared, _) = vm
             .prepare_runtime_state_with_extensions(
                 VmRuntimeStateTransaction::OverlayGlobal(Box::new(decoded.state)),
@@ -439,7 +167,7 @@ impl RuntimeSession {
             merge_opaque_extensions(&self.save_extensions, decoded.opaque_extensions);
         self.set_phase(RuntimePhase::Running)?;
         self.install_input_replay(replay_origin);
-        self.emit_snake_save_load_diagnostic(source, SaveLoadScope::Global);
+        self.emit_snake_save_load_diagnostic(SaveLoadScope::Global);
         Ok(())
     }
 
@@ -492,7 +220,7 @@ impl RuntimeSession {
             vm.vm().artifact().manifest.compatibility.profile
                 == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake
         });
-        let load = match self.prepare_decoded_ordinary_load(slot, decoded, host_request) {
+        let load = match self.prepare_decoded_ordinary_load(slot, decoded) {
             Ok(load) => load,
             Err(error) if snake => {
                 return self.finish_snake_save_load_failure(host_request, &error.to_string());
@@ -502,108 +230,45 @@ impl RuntimeSession {
         self.complete_prepared_ordinary_load(slot, bytes, load)
     }
 
-    pub(in super::super) fn prepare_decoded_ordinary_load(
+    fn prepare_decoded_ordinary_load(
         &self,
         slot: u32,
         decoded: DecodedEraSave,
-        host_request: Option<erabasic_vm::HostRequestId>,
     ) -> Result<PreparedOrdinaryLoad, RuntimeError> {
         let DecodedEraSave {
             state,
             description,
             opaque_extensions,
             structured_extensions,
-            owned_state,
-            source,
         } = decoded;
         let vm = self
             .vm
             .as_ref()
             .ok_or_else(|| RuntimeError::Internal("ordinary load has no VM".into()))?;
-        let Some(owned) = owned_state else {
-            let (prepared, _) = vm
-                .prepare_runtime_state_with_extensions(
-                    VmRuntimeStateTransaction::RestoreOrdinaryWithLastLoad {
-                        state: Box::new(state),
-                        slot: i64::from(slot),
-                        text: description,
-                    },
-                    StructuredScope::Ordinary,
-                    &structured_extensions,
-                )
-                .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-            return Ok(PreparedOrdinaryLoad {
-                vm: PreparedOrdinaryVm::Traditional(Box::new(prepared)),
-                opaque_extensions,
-                sql: None,
-                host_request,
-                source,
-            });
-        };
-
-        let candidate = vm
-            .fork_for_state_replacement()
+        let (prepared, _) = vm
+            .prepare_runtime_state_with_extensions(
+                VmRuntimeStateTransaction::RestoreOrdinaryWithLastLoad {
+                    state: Box::new(state),
+                    slot: i64::from(slot),
+                    text: description,
+                },
+                StructuredScope::Ordinary,
+                &structured_extensions,
+            )
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        let prepared = Self::prepare_owned_vm_candidate(
-            candidate,
-            OwnedVmCandidateInput {
-                state,
-                description,
-                opaque_extensions,
-                structured_extensions,
-                owned,
-                last_load: OwnedLastLoad::Slot(i64::from(slot)),
-            },
-        )?;
         Ok(PreparedOrdinaryLoad {
-            vm: PreparedOrdinaryVm::Owned(Box::new(prepared.vm)),
-            opaque_extensions: prepared.opaque_extensions,
-            sql: Some(prepared.sql),
-            host_request,
-            source,
+            prepared: Box::new(prepared),
+            opaque_extensions,
         })
     }
 
-    pub(in super::super) fn complete_prepared_ordinary_load(
-        &mut self,
-        slot: u32,
-        bytes: &[u8],
-        mut load: PreparedOrdinaryLoad,
-    ) -> Result<(), RuntimeError> {
-        if let Some(connections) = load.sql.take() {
-            if let Err(blocker) = self.sql.snapshot() {
-                return self.finish_snake_save_load_failure(
-                    load.host_request,
-                    owned_load_sql_blocker_message(blocker),
-                );
-            }
-            return self.begin_owned_save_sql_restore(slot, bytes.to_vec(), load, connections);
-        }
-        self.commit_prepared_ordinary_load(slot, bytes, load, None)
-    }
-
-    pub(in super::super) fn complete_owned_sql_load(
-        &mut self,
-        slot: u32,
-        bytes: &[u8],
-        load: PreparedOrdinaryLoad,
-        sql: SqlRuntimeState,
-    ) -> Result<(), RuntimeError> {
-        self.commit_prepared_ordinary_load(slot, bytes, load, Some(sql))
-    }
-
-    // The replacement transaction remains linear so every rollback edge is visible beside the
-    // state change it protects; splitting it would hide the publication boundary across helpers.
     #[allow(clippy::too_many_lines)]
-    fn commit_prepared_ordinary_load(
+    fn complete_prepared_ordinary_load(
         &mut self,
         slot: u32,
         bytes: &[u8],
         load: PreparedOrdinaryLoad,
-        replacement_sql: Option<SqlRuntimeState>,
     ) -> Result<(), RuntimeError> {
-        let mut replacement_sql = replacement_sql;
-        let save_source = load.source;
         let establish_undo = self.undo_replay.is_none();
         let replay_details = if let Some(replay) = &self.undo_replay {
             ReplayOriginDetails::InputUndo {
@@ -628,46 +293,13 @@ impl RuntimeSession {
                     .map_err(|error| RuntimeError::Internal(error.to_string()))
             })
             .transpose()?;
-        let mut owned_transaction = None;
-        let mut traditional_vm = None;
-        let mut sql_cleanup = None;
-        match load.vm {
-            PreparedOrdinaryVm::Traditional(prepared) => {
-                let mut vm = self
-                    .vm
-                    .take()
-                    .ok_or_else(|| RuntimeError::Internal("ordinary load has no VM".into()))?;
-                if let Err(error) = vm.commit_runtime_state(*prepared) {
-                    self.vm = Some(vm);
-                    return Err(RuntimeError::Internal(error.to_string()));
-                }
-                traditional_vm = Some(vm);
-            }
-            PreparedOrdinaryVm::Owned(candidate) => {
-                self.vm
-                    .as_ref()
-                    .ok_or_else(|| RuntimeError::Internal("ordinary load has no VM".into()))?
-                    .validate_state_replacement(&candidate)
-                    .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-                let replacement = replacement_sql.take().ok_or_else(|| {
-                    RuntimeError::Internal("owned load has no exact SQL candidate".into())
-                })?;
-                let transaction =
-                    OwnedReplacementTransaction::capture(self, *candidate, replacement);
-                owned_transaction = Some(transaction);
-            }
-        }
-        if owned_transaction.is_none() {
-            sql_cleanup = replacement_sql.take().map(|replacement| {
-                let previous = std::mem::replace(&mut self.sql, replacement);
-                (
-                    previous.provider(),
-                    previous
-                        .connections()
-                        .map(|(_, connection)| connection.handle)
-                        .collect::<Vec<_>>(),
-                )
-            });
+        let mut vm = self
+            .vm
+            .take()
+            .ok_or_else(|| RuntimeError::Internal("ordinary load has no VM".into()))?;
+        if let Err(error) = vm.commit_runtime_state(*load.prepared) {
+            self.vm = Some(vm);
+            return Err(RuntimeError::Internal(error.to_string()));
         }
         self.system_menu_host_request = None;
         self.save_extensions = load.opaque_extensions;
@@ -687,74 +319,33 @@ impl RuntimeSession {
         self.controller.clear();
         self.controller.flow = Some(SystemFlow::Shop);
         self.controller.step = SystemStep::PostLoadShop;
-        let vm = if let Some(transaction) = owned_transaction.as_mut() {
-            transaction.candidate_vm_mut()
-        } else {
-            traditional_vm
-                .as_mut()
-                .expect("traditional replacement retains its VM until publication")
-        };
         self.controller.prepare_load_sequence(vm.vm().artifact());
         let flow = if self.controller.is_complete() {
-            self.continue_system_flow(vm)
+            self.continue_system_flow(&mut vm)
         } else {
-            self.spawn_next_event(vm)
+            self.spawn_next_event(&mut vm)
         };
         if let Err(error) = flow {
-            if let Some(transaction) = owned_transaction.take() {
-                transaction.rollback(self);
-            } else {
-                self.vm = traditional_vm.take();
-            }
+            self.vm = Some(vm);
             return Err(error);
         }
         if let Err(error) = self.set_phase(RuntimePhase::Running) {
-            if let Some(transaction) = owned_transaction.take() {
-                transaction.rollback(self);
-            } else {
-                self.vm = traditional_vm.take();
-            }
+            self.vm = Some(vm);
             return Err(error);
         }
         if let Some(random) = random_before_load
             && let Err(error) = self.establish_input_undo_checkpoint(slot, bytes.to_vec(), random)
         {
-            if let Some(transaction) = owned_transaction.take() {
-                transaction.rollback(self);
-            } else {
-                self.vm = traditional_vm.take();
-            }
+            self.vm = Some(vm);
             return Err(error);
         }
         self.install_input_replay(replay_origin);
-        #[cfg(test)]
-        if slot == u32::MAX
-            && let Some(transaction) = owned_transaction.take()
-        {
-            transaction.rollback(self);
-            return Err(RuntimeError::Internal(
-                "injected owned replacement failure before publication".into(),
-            ));
-        }
-        if let Some(transaction) = owned_transaction.as_mut() {
-            transaction.publish(self);
-            sql_cleanup = Some(transaction.old_sql_cleanup());
-        } else {
-            self.vm = traditional_vm.take();
-        }
-        drop(owned_transaction);
-        if let Some((provider, handles)) = sql_cleanup {
-            let _ = self.emit_sql_cleanup_for(provider, &handles);
-        }
-        self.emit_snake_save_load_diagnostic(save_source, SaveLoadScope::Ordinary);
+        self.vm = Some(vm);
+        self.emit_snake_save_load_diagnostic(SaveLoadScope::Ordinary);
         Ok(())
     }
 
-    pub(in crate::session) fn emit_snake_save_load_diagnostic(
-        &mut self,
-        source: era_runtime_save::CompatibleSaveSource,
-        scope: SaveLoadScope,
-    ) {
+    pub(in crate::session) fn emit_snake_save_load_diagnostic(&mut self, scope: SaveLoadScope) {
         let snake = self.project_snapshot.as_ref().is_some_and(|project| {
             project.manifest.compatibility.profile
                 == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake
@@ -762,31 +353,14 @@ impl RuntimeSession {
         if !snake {
             return;
         }
-        let (code, message) = match (source, scope) {
-            (
-                era_runtime_save::CompatibleSaveSource::Interoperable1808,
-                SaveLoadScope::Ordinary,
-            ) => (
+        let (code, message) = match scope {
+            SaveLoadScope::Ordinary => (
                 "runtime.interoperable_save_external_state_preserved",
                 "loaded a standard Emuera 1808 ordinary save; the file has no recoverable RNG or SQL snapshot, so the live SFMT stream and external SQL state were preserved",
             ),
-            (era_runtime_save::CompatibleSaveSource::Interoperable1808, SaveLoadScope::Global) => (
+            SaveLoadScope::Global => (
                 "runtime.interoperable_global_external_state_preserved",
                 "loaded a standard Emuera 1808 GLOBAL save; only GLOBAL scope was overlaid, and the live SFMT stream and external SQL state were preserved",
-            ),
-            (
-                era_runtime_save::CompatibleSaveSource::LegacySnakeOwnedV11,
-                SaveLoadScope::Ordinary,
-            ) => (
-                "runtime.legacy_owned_save_migrated",
-                "loaded the exact snake identity 11 OwnedSaveStateV1 migration format; its GLOBAL, SFMT, and SQL revisions were restored, and the next traditional save will use bare Emuera 1808",
-            ),
-            (
-                era_runtime_save::CompatibleSaveSource::LegacySnakeOwnedV11,
-                SaveLoadScope::Global,
-            ) => (
-                "runtime.legacy_global_save_migrated",
-                "loaded an exact snake identity 11 legacy GLOBAL envelope; only GLOBAL scope was migrated, the live SFMT and SQL state were preserved, and the next GLOBAL save will use bare Emuera 1808",
             ),
         };
         // Loading is already committed at this point. A saturated outbound diagnostic journal
@@ -901,22 +475,5 @@ impl RuntimeSession {
         self.set_phase(RuntimePhase::Running)?;
         self.install_input_replay(replay_origin);
         Ok(())
-    }
-}
-
-const fn owned_load_sql_blocker_message(blocker: crate::sql::SqlSnapshotBlocker) -> &'static str {
-    match blocker {
-        crate::sql::SqlSnapshotBlocker::Inflight => {
-            "owned load cannot replace SQL while a request is pending"
-        }
-        crate::sql::SqlSnapshotBlocker::Reader => {
-            "owned load cannot replace SQL while a reader is active"
-        }
-        crate::sql::SqlSnapshotBlocker::Transaction => {
-            "owned load cannot replace SQL while a transaction is active"
-        }
-        crate::sql::SqlSnapshotBlocker::RevisionMissing => {
-            "owned load cannot replace SQL with an untracked current revision"
-        }
     }
 }

@@ -333,18 +333,9 @@ impl RuntimeSession {
                     );
                 }
                 data.extend_from_slice(chunk.as_slice());
-                let compatibility = &self
-                    .vm
-                    .as_ref()
-                    .ok_or_else(|| RuntimeError::Internal("save menu scan has no VM".into()))?
-                    .vm()
-                    .artifact()
-                    .manifest
-                    .compatibility;
-                let inspection = era_runtime_save::inspect_compatible_metadata(
+                let inspection = era_runtime_save::inspect_metadata(
                     &data,
                     complete,
-                    compatibility,
                     era_runtime_save::SaveCodecLimits::default(),
                 );
                 if matches!(

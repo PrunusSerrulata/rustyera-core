@@ -720,8 +720,8 @@ Completed/Failed/Cancelled 和可空 message。未知、重复结果会被拒绝
 ### 9.1 Storage
 
 所有实际文件 I/O 都由前端完成。namespace：Project、Save、GlobalSave、Data、Log、
-Resource、LegacyProfileSave。最后一项只用于读取或删除旧 profile 私有存档，允许
-Read/List/Stat/ReadRange/Delete，禁止 Write；新的权威存档只能写 Save/GlobalSave。
+Resource。传统存档只使用项目 `sav` 对应的 Save/GlobalSave；runtime 不探测、读取、
+迁移或删除旧 profile 私有存档。
 `StorageRequest` 字段为 `request_id, namespace, relative_path, operation,
 idempotency_key, deadline_ns?`。同一幂等键重试必须具有相同效果。
 
@@ -805,9 +805,9 @@ reader 行与 5 秒 provider 执行预算。
 `rustyera.scene@1` 与 `rustyera.audio@1`，`save_codec` 为
 `snake_emuera1808_interop_v1`；这些字段参与项目、缓存和 snapshot identity。该 v12 identity
 约定标准传统存档不拥有 GLOBAL、SFMT RNG 或 SQL revision，精确 SQL/RNG 仍只属于 VM
-snapshot；实际 codec 路由与编解码在子批次 5.2 接入。精确 v11
-identity（`rustyera_envelope_v2:emuera1808` + `rustyera.save_state@1`）只供旧 RERASAV
-迁移解码器识别，不是当前可写 identity。前端没有精确协商
+snapshot；实际 codec 路由与编解码在子批次 5.2 接入。传统存档只接受并生成标准
+Emuera 1808 Binary、ERAZIP/GZip 或 Text；RustyEra 私有 envelope 不属于受支持格式。
+前端没有精确协商
 `Sql/rustyera.sql@1.0` 时，兼容身份解析和项目加载会在读取项目源码、storage 或缓存前返回
 `runtime.missing_sql_service`；音频服务的实际查询门禁由音频运行时接入阶段执行。
 

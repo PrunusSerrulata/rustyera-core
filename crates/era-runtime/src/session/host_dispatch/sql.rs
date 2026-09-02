@@ -18,7 +18,7 @@ impl RuntimeSession {
                 vm,
                 request,
                 erabasic_vm::ScriptFaultKind::Operation,
-                "SQL operations are not allowed while preparing an owned save",
+                "SQL operations are not allowed while preparing a candidate save",
             );
         }
         let name = request.import.import.name.to_ascii_uppercase();

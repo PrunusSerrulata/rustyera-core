@@ -1193,14 +1193,15 @@ fn undo_regenerates_script_sequence_without_injecting_a_second_copy_and_restores
     let random = session.vm.as_ref().unwrap().export_random_state().unwrap();
     let baseline = {
         let vm = session.vm.as_ref().unwrap();
-        session
-            .encode_owned_runtime_save(
-                vm,
-                "input checkpoint".into(),
-                Vec::new(),
-                session.traditional_save_format(),
-            )
-            .unwrap()
+        encode_scoped_save(
+            &vm.export_era_state(),
+            vm.vm().artifact(),
+            era_runtime_save::SaveFileKind::Normal,
+            "input checkpoint".into(),
+            Vec::new(),
+            session.traditional_save_format(),
+        )
+        .unwrap()
     };
     session
         .establish_input_undo_checkpoint(3, baseline, random)

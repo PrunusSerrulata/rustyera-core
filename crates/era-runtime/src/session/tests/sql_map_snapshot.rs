@@ -283,17 +283,15 @@ fn export_snapshot_bytes(fixture: &mut SqlHostFixture, message_id: u64) -> Vec<u
         .clone()
 }
 
-fn encode_legacy_v11_owned_fixture(fixture: &SqlHostFixture) -> Vec<u8> {
-    let vm = fixture.session.vm.as_ref().expect("SQL fixture VM");
-    fixture
-        .session
-        .encode_owned_runtime_save(
-            vm,
-            String::new(),
-            Vec::new(),
-            fixture.session.traditional_save_format(),
-        )
-        .expect("encode exact legacy v11 owned-save fixture")
+fn assert_standard_save(bytes: &[u8]) {
+    assert!(matches!(
+        era_runtime_save::inspect_metadata(
+            bytes,
+            true,
+            era_runtime_save::SaveCodecLimits::default()
+        ),
+        Ok(era_runtime_save::SaveMetadataInspection::Complete { .. })
+    ));
 }
 
 fn memory_identity() -> SqlDatabaseIdentityV1 {
@@ -588,7 +586,7 @@ fn sql_state_blocks_vm_snapshots_but_not_stable_traditional_save_exports() {
         snapshot_reasons(&mut reader, 501)
             .contains(&SnapshotIneligibleReason::SnapshotStateUnavailable)
     );
-    assert!(!export_traditional_save_bytes(&mut reader, 505).starts_with(b"RERASAV\0"));
+    assert_standard_save(&export_traditional_save_bytes(&mut reader, 505));
 
     let mut transaction = SqlHostFixture::new(
         "RESULT:0 = SQL_CONNECT(\"db\")\nRESULT:1 = SQL_EXECUTE_NONQUERY(\"db\", \"BEGIN\")",
@@ -623,7 +621,7 @@ fn sql_state_blocks_vm_snapshots_but_not_stable_traditional_save_exports() {
         snapshot_reasons(&mut transaction, 502)
             .contains(&SnapshotIneligibleReason::SnapshotStateUnavailable)
     );
-    assert!(!export_traditional_save_bytes(&mut transaction, 506).starts_with(b"RERASAV\0"));
+    assert_standard_save(&export_traditional_save_bytes(&mut transaction, 506));
 
     let mut missing_revision = SqlHostFixture::new("RESULT:0 = SQL_CONNECT(\"db\")", Vec::new());
     missing_revision.answer_memory_open(None);
@@ -632,7 +630,7 @@ fn sql_state_blocks_vm_snapshots_but_not_stable_traditional_save_exports() {
         snapshot_reasons(&mut missing_revision, 503)
             .contains(&SnapshotIneligibleReason::SnapshotStateUnavailable)
     );
-    assert!(!export_traditional_save_bytes(&mut missing_revision, 507).starts_with(b"RERASAV\0"));
+    assert_standard_save(&export_traditional_save_bytes(&mut missing_revision, 507));
 }
 
 #[test]
@@ -663,7 +661,7 @@ fn snake_savedata_writes_bare_1808_during_an_active_sql_transaction() {
     let StorageOperation::Write { data, .. } = write.operation else {
         panic!("SAVEDATA must issue a save write")
     };
-    assert!(!data.as_slice().starts_with(b"RERASAV\0"));
+    assert_standard_save(data.as_slice());
 }
 
 #[test]
@@ -737,9 +735,10 @@ fn bare_ordinary_load_preserves_live_global_rng_and_sql_state() {
 }
 
 #[test]
-fn corrupt_bare_ordinary_input_preserves_global_rng_and_sql_state() {
+fn private_envelope_magic_is_rejected_without_mutating_runtime_or_slots() {
     let mut fixture = SqlHostFixture::new("RESULT:0 = SQL_CONNECT(\"db\")", Vec::new());
     let (_, connection) = fixture.answer_memory_open(Some(revision(10)));
+    let ordinary = fixture.integer(0);
     write_runtime_integer(
         fixture.session.vm.as_mut().unwrap(),
         "GLOBAL",
@@ -755,14 +754,34 @@ fn corrupt_bare_ordinary_input_preserves_global_rng_and_sql_state() {
         .unwrap()
         .export_random_state()
         .unwrap();
+    fixture.session.load_slot_paths = vec!["save10.sav".into()];
+    fixture
+        .session
+        .occupied_slot_paths
+        .insert("save10.sav".into());
+    fixture
+        .session
+        .slot_change_tokens
+        .insert("save10.sav".into(), "revision-10".into());
+    fixture
+        .session
+        .slot_labels
+        .insert("save10.sav".into(), "slot ten".into());
+    let slot_state = (
+        fixture.session.load_slot_paths.clone(),
+        fixture.session.occupied_slot_paths.clone(),
+        fixture.session.slot_change_tokens.clone(),
+        fixture.session.slot_labels.clone(),
+    );
     fixture.messages.clear();
 
     fixture
         .session
-        .complete_ordinary_load(510, b"corrupt ordinary save", None)
+        .complete_ordinary_load(510, b"RERASAV\0", None)
         .expect("snake load failure is reported without replacing live state");
     fixture.messages.extend(drain(&mut fixture.session));
 
+    assert_eq!(fixture.integer(0), ordinary);
     assert_eq!(
         read_runtime_integer(fixture.session.vm.as_ref().unwrap(), "GLOBAL", &[0], None).unwrap(),
         88
@@ -786,6 +805,15 @@ fn corrupt_bare_ordinary_input_preserves_global_rng_and_sql_state() {
             .handle,
         connection
     );
+    assert_eq!(
+        (
+            fixture.session.load_slot_paths.clone(),
+            fixture.session.occupied_slot_paths.clone(),
+            fixture.session.slot_change_tokens.clone(),
+            fixture.session.slot_labels.clone(),
+        ),
+        slot_state
+    );
     assert!(fixture.messages.iter().any(|message| matches!(
         message,
         RuntimeMessage::Diagnostic(ProtocolDiagnostic { code, .. })
@@ -795,7 +823,6 @@ fn corrupt_bare_ordinary_input_preserves_global_rng_and_sql_state() {
         message,
         RuntimeMessage::Diagnostic(ProtocolDiagnostic { code, .. })
             if code == "runtime.interoperable_save_external_state_preserved"
-                || code == "runtime.legacy_owned_save_migrated"
     )));
 }
 
@@ -921,277 +948,6 @@ fn exact_restore_failure_keeps_the_active_sql_state_and_cleans_the_candidate() {
         cleanup_payload.operation,
         SqlOperationV1::Disconnect { connection } if connection == alpha_connection
     ));
-}
-
-#[test]
-fn owned_save_missing_revision_keeps_vm_rng_and_active_sql_unchanged() {
-    let mut fixture = SqlHostFixture::new("RESULT:0 = SQL_CONNECT(\"old\")", Vec::new());
-    let (_, old_connection) = fixture.answer_memory_open(Some(revision(3)));
-    assert_eq!(fixture.session.phase(), RuntimePhase::WaitingInput);
-    let vm_before = fixture.integer(0);
-    let rng_before = fixture
-        .session
-        .vm
-        .as_ref()
-        .unwrap()
-        .export_random_state()
-        .unwrap();
-    fixture.messages.clear();
-    let bytes = encode_legacy_v11_owned_fixture(&fixture);
-
-    fixture
-        .session
-        .start_traditional_save(607, &bytes)
-        .expect("begin owned save exact SQL restore");
-    fixture.messages.extend(drain(&mut fixture.session));
-    let (request, payload) = fixture.take_sql_request();
-    let SqlOperationV1::Open {
-        revision: era_runtime_protocol::SqlOpenRevisionV1::Exact(exact_revision),
-        ..
-    } = payload.operation
-    else {
-        panic!("owned save must request an exact SQL revision")
-    };
-    assert_eq!(exact_revision, revision(3));
-    fixture.respond_sql(
-        &request,
-        SqlResponseV1 {
-            provider: payload.provider,
-            database: None,
-            reader: None,
-            result: SqlResultV1::Error {
-                error: SqlErrorV1 {
-                    code: SqlErrorCodeV1::RevisionMissing,
-                    operation: SqlOperationKindV1::Open,
-                    context: Vec::new(),
-                    sqlite_code: None,
-                    sqlite_message: None,
-                },
-            },
-        },
-    );
-
-    assert_eq!(fixture.integer(0), vm_before);
-    assert_eq!(
-        fixture
-            .session
-            .vm
-            .as_ref()
-            .unwrap()
-            .export_random_state()
-            .unwrap(),
-        rng_before
-    );
-    let active = fixture
-        .session
-        .sql
-        .connection_by_key("old")
-        .expect("failed owned restore preserves active SQL");
-    assert_eq!(active.handle, old_connection);
-    assert_eq!(active.durable_revision.as_ref(), Some(&revision(3)));
-}
-
-#[test]
-#[allow(clippy::too_many_lines)]
-fn owned_save_restores_saved_rng_and_exact_sql_revision_before_commit() {
-    let mut fixture = SqlHostFixture::new("RESULT:0 = SQL_CONNECT(\"db\")", Vec::new());
-    let (_, old_connection) = fixture.answer_memory_open(Some(revision(5)));
-    write_runtime_integer(
-        fixture.session.vm.as_mut().unwrap(),
-        "GLOBAL",
-        &[0],
-        None,
-        41,
-    )
-    .unwrap();
-    let rng_a = fixture
-        .session
-        .vm
-        .as_ref()
-        .unwrap()
-        .export_random_state()
-        .unwrap();
-    fixture.messages.clear();
-    let save_a = encode_legacy_v11_owned_fixture(&fixture);
-    let mut rng_b = rng_a.clone();
-    rng_b[0] ^= 0x55aa;
-    fixture
-        .session
-        .vm
-        .as_mut()
-        .unwrap()
-        .restore_random_state(&rng_b)
-        .unwrap();
-    write_runtime_integer(
-        fixture.session.vm.as_mut().unwrap(),
-        "GLOBAL",
-        &[0],
-        None,
-        99,
-    )
-    .unwrap();
-
-    fixture
-        .session
-        .start_traditional_save(609, &save_a)
-        .expect("begin owned save restore");
-    fixture.messages.extend(drain(&mut fixture.session));
-    let (request, payload) = fixture.take_sql_request();
-    let SqlOperationV1::Open {
-        connection,
-        revision: era_runtime_protocol::SqlOpenRevisionV1::Exact(exact_revision),
-        ..
-    } = payload.operation
-    else {
-        panic!("owned save must reopen the recorded exact revision")
-    };
-    assert_eq!(exact_revision, revision(5));
-    fixture.respond_sql(
-        &request,
-        SqlResponseV1 {
-            provider: payload.provider,
-            database: Some(SqlDatabaseStateV1 {
-                connection,
-                connected: true,
-                transaction_active: false,
-                durable_revision: Some(revision(5)),
-            }),
-            reader: None,
-            result: SqlResultV1::Opened {
-                sqlite_version: era_runtime_protocol::SQL_SQLITE_VERSION.into(),
-                limits: SqlLimitsV1::FIXED,
-            },
-        },
-    );
-
-    assert_eq!(
-        fixture
-            .session
-            .vm
-            .as_ref()
-            .unwrap()
-            .export_random_state()
-            .unwrap(),
-        rng_a
-    );
-    assert_eq!(
-        read_runtime_integer(fixture.session.vm.as_ref().unwrap(), "GLOBAL", &[0], None,).unwrap(),
-        41
-    );
-    let restored = fixture
-        .session
-        .sql
-        .connection_by_key("db")
-        .expect("owned restore publishes its exact SQL candidate");
-    assert_eq!(restored.handle, connection);
-    assert_ne!(restored.handle, old_connection);
-    assert_eq!(restored.durable_revision.as_ref(), Some(&revision(5)));
-    assert!(fixture.messages.iter().any(|message| matches!(
-        message,
-        RuntimeMessage::Diagnostic(ProtocolDiagnostic { code, .. })
-            if code == "runtime.legacy_owned_save_migrated"
-    )));
-    let (cleanup_request, cleanup) = fixture.take_sql_request();
-    assert!(matches!(
-        cleanup.operation,
-        SqlOperationV1::Disconnect { connection } if connection == old_connection
-    ));
-    fixture.respond_sql(
-        &cleanup_request,
-        SqlResponseV1 {
-            provider: cleanup.provider,
-            database: None,
-            reader: None,
-            result: SqlResultV1::Disconnected,
-        },
-    );
-    let migrated = export_traditional_save_bytes(&mut fixture, 610);
-    assert!(!migrated.starts_with(b"RERASAV\0"));
-}
-
-#[test]
-fn owned_replacement_fault_before_publication_rolls_back_vm_sql_and_session_state() {
-    let mut fixture = SqlHostFixture::new("", Vec::new());
-    write_runtime_integer(
-        fixture.session.vm.as_mut().unwrap(),
-        "GLOBAL",
-        &[0],
-        None,
-        41,
-    )
-    .unwrap();
-    let saved_rng = fixture
-        .session
-        .vm
-        .as_ref()
-        .unwrap()
-        .export_random_state()
-        .unwrap();
-    fixture.messages.clear();
-    let bytes = encode_legacy_v11_owned_fixture(&fixture);
-
-    write_runtime_integer(
-        fixture.session.vm.as_mut().unwrap(),
-        "GLOBAL",
-        &[0],
-        None,
-        99,
-    )
-    .unwrap();
-    let mut live_rng = saved_rng;
-    live_rng[0] ^= 0x5a5a;
-    fixture
-        .session
-        .vm
-        .as_mut()
-        .unwrap()
-        .restore_random_state(&live_rng)
-        .unwrap();
-    let live_provider = fixture.session.sql.provider();
-    let live_phase = fixture.session.phase();
-    let live_epoch = fixture.session.epoch;
-    let live_revision = fixture.session.revision;
-    let live_system_menu = fixture.session.system_menu;
-    let live_outbound = fixture.session.outbound.clone();
-    let decoded =
-        decode_era_save(&bytes, fixture.session.vm.as_ref().unwrap().vm().artifact()).unwrap();
-    let mut load = fixture
-        .session
-        .prepare_decoded_ordinary_load(u32::MAX, decoded, None)
-        .unwrap();
-    assert!(load.sql.take().is_some());
-    let mut candidate_sql = fixture.session.sql.clone();
-    candidate_sql.reset_for_project_boundary();
-
-    let error = fixture
-        .session
-        .complete_owned_sql_load(u32::MAX, &bytes, load, candidate_sql)
-        .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("injected owned replacement failure")
-    );
-    assert_eq!(fixture.session.phase(), live_phase);
-    assert_eq!(fixture.session.epoch, live_epoch);
-    assert_eq!(fixture.session.revision, live_revision);
-    assert_eq!(fixture.session.system_menu, live_system_menu);
-    assert_eq!(fixture.session.outbound, live_outbound);
-    assert_eq!(fixture.session.sql.provider(), live_provider);
-    assert_eq!(
-        read_runtime_integer(fixture.session.vm.as_ref().unwrap(), "GLOBAL", &[0], None,).unwrap(),
-        99
-    );
-    assert_eq!(
-        fixture
-            .session
-            .vm
-            .as_ref()
-            .unwrap()
-            .export_random_state()
-            .unwrap(),
-        live_rng
-    );
 }
 
 #[test]

@@ -45,8 +45,7 @@ pub use effect::{
 pub use era_protocol::ProtocolBytes;
 pub use erabasic_compat::{
     AUDIO_SERVICE_CONTRACT_NAME, AUDIO_SERVICE_CONTRACT_VERSION, CompatibilityIdentity,
-    CompatibilityProfileId, CompatibilityServiceContract, LEGACY_SNAKE_OWNED_SAVE_CODEC,
-    SNAKE_INTEROP_SAVE_CODEC,
+    CompatibilityProfileId, CompatibilityServiceContract, SNAKE_INTEROP_SAVE_CODEC,
 };
 pub use erabasic_html::{
     HtmlAlignment, HtmlAttribute, HtmlBoxModel, HtmlColorMatrix, HtmlDisplayMode, HtmlDocument,

@@ -592,26 +592,15 @@ fn input_undo_records_only_accepted_scalar_input_after_a_checkpoint() {
         let random = session.vm.as_ref().unwrap().export_random_state().unwrap();
         let baseline = {
             let vm = session.vm.as_ref().unwrap();
-            if profile == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake {
-                session
-                    .encode_owned_runtime_save(
-                        vm,
-                        "checkpoint".into(),
-                        Vec::new(),
-                        session.traditional_save_format(),
-                    )
-                    .unwrap()
-            } else {
-                encode_scoped_save(
-                    &vm.export_era_state(),
-                    vm.vm().artifact(),
-                    era_runtime_save::SaveFileKind::Normal,
-                    "checkpoint".into(),
-                    Vec::new(),
-                    session.traditional_save_format(),
-                )
-                .unwrap()
-            }
+            encode_scoped_save(
+                &vm.export_era_state(),
+                vm.vm().artifact(),
+                era_runtime_save::SaveFileKind::Normal,
+                "checkpoint".into(),
+                Vec::new(),
+                session.traditional_save_format(),
+            )
+            .unwrap()
         };
         session
             .establish_input_undo_checkpoint(3, baseline, random.clone())

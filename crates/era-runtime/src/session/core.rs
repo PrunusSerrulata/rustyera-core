@@ -45,27 +45,9 @@ impl RuntimeSession {
             state,
             description,
             structured_extensions,
-            owned_state,
             ..
         } = decoded;
         let mut vm = RuntimeVm::new(artifact.clone(), self.options.vm_config);
-        if let Some(owned) = owned_state {
-            let prepared = Self::prepare_owned_vm_candidate(
-                vm,
-                OwnedVmCandidateInput {
-                    state,
-                    description: description.clone(),
-                    opaque_extensions: Vec::new(),
-                    structured_extensions,
-                    owned,
-                    last_load: OwnedLastLoad::None,
-                },
-            )
-            .map_err(|error| TraditionalSaveValidationError::Incompatible(error.to_string()))?;
-            self.validate_exact_sql_restore(&prepared.sql)
-                .map_err(|message| TraditionalSaveValidationError::Incompatible(message.into()))?;
-            return Ok(TraditionalSaveInspection { description });
-        }
         let (ordinary, _) = vm
             .prepare_runtime_state_with_extensions(
                 VmRuntimeStateTransaction::RestoreOrdinary(Box::new(state)),

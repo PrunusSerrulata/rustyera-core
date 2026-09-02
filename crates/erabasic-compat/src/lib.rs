@@ -25,10 +25,6 @@ pub const SCENE_CONTRACT_VERSION: u32 = 1;
 pub const AUDIO_SERVICE_CONTRACT_NAME: &str = "rustyera.audio";
 pub const AUDIO_SERVICE_CONTRACT_VERSION: u32 = 1;
 pub const SNAKE_INTEROP_SAVE_CODEC: &str = "snake_emuera1808_interop_v1";
-pub const LEGACY_SNAKE_OWNED_SAVE_CODEC: &str = "rustyera_envelope_v2:emuera1808";
-/// Contract carried only by the exact snake v11 migration identity.
-pub const SAVE_STATE_CONTRACT_NAME: &str = "rustyera.save_state";
-pub const SAVE_STATE_CONTRACT_VERSION: u32 = 1;
 
 #[derive(
     Clone,
@@ -176,45 +172,6 @@ impl CompatibilityIdentity {
                 ],
             },
         }
-    }
-
-    /// Exact identity accepted only by the Batch 5 migration decoder for v11 `RERASAV` input.
-    #[must_use]
-    pub fn legacy_snake_owned_save_v11() -> Self {
-        Self {
-            profile: CompatibilityProfileId::EmueraSkiaSnake,
-            semantic_version: 11,
-            policy_version: 11,
-            arithmetic: "snake_saturating_i64_v1".into(),
-            rng_algorithm: "sfmt19937".into(),
-            rng_state_version: 1,
-            layout: "unicode_column_v1".into(),
-            save_codec: LEGACY_SNAKE_OWNED_SAVE_CODEC.into(),
-            services: vec![
-                CompatibilityServiceContract {
-                    name: "rustyera.sql".into(),
-                    version: 1,
-                },
-                CompatibilityServiceContract {
-                    name: "rustyera.sql.limits".into(),
-                    version: 1,
-                },
-                CompatibilityServiceContract {
-                    name: "rustyera.scene".into(),
-                    version: 1,
-                },
-                CompatibilityServiceContract {
-                    name: "rustyera.save_state".into(),
-                    version: 1,
-                },
-            ],
-        }
-    }
-
-    /// Whether this is the one legacy owned-save identity eligible for migration.
-    #[must_use]
-    pub fn is_legacy_snake_owned_save_v11(&self) -> bool {
-        self == &Self::legacy_snake_owned_save_v11()
     }
 
     #[must_use]
@@ -390,88 +347,6 @@ mod tests {
                 },
             ]
         );
-        let legacy = CompatibilityIdentity::legacy_snake_owned_save_v11();
-        assert!(legacy.is_legacy_snake_owned_save_v11());
-        assert_eq!(legacy.semantic_version, 11);
-        assert_eq!(legacy.policy_version, 11);
-        assert_eq!(legacy.save_codec, LEGACY_SNAKE_OWNED_SAVE_CODEC);
-        assert_eq!(
-            legacy.services,
-            vec![
-                CompatibilityServiceContract {
-                    name: "rustyera.sql".into(),
-                    version: 1,
-                },
-                CompatibilityServiceContract {
-                    name: "rustyera.sql.limits".into(),
-                    version: 1,
-                },
-                CompatibilityServiceContract {
-                    name: "rustyera.scene".into(),
-                    version: 1,
-                },
-                CompatibilityServiceContract {
-                    name: "rustyera.save_state".into(),
-                    version: 1,
-                },
-            ]
-        );
-        for different in [
-            {
-                let mut value = legacy.clone();
-                value.profile = CompatibilityProfileId::EmueraEm;
-                value
-            },
-            {
-                let mut value = legacy.clone();
-                value.semantic_version += 1;
-                value
-            },
-            {
-                let mut value = legacy.clone();
-                value.policy_version += 1;
-                value
-            },
-            {
-                let mut value = legacy.clone();
-                value.arithmetic.push_str(".changed");
-                value
-            },
-            {
-                let mut value = legacy.clone();
-                value.rng_algorithm.push_str(".changed");
-                value
-            },
-            {
-                let mut value = legacy.clone();
-                value.rng_state_version += 1;
-                value
-            },
-            {
-                let mut value = legacy.clone();
-                value.layout.push_str(".changed");
-                value
-            },
-            {
-                let mut value = legacy.clone();
-                value.save_codec.push_str(".changed");
-                value
-            },
-            {
-                let mut value = legacy.clone();
-                value.services[0].version += 1;
-                value
-            },
-            {
-                let mut value = legacy.clone();
-                value.services.swap(0, 1);
-                value
-            },
-        ] {
-            assert!(!different.is_legacy_snake_owned_save_v11());
-        }
-        assert_ne!(legacy.digest(), snake.digest());
-        assert!(legacy.validate().is_err());
         for contract in [
             SQL_SERVICE_CONTRACT_NAME,
             SQL_LIMITS_CONTRACT_NAME,

@@ -308,62 +308,6 @@ impl RuntimeSession {
         ))
     }
 
-    #[cfg(test)]
-    pub(in crate::session) fn encode_owned_runtime_save(
-        &self,
-        vm: &RuntimeVm,
-        description: String,
-        ordinary_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
-        format: era_runtime_save::SaveFormat,
-    ) -> Result<Vec<u8>, era_runtime_save::SaveCodecError> {
-        let databases = self
-            .sql
-            .snapshot()
-            .map_err(|blocker| {
-                era_runtime_save::SaveCodecError::InvalidFormat(
-                    owned_sql_snapshot_blocker_message(blocker).into(),
-                )
-            })?
-            .connections
-            .into_iter()
-            .map(|connection| OwnedDatabaseRevisionV1 {
-                logical_name: connection.logical_name,
-                identity: connection.identity,
-                exact_durable_revision: connection.durable_revision,
-            })
-            .collect();
-        let global_payload = encode_scoped_save_payload(
-            &vm.vm().export_era_state_for(EraSaveScope::Global),
-            vm.vm().artifact(),
-            era_runtime_save::SaveFileKind::Global,
-            String::new(),
-            merge_structured_extensions(
-                &self.save_extensions,
-                vm.structured_extensions(StructuredScope::Global)
-                    .map_err(|error| {
-                        era_runtime_save::SaveCodecError::InvalidFormat(error.to_string())
-                    })?,
-            )?,
-            era_runtime_save::SaveFormat::Binary1808,
-        )?;
-        let owned_state = OwnedSaveStateV1 {
-            format_version: OwnedSaveStateV1::FORMAT_VERSION,
-            global_payload: global_payload.into(),
-            sfmt_state: vm.export_random_state().map_err(|error| {
-                era_runtime_save::SaveCodecError::InvalidFormat(error.to_string())
-            })?,
-            databases,
-        };
-        encode_owned_era_save(
-            &vm.export_era_state(),
-            vm.vm().artifact(),
-            description,
-            ordinary_extensions,
-            &owned_state,
-            format,
-        )
-    }
-
     pub(in super::super) fn finish_candidate_save_failure(
         &mut self,
         continuation: CandidateSaveContinuation,

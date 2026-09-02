@@ -39,9 +39,7 @@ stable normalized golden and source/input identities needed to reproduce it.
 Batch 5.1 protocol tests consume this frozen contract without rerunning either
 reference engine. Runtime protocol 46 uses `Sound(0..9)` and `Bgm` targets,
 integer-millisecond duration/position, millionths volume/rate, revision-bound
-effects and `audio_observation@1`. `LegacyProfileSave` is a read/list/stat/range
-and delete namespace; a test host must reject writes instead of redirecting them.
-The current snake identity is version 12 with
-`save_codec=snake_emuera1808_interop_v1` and `rustyera.audio@1`; the exact v11
-envelope identity is retained only as a migration input and must not be emitted
-as a current save identity.
+effects and `audio_observation@1`. Traditional saves use only the project Save
+or GlobalSave namespace. The current snake identity is version 12 with
+`save_codec=snake_emuera1808_interop_v1` and `rustyera.audio@1`; private RustyEra
+save envelopes are not part of the product contract.

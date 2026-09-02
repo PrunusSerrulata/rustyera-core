@@ -207,12 +207,6 @@ impl FixtureStorage {
             request.operation,
             StorageOperation::Write { .. } | StorageOperation::Delete { .. }
         );
-        if !request.namespace.permits(&request.operation) {
-            return Err(io(
-                FrontendIoErrorKind::ReadOnly,
-                "LegacyProfileSave does not accept writes",
-            ));
-        }
         if request.namespace == StorageNamespace::Resource && mutation {
             return Err(io(FrontendIoErrorKind::ReadOnly, "Resource is read-only"));
         }
@@ -222,7 +216,6 @@ impl FixtureStorage {
                 | StorageNamespace::Data
                 | StorageNamespace::Save
                 | StorageNamespace::GlobalSave
-                | StorageNamespace::LegacyProfileSave
         ) {
             return Err(io(
                 FrontendIoErrorKind::PermissionDenied,
@@ -698,34 +691,6 @@ mod tests {
             FrontendIoErrorKind::ReadOnly,
         );
         assert!(storage.writable.is_empty());
-    }
-
-    #[test]
-    fn legacy_profile_save_allows_delete_but_rejects_write() {
-        let mut storage = FixtureStorage::from_manifest(&manifest(true, &[])).unwrap();
-        assert_error(
-            storage.respond(&write(
-                1,
-                StorageNamespace::LegacyProfileSave,
-                "save00.sav",
-                b"new",
-                StoragePrecondition::Any,
-            )),
-            FrontendIoErrorKind::ReadOnly,
-        );
-        assert!(matches!(
-            storage
-                .respond(&request(
-                    2,
-                    StorageNamespace::LegacyProfileSave,
-                    "save00.sav",
-                    StorageOperation::Delete {
-                        precondition: StoragePrecondition::Any,
-                    },
-                ))
-                .result,
-            StorageResult::Error { error } if error.kind == FrontendIoErrorKind::NotFound
-        ));
     }
 
     #[test]
