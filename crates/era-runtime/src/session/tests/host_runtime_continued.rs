@@ -511,7 +511,15 @@ fn printform_and_printc_family_preserve_reference_semantics() {
         unreachable!()
     };
     assert_eq!(style.foreground.red, 0xc0);
-    assert_eq!(session.command_intents.len(), 4);
+    assert_eq!(
+        session
+            .operations
+            .active_input()
+            .expect("WAIT")
+            .choices
+            .len(),
+        4
+    );
 }
 
 #[test]
@@ -707,4 +715,3 @@ fn untimed_one_input_message_skip_keeps_the_complete_default() {
             .any(|line| projected_line_text(line).contains("got=LONG"))
     );
 }
-

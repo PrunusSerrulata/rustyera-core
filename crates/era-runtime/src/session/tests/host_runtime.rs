@@ -325,15 +325,16 @@ fn immediate_html_print_binds_integer_and_string_buttons_in_order() {
             .any(|message| matches!(message, RuntimeMessage::Fault(_))),
         "{messages:#?}"
     );
+    let choices = &session
+        .operations
+        .active_input()
+        .expect("FORCEWAIT")
+        .choices;
     assert_eq!(
-        session
-            .command_intents
-            .values()
-            .cloned()
-            .collect::<Vec<_>>(),
+        choices.values().cloned().collect::<Vec<_>>(),
         [VmValue::Integer(7), VmValue::String("word".into())]
     );
-    let tokens = session.command_intents.keys().copied().collect::<Vec<_>>();
+    let tokens = choices.keys().copied().collect::<Vec<_>>();
     assert_eq!(tokens.len(), 2);
     assert_eq!(tokens[0].epoch, session.epoch.0);
     assert_eq!(tokens[1].id, tokens[0].id + 1);
@@ -372,7 +373,15 @@ fn button_style_and_line_edits_stay_in_one_vm_quantum() {
             .any(|message| matches!(message, RuntimeMessage::Fault(_))),
         "{messages:#?}"
     );
-    assert_eq!(session.command_intents.len(), 128);
+    assert_eq!(
+        session
+            .operations
+            .active_input()
+            .expect("FORCEWAIT")
+            .choices
+            .len(),
+        128
+    );
     let vm = session.vm.as_ref().expect("runtime VM");
     assert_eq!(
         read_runtime_integer(vm, "RESULT", &[1], None).unwrap(),

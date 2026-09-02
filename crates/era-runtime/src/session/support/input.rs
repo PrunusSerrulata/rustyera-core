@@ -27,6 +27,9 @@ pub(in super::super) fn input_value(
         if pending.wait.kind == WaitKind::PrimitiveMouseKey {
             return Some(InputSubmission::Value(value.clone()));
         }
+        if matches!(pending.wait.kind, WaitKind::EnterKey | WaitKind::AnyKey) {
+            return Some(InputSubmission::Value(VmValue::Integer(0)));
+        }
         let text = match value {
             VmValue::Integer(value) => value.to_string(),
             VmValue::String(value) => value.clone(),

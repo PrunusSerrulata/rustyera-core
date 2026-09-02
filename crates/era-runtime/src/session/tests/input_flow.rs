@@ -170,6 +170,163 @@ fn message_skip_only_completes_non_value_waits_without_a_stop_barrier() {
 }
 
 #[test]
+fn visible_button_activation_completes_enter_and_any_key_waits() {
+    let submission = InteractionToken { epoch: 2, id: 1 };
+    let button = InteractionToken { epoch: 2, id: 2 };
+    let mut pending = PendingInput {
+        host_request: None,
+        wait: InputWait {
+            wait_id: 1,
+            kind: WaitKind::AnyKey,
+            stability: WaitStability::StableInput,
+            one_input: false,
+            stop_message_skip: false,
+            system_input: false,
+            mouse_input: true,
+            default_value: None,
+            deadline_ns: None,
+            display_time: false,
+            timeout_message: None,
+            submission_token: submission,
+            countdown_remaining_ms: None,
+        },
+        result_name: Some("RESULT".into()),
+        choices: BTreeMap::from([(button, VmValue::String("0".into()))]),
+        timeout_duration_ns: None,
+        post_input: None,
+    };
+
+    for kind in [WaitKind::AnyKey, WaitKind::EnterKey] {
+        pending.wait.kind = kind;
+        assert_eq!(
+            input_value(&pending, submission, InputIntent::Activate(button), false),
+            Some(InputSubmission::Value(VmValue::Integer(0))),
+            "{kind:?}"
+        );
+    }
+    assert!(
+        input_value(
+            &pending,
+            InteractionToken { epoch: 2, id: 99 },
+            InputIntent::Activate(button),
+            false,
+        )
+        .is_none()
+    );
+    assert!(
+        input_value(
+            &pending,
+            submission,
+            InputIntent::Activate(InteractionToken { epoch: 2, id: 99 }),
+            false,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn visible_button_activation_closes_a_real_any_key_wait() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "any-key-button-test".into(),
+            features: Vec::new(),
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: capabilities(),
+            preferred_locales: vec!["en".into()],
+            configuration_profile: None,
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "any-key-button.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nPRINTBUTTON \"help body\", 0\nPRINTL\nWAITANYKEY\nPRINTL closed\nWAIT\nRETURN\n"
+                        .into(),
+                ),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    for _ in 0..16 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        if session.operations.active_input().is_some() {
+            break;
+        }
+    }
+    drain(&mut session);
+    let (wait_id, submission_token, activation) = {
+        let pending = session.operations.active_input().expect("AnyKey wait");
+        assert_eq!(pending.wait.kind, WaitKind::AnyKey);
+        (
+            pending.wait.wait_id,
+            pending.wait.submission_token,
+            *pending.choices.keys().next().expect("visible button token"),
+        )
+    };
+    submit(
+        &mut session,
+        3,
+        RuntimeMessage::Input(FrontendInput {
+            wait_id,
+            token: submission_token,
+            monotonic_time_ns: 0,
+            intent: InputIntent::Activate(activation),
+            message_skip: false,
+        }),
+    );
+
+    let mut messages = Vec::new();
+    for _ in 0..16 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        messages.extend(drain(&mut session));
+        if session
+            .operations
+            .active_input()
+            .is_some_and(|pending| pending.wait.wait_id != wait_id)
+        {
+            break;
+        }
+    }
+
+    let pending = session
+        .operations
+        .active_input()
+        .expect("following Enter wait");
+    assert_ne!(pending.wait.wait_id, wait_id);
+    assert_eq!(pending.wait.kind, WaitKind::EnterKey);
+    assert!(session.presentation.log_text(false).contains("closed"));
+    assert!(messages.iter().any(|message| matches!(
+        message,
+        RuntimeMessage::WaitChanged(WaitChange::Closed(closed)) if *closed == wait_id
+    )));
+    assert!(
+        messages
+            .iter()
+            .all(|message| !matches!(message, RuntimeMessage::CommandRejected(_)))
+    );
+}
+
+#[test]
 fn frontend_monotonic_time_rebases_onto_restored_logical_time() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     session.logical_time_ns = 100;

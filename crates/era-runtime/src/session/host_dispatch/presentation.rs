@@ -31,7 +31,9 @@ impl RuntimeSession {
             }
             if matches!(
                 pending.wait.kind,
-                WaitKind::IntegerValue
+                WaitKind::EnterKey
+                    | WaitKind::AnyKey
+                    | WaitKind::IntegerValue
                     | WaitKind::StringValue
                     | WaitKind::IntegerButton
                     | WaitKind::StringButton
