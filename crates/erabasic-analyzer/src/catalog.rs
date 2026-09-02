@@ -75,6 +75,9 @@ pub fn builtin_callable_portability(name: &str) -> CallablePortability {
             | "HTML_STRINGLINES"
             | "GGETTEXTSIZE"
             | "GGETCOLOR"
+            | "GETSOUNDORBGMINFO"
+            | "ISPLAYINGSOUND"
+            | "ISPLAYINGBGM"
     ) {
         CallablePortability::FrontendObservation
     } else {
@@ -236,7 +239,9 @@ fn builtin_shared_available(name: &str, identity: &erabasic_compat::Compatibilit
         | "BITINDEXOFFIRST"
         | "MATCHALL"
         | "MATCHALLEX" => identity.supports_snake_data_apis(),
-        "GETSOUNDORBGMINFO" => identity.supports_snake_compile_convergence(),
+        "GETSOUNDORBGMINFO" | "ISPLAYINGSOUND" | "SOUNDCONTROL" | "ISPLAYINGBGM" | "BGMCONTROL" => {
+            identity.supports_snake_compile_convergence()
+        }
         "MAP_VALUES" | "MAP_MERGE" | "MAP_REMOVEIF" | "MAP_FINDKEY" | "MAP_TOSTRING"
         | "MAP_FROMSTRING" => identity.supports_map_extensions(),
         _ => true,
@@ -427,5 +432,49 @@ mod tests {
 
         let deferred_float = &signatures["SQL_READER_GET_FLOAT"];
         assert_eq!(deferred_float.return_type, SemanticType::Error);
+    }
+
+    #[test]
+    fn snake_audio_builtins_have_exact_public_signatures() {
+        let original = CompatibilityIdentity::reference();
+        let snake = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
+        for name in [
+            "GETSOUNDORBGMINFO",
+            "ISPLAYINGSOUND",
+            "SOUNDCONTROL",
+            "ISPLAYINGBGM",
+            "BGMCONTROL",
+        ] {
+            assert!(!builtin_function_available(name, &original));
+            assert!(builtin_function_available(name, &snake));
+        }
+
+        let catalog = Catalog::build(&ExtensionRegistry::default());
+        let play_sound = &catalog.instructions["PLAYSOUND"];
+        assert_eq!(
+            play_sound.arguments,
+            [ArgumentConstraint::String, ArgumentConstraint::Integer]
+        );
+        assert_eq!(play_sound.minimum_arguments, 1);
+        assert!(!play_sound.variadic);
+        assert!(!play_sound.allow_omitted);
+
+        let signatures = builtin_function_signatures(&snake)
+            .into_iter()
+            .map(|signature| (signature.name.clone(), signature))
+            .collect::<BTreeMap<_, _>>();
+        for (name, minimum, maximum) in [
+            ("GETSOUNDORBGMINFO", 1, 2),
+            ("ISPLAYINGSOUND", 1, 1),
+            ("SOUNDCONTROL", 2, 4),
+            ("ISPLAYINGBGM", 0, 0),
+            ("BGMCONTROL", 1, 3),
+        ] {
+            let signature = &signatures[name];
+            assert_eq!(signature.minimum_arguments, minimum, "{name}");
+            assert_eq!(signature.arguments.len(), maximum, "{name}");
+            assert!(!signature.variadic, "{name}");
+            assert!(!signature.allow_omitted, "{name}");
+        }
     }
 }

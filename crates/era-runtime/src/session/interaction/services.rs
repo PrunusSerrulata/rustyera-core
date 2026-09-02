@@ -24,6 +24,9 @@ impl RuntimeSession {
                 response.result,
             );
         }
+        if let PendingService::Audio(continuation) = pending {
+            return self.complete_audio_observation(continuation, response.result);
+        }
         if let PendingService::Host(ExternalCompletion::DevicePump {
             request,
             epoch,
@@ -748,6 +751,7 @@ impl RuntimeSession {
             PendingService::ProjectImageMetadata { .. }
             | PendingService::PlatformEffect { .. }
             | PendingService::CandidateSaveClock { .. }
+            | PendingService::Audio(_)
             | PendingService::Sql(_) => {
                 unreachable!("handled above")
             }

@@ -71,6 +71,42 @@ fn frontend_observation_reports_source_and_control_dependency() {
 }
 
 #[test]
+fn snake_audio_observations_report_sources_and_persistent_dependencies() {
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "snake-audio.erb",
+                "@SYSTEM_TITLE\nIF ISPLAYINGBGM()\nFLAG:0 = GETSOUNDORBGMINFO(-1, 1)\nENDIF\nRESULT = ISPLAYINGSOUND(0)\nRETURN\n",
+            )],
+        },
+        &AnalyzerOptions {
+            compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+            ..AnalyzerOptions::analysis_mode()
+        },
+        &ExtensionRegistry::default(),
+    );
+    assert_eq!(
+        report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == AnalyzerDiagnosticCode::FrontendObservationSource
+            })
+            .count(),
+        3,
+        "{:#?}",
+        report.diagnostics
+    );
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == AnalyzerDiagnosticCode::FrontendObservationDependency
+            && diagnostic.message.contains("persistent game state")
+    }));
+}
+
+#[test]
 fn frontend_observation_propagates_through_a_long_reverse_ordered_call_chain() {
     use std::fmt::Write as _;
 

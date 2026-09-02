@@ -205,6 +205,7 @@ fn submit_debug(session: &mut RuntimeSession, sequence: u64, message: &DebugMess
     session.submit_envelope(&bytes).expect("submit debug");
 }
 
+mod audio_runtime;
 mod debug_flow;
 mod host_runtime;
 mod host_system;

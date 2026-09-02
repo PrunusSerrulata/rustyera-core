@@ -77,6 +77,8 @@ pub(crate) struct PresentationModel {
     pub(super) audio: Vec<AudioState>,
     #[serde(default = "default_audio_volume")]
     pub(super) sound_volume_millionths: u32,
+    // Reserved compatibility slot in the format-30 MessagePack layout. One-shot sound channels
+    // remain frontend-owned and runtime snapshot restoration always clears this value.
     #[serde(default)]
     pub(super) sound_playing: bool,
     pub(super) tooltip: TooltipSettings,

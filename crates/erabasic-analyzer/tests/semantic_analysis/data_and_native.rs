@@ -1037,6 +1037,42 @@ fn file_sprite_only_allows_its_trailing_argument_to_be_omitted() {
 }
 
 #[test]
+fn playsound_accepts_one_or_two_values_but_not_an_omitted_resource() {
+    let options = AnalyzerOptions {
+        compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+        ..AnalyzerOptions::analysis_mode()
+    };
+    for (statement, invalid) in [
+        ("PLAYSOUND \"tone.wav\"", false),
+        ("PLAYSOUND \"tone.wav\", 3", false),
+        ("PLAYSOUND , 3", true),
+    ] {
+        let report = analyze_project(
+            AnalysisInput {
+                project_data: empty_project(),
+                sources: vec![source(
+                    "playsound-signature.erb",
+                    &format!("@SYSTEM_TITLE\n{statement}\nRETURN\n"),
+                )],
+            },
+            &options,
+            &ExtensionRegistry::default(),
+        );
+        assert_eq!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.code == AnalyzerDiagnosticCode::InvalidArgument }),
+            invalid,
+            "{statement}: {:#?}",
+            report.diagnostics
+        );
+    }
+}
+
+#[test]
 fn bit_apis_require_snake_mutable_integer_rank_one_tokens_in_both_call_forms() {
     for statement in [false, true] {
         for (declaration, token, accepted) in [

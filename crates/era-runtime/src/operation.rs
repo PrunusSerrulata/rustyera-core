@@ -4,6 +4,7 @@ use era_runtime_save::SaveFileKind;
 use erabasic_vm::HostRequestId;
 use serde::{Deserialize, Serialize};
 
+use crate::audio::AudioObservationContinuation;
 use crate::host::{ExternalCompletion, PendingInput};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -95,6 +96,7 @@ pub(crate) enum PendingService {
         continuation: CandidateSaveContinuation,
     },
     Host(ExternalCompletion),
+    Audio(AudioObservationContinuation),
     Sql(SqlServiceContinuation),
 }
 

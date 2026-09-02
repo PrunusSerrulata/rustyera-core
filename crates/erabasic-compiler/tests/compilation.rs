@@ -226,6 +226,86 @@ fn frontend_observation_calls_emit_nonfatal_source_notices() {
 }
 
 #[test]
+fn snake_audio_imports_persist_exact_wait_and_fallback_contracts() {
+    let report = compile_project(
+        &analyze_snake(
+            "@SYSTEM_TITLE\nPLAYSOUND \"tone.wav\", 2\nRESULT:0 = GETSOUNDORBGMINFO(0, 1)\nRESULT:1 = ISPLAYINGSOUND(0)\nRESULT:2 = ISPLAYINGBGM()\nRESULT:3 = SOUNDCONTROL(0, 0)\nRESULT:4 = BGMCONTROL(0)\nRETURN\n",
+        ),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    let artifact = report.artifact.expect("snake audio fixture compiles");
+    for host in artifact
+        .host_imports
+        .iter()
+        .filter(|host| host.import.namespace == "rustyera.audio")
+    {
+        let name = host.import.name.as_str();
+        let query = matches!(
+            name,
+            "getsoundorbgminfo" | "isplayingsound" | "isplayingbgm"
+        );
+        let selecting_play = name == "playsound";
+        if query || selecting_play {
+            assert_eq!(
+                host.contract.state,
+                erabasic_bytecode::OperationState::External
+            );
+            assert_eq!(
+                host.contract.transaction,
+                erabasic_bytecode::TransactionPolicy::Forbidden
+            );
+            assert_eq!(
+                host.contract.persistence,
+                erabasic_bytecode::OperationPersistence::RuntimeOnly
+            );
+            assert_eq!(
+                host.contract.snapshot,
+                erabasic_bytecode::OperationSnapshotPolicy::PendingBlocks
+            );
+            assert_eq!(
+                host.contract.hot_reload,
+                erabasic_bytecode::OperationHotReloadPolicy::ActiveBlocks
+            );
+            assert_eq!(
+                host.contract.wait,
+                erabasic_bytecode::OperationWaitPolicy::TransientExternal
+            );
+            assert_eq!(
+                host.contract.capability_fallback,
+                if query {
+                    erabasic_bytecode::CapabilityFallback::Unsupported
+                } else {
+                    erabasic_bytecode::CapabilityFallback::IntentNoOp
+                }
+            );
+            assert_eq!(
+                host.contract.portability,
+                if query {
+                    erabasic_bytecode::OperationPortability::FrontendObservation
+                } else {
+                    erabasic_bytecode::OperationPortability::PlatformIntent
+                }
+            );
+        } else {
+            assert_eq!(
+                host.contract.transaction,
+                erabasic_bytecode::TransactionPolicy::BufferedEffect
+            );
+            assert_eq!(
+                host.contract.wait,
+                erabasic_bytecode::OperationWaitPolicy::Immediate
+            );
+        }
+        assert!(host.contract.is_coherent(), "{name}");
+    }
+    let bytes = encode_artifact(&artifact).unwrap();
+    let decoded = decode_artifact(&bytes, &DecodeLimits::default()).unwrap();
+    assert_eq!(decoded.into_inner().host_imports, artifact.host_imports);
+}
+
+#[test]
 fn scoped_scalar_initializers_and_array_declarations_compile() {
     let report = compile_project(
         &analyze(

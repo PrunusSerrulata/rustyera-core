@@ -1,5 +1,5 @@
 use super::*;
-use era_runtime_protocol::AudioPlaybackStateV1;
+use era_runtime_protocol::{AudioEffectAction, AudioPlaybackStateV1};
 
 #[test]
 fn goto_into_case_body_emits_a_nonfatal_warning_and_continues() {
@@ -762,7 +762,7 @@ fn audio_commands_project_canonical_sound_directory_resources() {
                     relative_path: "main.erb".into(),
                     category: FileCategory::Erb,
                     payload: FilePayload::Utf8(
-                        "@SYSTEM_TITLE\nPLAYBGM \"theme.mp3\"\nPLAYSOUND \"door.mp3\"\nSETSOUNDVOLUME 25\nPLAYSOUND \"knock.mp3\"\nGETSOUNDORBGMINFO 0, 3\nRESULT:10 = RESULT\nGETSOUNDORBGMINFO 0, 4\nRESULT:11 = RESULT\nGETSOUNDORBGMINFO -1, 3\nRESULT:12 = RESULT\nCLEARMEMORY\nRESULT:13 = RESULT\nSTOPSOUND\nWAIT\nRETURN\n"
+                        "@SYSTEM_TITLE\nPLAYBGM \"theme.mp3\"\nPLAYSOUND \"door.mp3\"\nSETSOUNDVOLUME 25\nPLAYSOUND \"knock.mp3\"\nCLEARMEMORY\nRESULT:13 = RESULT\nSTOPSOUND\nWAIT\nRETURN\n"
                             .into(),
                     ),
                     content_hash: None,
@@ -839,23 +839,12 @@ fn audio_commands_project_canonical_sound_directory_resources() {
     assert_eq!(audio[0].state, AudioPlaybackStateV1::Playing);
     assert_eq!(audio[0].rate_millionths, 1_000_000);
     assert!(audio[0].preserve_pitch);
-    assert_audio_query_results(&session);
 }
 
 fn snake_compile_identity() -> erabasic_compat::CompatibilityIdentity {
     erabasic_compat::CompatibilityIdentity::for_profile(
         erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
     )
-}
-
-fn assert_audio_query_results(session: &RuntimeSession) {
-    let vm = session.vm.as_ref().unwrap();
-    for (index, expected) in [(10, 1), (11, 25), (12, 1), (13, 0)] {
-        assert_eq!(
-            read_runtime_integer(vm, "RESULT", &[index], None).unwrap(),
-            expected
-        );
-    }
 }
 
 fn assert_audio_effect(

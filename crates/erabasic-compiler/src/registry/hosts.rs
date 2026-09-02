@@ -355,6 +355,10 @@ pub(super) const AUDIO: &[&str] = &[
     "SETBGMVOLUME",
     "EXISTSOUND",
     "GETSOUNDORBGMINFO",
+    "ISPLAYINGSOUND",
+    "SOUNDCONTROL",
+    "ISPLAYINGBGM",
+    "BGMCONTROL",
 ];
 
 pub(super) const STORAGE: &[&str] = &[

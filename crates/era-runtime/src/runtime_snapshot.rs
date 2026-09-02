@@ -517,6 +517,19 @@ impl<R: Read> Read for CountingReader<R> {
 mod tests {
     use super::*;
 
+    fn mark_legacy_sound_slot(presentation: &mut PresentationModel) {
+        // Proves the reserved slot remains in the real format-30 MessagePack container.
+        presentation.set_transient_sound_compatibility_state_for_test(true);
+    }
+
+    fn assert_legacy_sound_slot(decoded: &RuntimeSnapshotPayload) {
+        assert!(
+            decoded
+                .presentation
+                .transient_sound_compatibility_state_for_test()
+        );
+    }
+
     #[test]
     fn checksum_rejects_mutated_payload() {
         let mut resource_graph = ResourceGraph::default();
@@ -593,6 +606,7 @@ mod tests {
         };
         let mut presentation = PresentationModel::default();
         presentation.set_text_line_background(Some(text_line_background));
+        mark_legacy_sound_slot(&mut presentation);
         let payload = RuntimeSnapshotPayload {
             format_version: RUNTIME_SNAPSHOT_FORMAT_VERSION,
             origin: RuntimeSnapshotOrigin::Debug,
@@ -662,6 +676,7 @@ mod tests {
         assert!(decode(&understated, uncompressed.len()).is_err());
         let decoded = decode(&encoded, uncompressed.len()).unwrap();
         assert_eq!(decoded.origin, RuntimeSnapshotOrigin::Debug);
+        assert_legacy_sound_slot(&decoded);
         assert_eq!(decoded.resource_graph.canvas_state(7), Some((20, 10)));
         assert_eq!(decoded.resource_graph.animation_timer(), 10);
         assert_eq!(

@@ -302,6 +302,7 @@ impl RuntimeSession {
 
     fn reset_input_undo_presentation(&mut self) {
         self.presentation.reset_preserving_projection();
+        self.audio.reset_all();
         self.pending_presentation_update = false;
         if let Some(project) = &self.project_snapshot {
             self.presentation.configure_project(project);

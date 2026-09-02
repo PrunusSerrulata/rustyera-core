@@ -108,6 +108,7 @@ impl RuntimeSession {
             vm: None,
             retained_title_program: None,
             presentation: PresentationModel::default(),
+            audio: AudioRuntimeState::default(),
             pending_presentation_update: false,
             operations: PendingOperations::default(),
             sql: SqlRuntimeState::default(),

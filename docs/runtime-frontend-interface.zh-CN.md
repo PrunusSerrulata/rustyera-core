@@ -709,11 +709,14 @@ Audio target 是 `Sound(0..9)` 或独立的 `Bgm`；effect 字段为 target、
 Play/Stop/SetVolume/Pause/Resume/SetRate、resource?、repeat_count、volume_millionths、
 revision、rate_millionths 与 preserve_pitch。一次性 sound 仍是短暂 effect；可恢复的 BGM
 期望状态留在 presentation snapshot。前端必须按 target/revision 应用，不能把迟到 effect
-覆盖到新一代播放器状态。Video 是 resource/skippable。
+覆盖到新一代播放器状态。处理 `RuntimeResynchronized` 时，前端必须先清空全部 sound
+channel 及其 revision；runtime 同时丢弃所有未确认 sound effect，且不会在随后的
+`EffectBatch` 重放它们。BGM 仍由 presentation snapshot 恢复，未确认的 BGM effect 仍可重放。
+Video 是 resource/skippable。
 
 每个已知 effect ID 只能在一个 `EffectAcknowledgement` 中出现一次，outcome 为
 Completed/Failed/Cancelled 和可空 message。未知、重复结果会被拒绝；非 Completed
-结果还会产生诊断。未确认 effect 留在 journal，resync 后会重发。
+结果还会产生诊断。除上述一次性 sound 外，未确认 effect 留在 journal，resync 后会重发。
 
 ## 9. Storage、Service 和状态传输
 
@@ -790,6 +793,7 @@ index 不跨边界，runtime 验证响应的三个 revision 与 line_id 后计�
 响应原样携带 target/revision、整数毫秒 duration/position、Stopped/Playing/Paused、
 millionths 音量与速率、preserve-pitch 和前端单调时间戳。target 或 revision 不一致是 stale
 response，不能提交给 VM；时间戳只排序外部观察，不推进逻辑游戏时间。
+同一 target 的后续响应时间戳不得小于此前已接受值，否则 runtime 以 service failure 拒绝。
 
 `Sql/rustyera.sql@1.0` 是蛇版兼容身份要求的安全 SQL 服务。协议只传 session epoch 限定的
 provider/connection/reader 逻辑句柄、项目 Resource ID 与摘要、不可变数据库修订和类型化

@@ -67,6 +67,18 @@ impl RuntimeSession {
     }
 
     pub(in super::super) fn resynchronize(&mut self, message_id: u64) -> Result<(), RuntimeError> {
+        // One-shot sound channels are frontend-owned transient state. A reconnect starts a new
+        // observation baseline: never replay stale sound effects or retain their revisions.
+        self.effect_journal.retain(|_, event| {
+            !matches!(
+                &event.kind,
+                EffectKind::Audio(AudioEffect {
+                    channel: AudioChannelV1::Sound(_),
+                    ..
+                })
+            )
+        });
+        self.audio.reset_transient();
         self.materialize_resource_replay();
         let input_undo = self.input_undo_state();
         let presentation = self.presentation.snapshot_for_delivery();
@@ -494,21 +506,42 @@ impl RuntimeSession {
     }
 
     pub(in super::super) fn emit_effect(&mut self, kind: EffectKind) -> Result<(), RuntimeError> {
-        if self.effect_journal.len() >= self.options.limits.maximum_journal_entries as usize {
+        self.emit_effects(vec![kind])
+    }
+
+    /// Atomically queues one protocol batch and only then commits its replay journal entries.
+    /// This prevents multi-channel audio operations from becoming partially observable.
+    pub(in super::super) fn emit_effects(
+        &mut self,
+        kinds: Vec<EffectKind>,
+    ) -> Result<(), RuntimeError> {
+        if self.effect_journal.len().saturating_add(kinds.len())
+            > self.options.limits.maximum_journal_entries as usize
+        {
             return Err(RuntimeError::ResourceLimit("effect journal is full"));
         }
-        let event = EffectEvent {
-            effect_id: self.next_effect_id,
-            kind,
-        };
-        self.next_effect_id = self.next_effect_id.saturating_add(1);
-        self.effect_journal.insert(event.effect_id, event.clone());
+        let events = kinds
+            .into_iter()
+            .enumerate()
+            .map(|(offset, kind)| EffectEvent {
+                effect_id: self
+                    .next_effect_id
+                    .saturating_add(u64::try_from(offset).unwrap_or(u64::MAX)),
+                kind,
+            })
+            .collect::<Vec<_>>();
         self.emit(
             RuntimeMessage::EffectBatch(EffectBatch {
-                effects: vec![event],
+                effects: events.clone(),
             }),
             None,
-        )
+        )?;
+        self.next_effect_id = self
+            .next_effect_id
+            .saturating_add(u64::try_from(events.len()).unwrap_or(u64::MAX));
+        self.effect_journal
+            .extend(events.into_iter().map(|event| (event.effect_id, event)));
+        Ok(())
     }
 
     pub(in super::super) fn emit_audio_unavailable(&mut self) -> Result<(), RuntimeError> {

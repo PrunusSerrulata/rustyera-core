@@ -473,6 +473,9 @@ impl RuntimeSession {
         self.vm = Some(vm);
         self.presentation = presentation;
         self.presentation
+            .clear_transient_sound_compatibility_state();
+        self.audio.recover_bgm(self.presentation.bgm_revision());
+        self.presentation
             .set_character_width_mode(configured_character_width_mode(
                 self.project_snapshot.as_ref(),
             ));
@@ -699,6 +702,7 @@ impl RuntimeSession {
         // previous game's long history during this memory-retirement transaction.
         self.pending_presentation_update = false;
         self.presentation.reset_preserving_projection();
+        self.audio.reset_all();
         if let Some(project) = &self.project_snapshot {
             self.presentation.configure_project(project);
         }

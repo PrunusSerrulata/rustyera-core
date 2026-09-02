@@ -89,6 +89,14 @@ pub(super) fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     // consumes one nullable FORM string and writes its code points to RESULT.
     add("ENCODETOUNI", FormStyle, &[Formatted], 0, false, true);
     add("FORCEKANA", Expressions, &[Integer], 1, false, false);
+    add(
+        "PLAYSOUND",
+        Expressions,
+        &[String, Integer],
+        1,
+        false,
+        false,
+    );
     add("UPCHECK", NoArgs, &[], 0, false, false);
     add("CUPCHECK", Expressions, &[Integer], 1, false, false);
     add(

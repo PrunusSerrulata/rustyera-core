@@ -1,19 +1,22 @@
 use super::{PresentationModel, rgb_color};
 use era_runtime_protocol::{
-    AudioChannelV1, AudioPlaybackStateV1, AudioState, LogicalLength, ResourceReplay, TooltipFormat,
+    AudioChannelV1, AudioEffectAction, AudioPlaybackStateV1, AudioState, LogicalLength,
+    ResourceReplay, TooltipFormat,
 };
 
 impl PresentationModel {
-    pub(crate) fn play_sound(&mut self) -> u64 {
-        self.sound_playing = true;
-        self.bump();
-        self.revision
+    pub(crate) fn clear_transient_sound_compatibility_state(&mut self) {
+        self.sound_playing = false;
     }
 
-    pub(crate) fn stop_sound(&mut self) -> u64 {
-        self.sound_playing = false;
-        self.bump();
-        self.revision
+    #[cfg(test)]
+    pub(crate) fn set_transient_sound_compatibility_state_for_test(&mut self, value: bool) {
+        self.sound_playing = value;
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn transient_sound_compatibility_state_for_test(&self) -> bool {
+        self.sound_playing
     }
 
     pub(crate) fn set_sound_volume(&mut self, volume: i64) -> u64 {
@@ -23,31 +26,8 @@ impl PresentationModel {
         self.revision
     }
 
-    pub(crate) fn sound_or_bgm_info(&self, channel: i64, information: i64) -> i64 {
-        let (playing, volume) = if channel == -1 {
-            self.audio
-                .iter()
-                .find(|state| state.channel == AudioChannelV1::Bgm)
-                .map_or((false, 100), |state| {
-                    (
-                        state.state == AudioPlaybackStateV1::Playing,
-                        i64::from(state.volume_millionths / 10_000),
-                    )
-                })
-        } else if channel == 0 {
-            (
-                self.sound_playing,
-                i64::from(self.sound_volume_millionths / 10_000),
-            )
-        } else {
-            return 0;
-        };
-        match information {
-            3 => i64::from(playing),
-            4 => volume,
-            5 => 100,
-            _ => 0,
-        }
+    pub(crate) const fn sound_volume_millionths(&self) -> u32 {
+        self.sound_volume_millionths
     }
 
     pub(crate) fn play_bgm(&mut self, resource_id: String) -> u64 {
@@ -72,6 +52,41 @@ impl PresentationModel {
         self.delivery.dirty.audio = true;
         self.bump();
         self.revision
+    }
+
+    pub(crate) fn control_bgm(
+        &mut self,
+        action: AudioEffectAction,
+        rate_millionths: u32,
+        preserve_pitch: bool,
+    ) -> u64 {
+        let revision = self.revision.saturating_add(1);
+        for state in &mut self.audio {
+            match action {
+                AudioEffectAction::Pause => state.state = AudioPlaybackStateV1::Paused,
+                AudioEffectAction::Resume => state.state = AudioPlaybackStateV1::Playing,
+                AudioEffectAction::SetRate => {
+                    state.rate_millionths = rate_millionths;
+                    state.preserve_pitch = preserve_pitch;
+                }
+                AudioEffectAction::Play
+                | AudioEffectAction::Stop
+                | AudioEffectAction::SetVolume => {}
+            }
+            state.revision = revision;
+        }
+        if !self.audio.is_empty() {
+            self.delivery.dirty.audio = true;
+        }
+        self.bump();
+        self.revision
+    }
+
+    pub(crate) fn bgm_revision(&self) -> Option<u64> {
+        self.audio
+            .iter()
+            .find(|state| state.channel == AudioChannelV1::Bgm)
+            .map(|state| state.revision)
     }
 
     pub(crate) fn set_bgm_volume(&mut self, volume: i64) -> u64 {

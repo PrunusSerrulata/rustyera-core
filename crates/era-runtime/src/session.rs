@@ -18,9 +18,10 @@ use era_protocol::{
     negotiate_version,
 };
 use era_runtime_protocol::{
-    AdvanceTime, AudioChannelV1, AudioEffect, AudioEffectAction, CancelExternalRequest,
-    CanvasPixelRequest, CanvasPixelResponse, CanvasPoint, CellAlignment, ClientCapabilities,
-    ClientHello, CommandErrorCode, CommandRejected, ConfigurationApplication,
+    AUDIO_OBSERVATION_OPERATION, AUDIO_OBSERVATION_OPERATION_VERSION, AdvanceTime, AudioChannelV1,
+    AudioEffect, AudioObservationRequestV1, AudioObservationResponseV1, AudioPlaybackStateV1,
+    CancelExternalRequest, CanvasPixelRequest, CanvasPixelResponse, CanvasPoint, CellAlignment,
+    ClientCapabilities, ClientHello, CommandErrorCode, CommandRejected, ConfigurationApplication,
     ConfigurationClientProfile, ConfigurationUpdateCommitted, ConfigurationUpdateOutcome,
     ConfigurationUpdatePrepared, DECODE_CANVAS_IMAGE_OPERATION,
     DECODE_CANVAS_IMAGE_OPERATION_VERSION, DEVICE_PUMP_OPERATION, DEVICE_PUMP_OPERATION_VERSION,
@@ -84,6 +85,10 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use era_runtime_protocol::{CONFIG_BROWSER, CONFIG_TUI};
 
+use crate::audio::{
+    AudioControl, AudioObservationContinuation, AudioObservationPurpose, AudioRuntimeState,
+    control_effect, play_effect, stop_effect, volume_effect,
+};
 use crate::controller::{SystemController, SystemFlow, SystemStep};
 use crate::host::{
     ClockOperation, ExternalCompletion, PendingInput, PointerCoordinate, PostInputAction,
@@ -718,6 +723,7 @@ pub struct RuntimeSession {
     vm: Option<RuntimeVm>,
     retained_title_program: Option<RetainedProgramIndex>,
     presentation: PresentationModel,
+    audio: AudioRuntimeState,
     pending_presentation_update: bool,
     operations: PendingOperations,
     sql: SqlRuntimeState,

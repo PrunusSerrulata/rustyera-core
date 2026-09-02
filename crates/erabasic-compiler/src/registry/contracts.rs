@@ -53,6 +53,31 @@ pub(super) fn host_contract(namespace: &str, name: &str) -> OperationContract {
             OperationWaitPolicy::Immediate,
             CapabilityFallback::CanonicalProjection,
         ),
+        "rustyera.audio"
+            if matches!(
+                name,
+                "GETSOUNDORBGMINFO" | "ISPLAYINGSOUND" | "ISPLAYINGBGM"
+            ) =>
+        {
+            (
+                OperationState::External,
+                TransactionPolicy::Forbidden,
+                OperationPersistence::RuntimeOnly,
+                OperationSnapshotPolicy::PendingBlocks,
+                OperationHotReloadPolicy::ActiveBlocks,
+                OperationWaitPolicy::TransientExternal,
+                CapabilityFallback::Unsupported,
+            )
+        }
+        "rustyera.audio" if name == "PLAYSOUND" => (
+            OperationState::External,
+            TransactionPolicy::Forbidden,
+            OperationPersistence::RuntimeOnly,
+            OperationSnapshotPolicy::PendingBlocks,
+            OperationHotReloadPolicy::ActiveBlocks,
+            OperationWaitPolicy::TransientExternal,
+            CapabilityFallback::IntentNoOp,
+        ),
         "rustyera.audio" => (
             OperationState::Presentation,
             TransactionPolicy::BufferedEffect,

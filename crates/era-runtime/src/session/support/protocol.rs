@@ -86,6 +86,9 @@ pub(in super::super) fn selected_service_capabilities(
                 (ServiceKind::Canvas, ENCODE_CANVAS_PNG_OPERATION) => {
                     ENCODE_CANVAS_PNG_OPERATION_VERSION
                 }
+                (ServiceKind::Audio, AUDIO_OBSERVATION_OPERATION) => {
+                    AUDIO_OBSERVATION_OPERATION_VERSION
+                }
                 (ServiceKind::Sql, SQL_OPERATION) => SQL_OPERATION_VERSION,
                 // Extension operations are application-defined. Select the client's
                 // maximum now; a later registry declaration must bind that exact version.

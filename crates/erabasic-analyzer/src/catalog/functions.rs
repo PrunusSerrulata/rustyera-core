@@ -61,6 +61,22 @@ pub(super) fn builtin_functions() -> BTreeMap<String, CallableSignature> {
     add("GETTIME", IntType, &[], 0, false);
     add("CLEARMEMORY", IntType, &[], 0, false);
     add("GETSOUNDORBGMINFO", IntType, &[Integer, Integer], 1, false);
+    add("ISPLAYINGSOUND", IntType, &[Integer], 1, false);
+    add(
+        "SOUNDCONTROL",
+        IntType,
+        &[Integer, Integer, Integer, Integer],
+        2,
+        false,
+    );
+    add("ISPLAYINGBGM", IntType, &[], 0, false);
+    add(
+        "BGMCONTROL",
+        IntType,
+        &[Integer, Integer, Integer],
+        1,
+        false,
+    );
     // FunctionIdentifier exposes these as formatted METHOD statements. Their
     // integer result follows the same RESULT convention as other methods.
     for name in ["STRLENFORM", "STRLENFORMU"] {

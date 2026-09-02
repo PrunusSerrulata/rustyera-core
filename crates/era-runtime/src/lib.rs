@@ -7,6 +7,7 @@
 /// Product version embedded in this runtime build.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+mod audio;
 mod compatibility;
 mod compiled_cache;
 mod controller;
