@@ -599,8 +599,17 @@ enum SystemMenuState {
 struct InboundStateTransfer {
     descriptor: StateTransferDescriptor,
     bytes: Vec<u8>,
+    manifest_decoder: Option<transfer::state::manifest_import::ManifestImportDecoder>,
     hasher: Option<blake3::Hasher>,
     committed: bool,
+}
+
+impl InboundStateTransfer {
+    fn received_bytes(&self) -> u64 {
+        self.manifest_decoder
+            .as_ref()
+            .map_or(self.bytes.len() as u64, |decoder| decoder.received)
+    }
 }
 
 #[derive(Debug)]

@@ -71,6 +71,8 @@ impl RuntimeSession {
             },
             // Grow with accepted chunks instead of trusting a potentially huge declaration.
             bytes: Vec::new(),
+            manifest_decoder: streamed_manifest
+                .then(super::manifest_import::ManifestImportDecoder::default),
             hasher: Some(blake3::Hasher::new()),
             committed: false,
         });
@@ -99,7 +101,7 @@ impl RuntimeSession {
                 "state import transfer is stale",
             );
         }
-        if chunk.offset != u64::try_from(transfer.bytes.len()).unwrap_or(u64::MAX) {
+        if chunk.offset != transfer.received_bytes() {
             return self.reject(
                 message_id,
                 CommandErrorCode::InvalidValue,
@@ -118,11 +120,15 @@ impl RuntimeSession {
                 "state import chunk has an invalid length",
             );
         }
-        transfer
-            .bytes
-            .try_reserve(chunk.data.as_slice().len())
-            .map_err(|_| RuntimeError::ResourceLimit("state import allocation failed"))?;
-        transfer.bytes.extend_from_slice(chunk.data.as_slice());
+        if let Some(decoder) = &mut transfer.manifest_decoder {
+            decoder.push(chunk.data.as_slice())?;
+        } else {
+            transfer
+                .bytes
+                .try_reserve(chunk.data.as_slice().len())
+                .map_err(|_| RuntimeError::ResourceLimit("state import allocation failed"))?;
+            transfer.bytes.extend_from_slice(chunk.data.as_slice());
+        }
         if let Some(hasher) = &mut transfer.hasher {
             hasher.update(chunk.data.as_slice());
         }
@@ -162,8 +168,7 @@ impl RuntimeSession {
             .as_ref()
             .map_or_else(|| blake3::hash(&transfer.bytes), blake3::Hasher::finalize);
         if expected_digest.is_none_or(|digest| digest.len() != blake3::OUT_LEN)
-            || u64::try_from(transfer.bytes.len()).unwrap_or(u64::MAX)
-                != transfer.descriptor.total_bytes
+            || transfer.received_bytes() != transfer.descriptor.total_bytes
             || expected_digest != Some(actual_digest.as_bytes().as_slice())
         {
             return self.reject(
@@ -184,15 +189,18 @@ impl RuntimeSession {
                     "a project export is already active",
                 );
             }
-            let Ok(manifest) = decode_canonical::<ProjectManifest>(&transfer.bytes) else {
-                self.inbound_transfer = None;
+            let decoder = self
+                .inbound_transfer
+                .take()
+                .and_then(|transfer| transfer.manifest_decoder)
+                .expect("full manifest import retains its decoder");
+            let Ok(manifest) = decoder.finish() else {
                 return self.reject(
                     message_id,
                     CommandErrorCode::InvalidValue,
                     "full project manifest is not valid canonical CBOR",
                 );
             };
-            self.inbound_transfer = None;
             self.full_project_failure = None;
             self.full_project_file = None;
             self.staged_full_project_manifest = Some(StagedFullProjectManifest {

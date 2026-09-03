@@ -359,6 +359,7 @@ pub(crate) struct CooperativeCompiledCacheEncoder {
     plan: Option<CacheLayoutPlan>,
     next_section: usize,
     manifest_encoder: Option<ManifestSectionEncoder>,
+    manifest_hash_offset: Option<usize>,
     pending_section: Option<(Vec<u8>, usize)>,
     output: Option<(Vec<u8>, blake3::Hasher)>,
     trailing_data: Vec<u8>,

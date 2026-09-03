@@ -11,7 +11,7 @@ mod error;
 mod version;
 
 pub use bytes::ProtocolBytes;
-pub use codec::{decode_canonical, encode_canonical};
+pub use codec::{decode_canonical, decode_canonical_nested, encode_canonical};
 pub use envelope::{
     Channel, Envelope, EnvelopeJsonProjection, SessionEpoch, SessionId, WireLimits,
     decode_envelope, encode_envelope,

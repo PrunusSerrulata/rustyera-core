@@ -530,6 +530,9 @@ fn cooperative_cache_encoding_yields_between_sections_and_manifest_chunks() {
 
 #[test]
 fn cooperative_manifest_encoding_preserves_empty_payloads_and_reports_file_errors() {
+    let resource: Vec<u8> = (0..16_384_u64)
+        .flat_map(|index| blake3::hash(&index.to_le_bytes()).as_bytes().to_vec())
+        .collect();
     let project = ProjectManifest {
         compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
@@ -544,6 +547,12 @@ fn cooperative_manifest_encoding_preserves_empty_payloads_and_reports_file_error
                 category: FileCategory::Resource,
                 content_hash: Some(ProtocolBytes::new(blake3::hash(&[]).as_bytes().to_vec())),
                 payload: FilePayload::Bytes(ProtocolBytes::new(Vec::new())),
+            },
+            SubmittedFile {
+                relative_path: "resources/large.bin".into(),
+                category: FileCategory::Resource,
+                content_hash: Some(ProtocolBytes::new(blake3::hash(&resource).as_bytes().to_vec())),
+                payload: FilePayload::Bytes(ProtocolBytes::new(resource)),
             },
         ],
     };
@@ -571,7 +580,12 @@ fn cooperative_manifest_encoding_preserves_empty_payloads_and_reports_file_error
         });
         loop {
             match encoder.step() {
-                Ok(Some(bytes)) => break Ok(bytes),
+                Ok(Some(bytes)) => {
+                    assert!(encoder.manifest.files.iter().all(|file| matches!(&file.payload,
+                        FilePayload::Bytes(value) if value.as_slice().is_empty()
+                    )), "completed export files must release their payloads");
+                    break Ok(bytes);
+                }
                 Ok(None) => {}
                 Err(error) => break Err(error),
             }
@@ -585,6 +599,10 @@ fn cooperative_manifest_encoding_preserves_empty_payloads_and_reports_file_error
         1,
         "full project compression must reuse its manifest encoder"
     );
+    let canonical = encode_full_project_for_test(
+        &project, &[], &artifact, &build.incremental, snapshot, &build.report.diagnostics,
+    ).unwrap();
+    assert_eq!(bytes, canonical, "direct final-buffer compression must preserve the container bytes");
     assert_eq!(
         decode_project_file(&bytes, bytes.len())
             .unwrap()

@@ -32,7 +32,23 @@ pub fn decode_canonical<'bytes, T>(bytes: &'bytes [u8]) -> Result<T, ProtocolErr
 where
     T: Decode<'bytes, ()> + Encode<()>,
 {
-    validate_deterministic(bytes)?;
+    decode_canonical_nested(bytes, 0)
+}
+
+/// Decode a complete value extracted from a larger canonical CBOR document.
+/// `depth` is its nesting depth in that document, preserving the wire depth limit.
+///
+/// # Errors
+///
+/// Returns an error for malformed, non-deterministic, or excessively nested input.
+pub fn decode_canonical_nested<'bytes, T>(
+    bytes: &'bytes [u8],
+    depth: usize,
+) -> Result<T, ProtocolError>
+where
+    T: Decode<'bytes, ()> + Encode<()>,
+{
+    validate_deterministic(bytes, depth)?;
     minicbor::decode(bytes).map_err(|error| {
         ProtocolError::new(
             ProtocolErrorCode::InvalidCbor,
@@ -41,8 +57,8 @@ where
     })
 }
 
-fn validate_deterministic(bytes: &[u8]) -> Result<(), ProtocolError> {
-    let end = validate_item(bytes, 0, 0)?;
+fn validate_deterministic(bytes: &[u8], depth: usize) -> Result<(), ProtocolError> {
+    let end = validate_item(bytes, 0, depth)?;
     if end != bytes.len() {
         return Err(invalid("trailing bytes after the CBOR data item"));
     }

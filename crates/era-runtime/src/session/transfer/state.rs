@@ -35,6 +35,7 @@ impl RuntimeSession {
                 artifact_id: None,
             },
             bytes,
+            manifest_decoder: None,
             hasher: None,
             committed: true,
         });
@@ -71,4 +72,5 @@ impl RuntimeSession {
 
 mod export;
 mod import;
+pub(in super::super) mod manifest_import;
 mod project_container;

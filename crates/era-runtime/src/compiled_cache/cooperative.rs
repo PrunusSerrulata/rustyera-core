@@ -41,6 +41,7 @@ impl CooperativeCompiledCacheEncoder {
             plan: None,
             next_section: 0,
             manifest_encoder: None,
+            manifest_hash_offset: None,
             pending_section: None,
             output: None,
             trailing_data: input.trailing_data,
@@ -116,6 +117,20 @@ impl CooperativeCompiledCacheEncoder {
         {
             return Err("compiled cache build cancelled".into());
         }
+        if let Some(offset) = self.manifest_hash_offset.as_mut() {
+            let (output, hasher) = self.output.as_mut().expect("cache output was initialized");
+            let end = offset
+                .saturating_add(COOPERATIVE_MANIFEST_CHUNK_BYTES)
+                .min(output.len());
+            hasher.update(&output[*offset..end]);
+            *offset = end;
+            if end == output.len() {
+                self.manifest_hash_offset = None;
+                self.next_section += 1;
+            }
+            self.report_cooperative_progress();
+            return Ok(None);
+        }
         if let Some((section, offset)) = self.pending_section.as_mut() {
             let end = offset
                 .saturating_add(COOPERATIVE_MANIFEST_CHUNK_BYTES)
@@ -176,7 +191,55 @@ impl CooperativeCompiledCacheEncoder {
         });
     }
 
+    fn advance_manifest_section(&mut self) -> Result<(), String> {
+        // Initializing zstd allocates its compression workspace. Keep one encoder for
+        // the entire section instead of eagerly rebuilding it on every host pump.
+        if self.manifest_encoder.is_none() {
+            let output = std::mem::take(
+                &mut self
+                    .output
+                    .as_mut()
+                    .expect("cache output was initialized")
+                    .0,
+            );
+            self.manifest_encoder = Some(ManifestSectionEncoder::with_output(
+                &self.manifest,
+                self.kind,
+                output,
+            )?);
+        }
+        let encoder = self
+            .manifest_encoder
+            .as_mut()
+            .expect("manifest encoder was initialized");
+        let before = encoder.file_index;
+        let output = encoder.step(&self.manifest)?;
+        let after = encoder.file_index;
+        if self.kind == ProjectContainerKind::FullProject && after > before {
+            // This manifest belongs to the export, while the live project remains intact.
+            // Never clone a shared manifest just to reclaim completed payloads.
+            if let Some(manifest) = Arc::get_mut(&mut self.manifest) {
+                for file in &mut manifest.files[before..after] {
+                    file.payload = FilePayload::Bytes(ProtocolBytes::new(Vec::new()));
+                }
+            }
+        }
+        if let Some(output) = output {
+            self.manifest_hash_offset = Some(encoder.section_start);
+            self.output
+                .as_mut()
+                .expect("cache output was initialized")
+                .0 = output;
+            self.manifest_encoder = None;
+        }
+        Ok(())
+    }
+
     fn encode_next_section(&mut self) -> Result<Option<Vec<u8>>, String> {
+        if self.next_section == MANIFEST_SECTION_INDEX {
+            self.advance_manifest_section()?;
+            return Ok(None);
+        }
         let plan = self.plan.as_ref().expect("cache layout was planned");
         let function_start = FIXED_SECTION_COUNT;
         let source_start = function_start + plan.function_ranges.len();
@@ -229,23 +292,6 @@ impl CooperativeCompiledCacheEncoder {
                 self.kind,
                 cancelled,
             )?,
-            MANIFEST_SECTION_INDEX => {
-                // Initializing zstd allocates its compression workspace. Keep one encoder for
-                // the entire section instead of eagerly rebuilding it on every host pump.
-                if self.manifest_encoder.is_none() {
-                    self.manifest_encoder =
-                        Some(ManifestSectionEncoder::new(&self.manifest, self.kind)?);
-                }
-                let encoder = self
-                    .manifest_encoder
-                    .as_mut()
-                    .expect("manifest encoder was initialized");
-                let Some(section) = encoder.step(&self.manifest)? else {
-                    return Ok(None);
-                };
-                self.manifest_encoder = None;
-                section
-            }
             7 => encode_section(&self.snapshot, self.kind, cancelled)?,
             8 => super::sections::encode_diagnostic_templates(
                 &self.diagnostics,
@@ -339,6 +385,7 @@ pub(super) struct ManifestSectionEncoder {
     payload_offset: usize,
     payload_hasher: Option<blake3::Hasher>,
     kind: ProjectContainerKind,
+    section_start: usize,
 }
 
 #[cfg(test)]
@@ -347,13 +394,26 @@ thread_local! {
 }
 
 impl ManifestSectionEncoder {
+    #[cfg(any(not(target_arch = "wasm32"), test))]
     pub(super) fn new(
         manifest: &ProjectManifest,
         kind: ProjectContainerKind,
     ) -> Result<Self, String> {
+        Self::with_output(manifest, kind, Vec::new())
+    }
+
+    fn with_output(
+        manifest: &ProjectManifest,
+        kind: ProjectContainerKind,
+        mut output: Vec<u8>,
+    ) -> Result<Self, String> {
         #[cfg(test)]
         MANIFEST_ENCODER_CREATIONS.set(MANIFEST_ENCODER_CREATIONS.get() + 1);
-        let encoder = zstd::stream::Encoder::new(Vec::new(), kind.compression_level())
+        // Reserve the section header in the final buffer. Compression appends directly after
+        // it, avoiding compressed -> section -> output copies of the entire resource payload.
+        let section_start = output.len();
+        output.extend_from_slice(&[0; 16]);
+        let encoder = zstd::stream::Encoder::new(output, kind.compression_level())
             .map_err(|error| error.to_string())?;
         let mut writer = super::io::CountingWriter::new(encoder, None);
         writer
@@ -381,6 +441,7 @@ impl ManifestSectionEncoder {
             payload_offset: 0,
             payload_hasher: None,
             kind,
+            section_start,
         })
     }
 
@@ -486,18 +547,18 @@ impl ManifestSectionEncoder {
             .take()
             .expect("manifest encoder retains its writer");
         let decoded_length = writer.bytes;
-        let compressed = writer
+        let mut output = writer
             .into_inner()
             .finish()
             .map_err(|error| error.to_string())?;
-        let mut output = Vec::with_capacity(16 + compressed.len());
-        output.extend_from_slice(&decoded_length.to_le_bytes());
-        output.extend_from_slice(
-            &u64::try_from(compressed.len())
+        let start = self.section_start;
+        let compressed_length = output.len() - start - 16;
+        output[start..start + 8].copy_from_slice(&decoded_length.to_le_bytes());
+        output[start + 8..start + 16].copy_from_slice(
+            &u64::try_from(compressed_length)
                 .map_err(|_| "compiled cache section is too large")?
                 .to_le_bytes(),
         );
-        output.extend_from_slice(&compressed);
         Ok(output)
     }
 }
