@@ -46,7 +46,7 @@ core SHA、库/bundle 路径及后续发布绑定变更，须在对应实施批�
 | [2](#batch-2) | 确定性 API、输入与兼容差异骨架 | 功能验收完成；规模证据有缺口 | 2026-08-30 / Codex | 2A–2F 产品与三端行为已交付；峰值 RSS 因沙箱权限未取得，后续性能批次补采 |
 | [3](#batch-3) | 安全 SQL（蛇版 TW P0） | 待登记 | 待填写 | 待填写 |
 | [4](#batch-4) | 主玩法 presentation、图像、scene 与自身存档闭环 | 待登记 | 待填写 | 待填写 |
-| [5](#batch-5) | 蛇版存档互操作与音频 | 已完成确认范围 | 2026-09-03 / Codex | 标准 1808、音频及存档页修复完成；空槽与整页发布已验证，TUI 真实 TW 保留像素能力限制 |
+| [5](#batch-5) | 蛇版存档互操作与音频 | 已完成确认范围 | 2026-09-04 / Codex | 标准 1808、音频、存档页及整包导出修复完成；Browser/Tauri 蛇版 TW 导出文件一致，TUI 真实 TW 保留像素能力限制 |
 | [6](#batch-6) | 完整蛇版语言 | 待登记 | 待填写 | 待填写 |
 | [7](#batch-7) | 可选 extension 与渲染能力 | 待登记 | 待填写 | 待填写 |
 
@@ -1045,6 +1045,101 @@ HTML_PRINT 流程构造 41 个槽位。Web/Tauri 使用 HTML 版本；TUI 的存
   source 删除保持原样。未修改 master、未推送或合并；根 `CHANGELOG_PENDING.md` 另行提交。
 - 临时运行副本与本任务 Wine prefix 在验收后清理；固定最小 fixture、工具/库、实际可复用
   构建产物及上述证据保留。测试进程已经结束，不为记录/提交调整重跑产品。
+
+### 2026-09-04 整包导出与取消内存修复验收
+
+本次作为一个小规模跨 core/Web 修复批次，处理整包导出末尾停滞、持续分配及取消后的内存尖峰；
+共享一次重构审查、首次全量和测试预算，取消修复单独提交。TUI、游戏和参考实现未修改，
+协议、RERAPROJ 格式、发行版本均不变。此处是整个修复批次结束后的最终记录。
+
+证据根 `W = ../export-memory-work/`（相对于本 core worktree）。执行与恢复清单见
+`W/execution-plan.json`、`W/budget.json`，每条命令的参数、起止时间和退出码保留为
+`*.receipt.json` / `*.log`。最终源与产物身份见 `W/artifact-identities-download-lease.json`，
+浏览器整包、取消与终态摘要见 `W/final-export-evidence.json`。
+
+#### 所作改动与提交
+
+| 项目 | 组件 / commit | 实际改动、动机与验证正文摘要 |
+|---|---|---|
+| 压缩状态复用 | core `99f57274ce6a0409cd30294e8b5c873a2f5ee1af` — `fix(runtime): reuse compression state across full-project export steps` | 避免每次协作推进都提前构造 Zstd 工作区；构造次数回归与真实 Tauri TW 导出通过 |
+| 清单增量编解码 | core `12c7e1cfdc28158126442f2e1a8809c6e5d44c13` — `fix(runtime): decode full manifests incrementally and avoid export copies` | 按 SubmittedFile 解码，保留 canonical/深度/大小与摘要校验；压缩直接写入输出，释放已消费且独占的输入内容；避免整份清单和压缩段重复复制 |
+| 输出分块 | core `e13d1582d238cd3e3fc244844ccad7922743fd71` — `fix(runtime): keep full-project export output in bounded memory chunks` | 协作式整包输出使用最多 4 MiB 的块，跨块修补、哈希和传输；普通缓存与原生连续输出接口不变；不可压缩大资源、跨块与取消生命周期回归通过 |
+| 输入限流与公平推进 | Web `a918208`、`8d65fb2` | 每次消费后最多提交一块清单，流式结果不再拼接整包；有待处理协作任务时及时继续，仍遵守每轮 8 次推进的公平性边界 |
+| 取消内存尖峰 | Web `abf2f0c` — `fix(web): abort project export producers before queued cancellation` | 先停止 host 读取/写入，再排队清理 Runtime；每个 await 后核验 owner，过期 resolve/reject 不再写入、下载或干扰新任务，重复取消不重复清理 |
+| 浏览器下载生命周期 | Web `090fea0` — `fix(web): retain OPFS downloads until explicit completion confirmation` | 点击下载后保留 URL 与 OPFS 源，用户确认“下载已结束”才释放；同步失败立即清理，不在组件卸载时删除仍被浏览器读取的文件。92 项定向测试与三浏览器/原生最小复验通过 |
+| 发布绑定 | Web `b667cdf`、`288d679`、`5cb73f6` | 随已提交的 core 契约依次更新完整 SHA、全部 Git rev 和发布锁；最终绑定 `e13d158`。用户工作锁的 19 行本地 source 删除原样保留 |
+| 测试观测 | Web `34d5426` — `test(web): avoid cloning protocol ledgers for plain state assertions` | 普通状态断言使用摘要，显式查询 serviceEvidence/serviceLifecycle 才复制完整 ledger；5 秒完整 DOM/runtime 看门狗保持不变，修复大项目断言复制大日志的超时 |
+
+#### 审查、首次全量与定向复验
+
+- 唯一重构子智能体在首条测试前完成审查，四项要求全部落实：过期异步 owner 的成功/失败
+  路径；原生一次性真实导出目的地；浏览器/原生观察只读头部和长度；真实 TW 在提交至少
+  8 MiB 后取消并于同会话重试完成。后续故障由主智能体定位，没有再次启动重构审查。
+- 首条测试为 **2026-09-03 12:42:01 UTC**；用户先追加 60 分钟与 20 分钟，恢复后于
+  **16:01:41 UTC** 再追加 60 分钟，截止 **17:01:41 UTC**。同批次续做，没有重置首次全量额度；
+  最终产品测试于 **16:34:22 UTC** 完成。中断时保留的材料继续复用。
+- core 首次 workspace 全量 **1484 passed / 0 failed / 0 ignored**，见 `core-05-full`。
+  最终分块修改后仅复验 compiled_cache **33**、reload_transfer **37**、input_flow **13**、
+  protocol_handshake **53**、save_lifecycle **14**、sql_map_snapshot **15**；增量解码边界与
+  protocol 的先前有效结果复用。fmt/check/clippy 全部通过；`core-24` 的测试适配编译失败已
+  定向修复，`core-13` 的零用例过滤不计作通过覆盖。
+- Web 首次完整 Vitest **111 文件 / 1543 passed**（`web-02-full`）；Rust 首次全量
+  **135 passed / 1 ignored**（`web-15-rust-test`）。ignored 是仅供跨前端 source-index
+  handoff 专用场景调用的测试，不标为已执行。本次没有再次运行任何全量套件。
+- 最终 core 绑定后 Rust project **62 passed / 1 ignored**、export **7 passed**；推进/状态
+  定向 **225 passed**，下载生命周期定向 **92 passed**。状态断言助手首轮 124 项中 2 项前缀
+  fixture 形状错误，修正后仅复验相关 6 项；其余 122 项结果复用。
+- TypeScript、ESLint、Prettier、Rust fmt/check/clippy、core pin、WASM 和前端/原生构建通过。
+  宽范围 lint/format 首次受到既有 `public/.wasm-build-D76iVx` 生成目录影响；仅排除该目录后
+  通过，保留既有 6 条 Vue lint 警告。最终下载改动只重建受影响的前端及原生产物，未重建 WASM。
+
+#### 真实客户端、内存与文件完整性
+
+| 用例 / 证据 | 实际结果与断言 |
+|---|---|
+| Tauri 真实蛇版 TW `tauri-04-tw-stable` | core `99f5727` 的真实原生导出完成，129.50 秒；文件 763,486,637 bytes，恢复 stable_input/canInteract，fault=null；`artifact-03-tauri-tw` 独立解码成功 |
+| Chromium 最终小项目 `chromium-10-fixture-download-lease` | 真实下载落盘、确认“下载已结束”、关闭导出对话框与恢复交互，exit 0，3.01 秒 |
+| Chromium 最终真实 TW `chromium-11-tw-download-lease` | 取消后同会话重试，356.19 秒完成整条场景；真实下载 763,486,638 bytes，Playwright download.failure=null，最终 canInteract=true、fault=null、fullManifest=null；后台普通缓存可正常恢复 |
+| 独立解码与跨端文件核验 | `artifact-04-browser-tw` 使用此前 core `99f5727` 构建的独立 extractor，解码 15,766 个文件 / 11,337 个二进制资源并验证容器/内容摘要；`artifact-06-export-file-comparison` 对 Browser/Tauri 两棵解码目录逐文件比较，15,766 个路径及 SHA-256 全部一致；没有只凭文件头认定整包成功 |
+| 最终 Firefox / Safari 最小断面 | `firefox-05-fixture-download-lease` 6.03 秒、`safari-04-fixture-download-lease` 5.04 秒，均 exit 0；真实 Vue/WASM、OPFS 导出 URL 的头部和长度正确，恢复 Runtime 交互。此断面不声称这两个浏览器已验证 TW 整包下载/解码 |
+| 最终 Tauri 最小断面 | `web-59-native-download-lease-build` 官方受影响构建通过；`tauri-08-fixture-download-lease` 严格 cache-only，真实 WebView/command 导出和终态通过，5.03 秒；没有把早期 native TW 的 core 身份冒充最终构建 |
+
+真实 TW 使用 `games/eratw-sub-modding`，不是原版 eraTW；seed **123456**，固定 clock
+**2026-01-01T00:00:00Z**。浏览器 trace 位于 `W/chromium-tw-download-lease/trace.ndjson`，
+下载 `W/tw-download-lease.reraproj` 的 SHA-256 为
+`73c37005961c621391df3e8f37f3497b5a8135f20d1f9cf8d8374bc5716ffd28`。
+取消证据 `W/tw-cancel-memory-download-lease.json`：至少提交 **8,388,608 bytes** 后点击取消，
+**639 ms** 恢复交互；四次采样 WASM 线性内存均为 **2,989,948,928 bytes**，故障为空。
+取消区间的 250ms 进程树 RSS 采样为 **2,308,161,536 → 2,147,434,496 bytes**，未见额外尖峰。
+最终整个场景的 69 份周期快照中，WASM 最大为 **3,652,780,032 bytes**（约 3.40 GiB）；
+这是线性内存保留量，不是 RSS，也不承诺导出后线性内存自动缩回初始大小。
+
+#### 首次差异、适用边界与产物绑定
+
+- 早期浏览器在提交 541,065,216 / 839,580,651 bytes 时发生连续缓冲分配失败；增量解码后
+  又暴露压缩输出连续扩容触及 WASM 上限。最终分块版本通过相同真实项目，原失败 verdict 保留。
+- 中间测试出现断言复制大 ledger 超过 5 秒；修复的是摘要选择并将重型构建与 TW 测试串行，
+  没有放宽完整快照看门狗。`chromium-09-tw-serial` 已完成打包但实际下载被取消，定位为
+  零延时撤销 URL/删除 OPFS 源；最终用户确认释放路径通过真实文件验证。
+- 普通网页没有 anchor 下载完成通知；OPFS File 可能因其磁盘源被删除而失效，见
+  [File System getFile 规范](https://fs.spec.whatwg.org/#dom-filesystemfilehandle-getfile)。
+  浏览器兜底下载结束后需点击“下载已结束”释放暂存文件；下载未确认便关闭页面时保留 OPFS 源，
+  避免中途破坏下载，不能声称该异常退出路径会自动回收磁盘文件。原生与 File System Access
+  直接写入路径继续以 writer.close 确认完成，不新增该提示。
+- 最终 Web 发布 pin / WASM / Tauri 实际 core 均为 **e13d1582d238cd3e3fc244844ccad7922743fd71**；
+  本记录的后续文档 commit 不改变产品输入或该发布绑定。WASM revision
+  `6342873e6836a27e7cf017546378814420ce021fa942b83114f9340bf65b8b99`；WASM 文件 SHA-256
+  `c51d9870f7eac4f1547a930058a675825cf7322dc4d01f354ab44b9b1eadc18d`；最终 Tauri SHA-256
+  `14d380398811e0269bb12a261180f32b8cf7c43bec145b5cbe7a524216f9639d`。
+- 独立 extractor SHA-256 `b58c5e20e6f187ddd593def6b191a51f2e80db0ca2bd539fd2cb4986cd7bb094`。
+  Node 24、Chrome 151、原生 Firefox/Safari 及 Tauri provider 均复用已有工具，target/WASM/
+  profile/端口/游戏可写副本隔离；native provider 摘要见执行清单和构建日志。
+- RERAPROJ 没有 Emuera 对应文件格式；本批不改变游戏脚本语义，复用未变的蛇版 CLI 协议
+  smoke `../save-menu-work/core-static/24-snake-realpath-protocol.log`，不把本次容器核验称为新 oracle 差分。
+  Android/iOS、Firefox/Safari 上的真实 TW 大包及全平台矩阵没有扩展执行。
+- 用户 core 批次 5 计划修改、Web 工作锁保持原样；未修改 master、未推送/合并。根
+  `CHANGELOG_PENDING.md` 分项登记本批行为修复。任务测试进程已结束，暂停续做材料按规则
+  保留在 W 和已记录的专属游戏副本中，不删除用户数据或为文档/提交调整重跑产品。
 
 <a id="batch-6"></a>
 

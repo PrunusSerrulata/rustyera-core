@@ -167,7 +167,7 @@ Browser/Tauri 完成真实服务，TUI 本批对像素测量/pointer/canvas 明�
 - 所有前端主存档只使用项目 `sav`。未发布的 `RERASAV`/owned-state/legacy namespace 已移除，无迁移、探测或 fallback，不删除用户旧文件。协议 46.0、identity 12、`snake_emuera1808_interop_v1` 保持既定版本。
 - D16/C07 通过版本化服务实现 10 个声道与 BGM 的实际查询和 pause/resume/stop/rate/preserve-pitch；蛇版没有 Seek action。TUI 对实际音频查询明确 unsupported，不伪造 stopped。
 - 集成闭环为真实 TW→RustyEra 新 ERAZIP→蛇版 reference 修改并保存→Chromium/Firefox/Safari/Tauri 对比 ordinary/GLOBAL 及实际存储。用户确认 TUI 真实 TW 标题受 HTML_STRINGLEN v2 像素能力限制，本项记为未验证，像素适配留后续；不改变既有 TUI 不伪造像素能力的范围。
-- 用户允许无焦点、无 computer use 的后台 DOM 验收；真实锁屏 Safari/Tauri 媒体通过，但原生输入、默认 Safari autoplay 不在其覆盖内。项目加载临时允许显式 4×5s 无变化区间，加载性能和大项目整包导出剩余问题单独保留，不影响已完成的标准 `.sav` 互通判断。
+- 用户允许无焦点、无 computer use 的后台 DOM 验收；真实锁屏 Safari/Tauri 媒体通过，但原生输入、默认 Safari autoplay 不在其覆盖内。项目加载临时允许显式 4×5s 无变化区间，加载性能问题单独保留，不影响已完成的标准 `.sav` 互通判断；大项目整包导出及取消内存问题已于 2026-09-04 完成定向修复与验收，见批次 5 最终记录。
 
 验收：已支持类型的实际存档形状、变量与作用域边界一致，项目 Save/GlobalSave 请求有实际响应且没有私有路径 fallback；生产源码和新构建的 release 产物禁止能力扫描无命中。Text 的固定参考省略、TUI 图形缺能力等实际差异逐项保留；Float 在批次 6 补验，不自动扩大本批。
 
