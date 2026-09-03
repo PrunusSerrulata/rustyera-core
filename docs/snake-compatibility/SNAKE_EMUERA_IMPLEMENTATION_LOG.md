@@ -46,7 +46,7 @@ core SHA、库/bundle 路径及后续发布绑定变更，须在对应实施批�
 | [2](#batch-2) | 确定性 API、输入与兼容差异骨架 | 功能验收完成；规模证据有缺口 | 2026-08-30 / Codex | 2A–2F 产品与三端行为已交付；峰值 RSS 因沙箱权限未取得，后续性能批次补采 |
 | [3](#batch-3) | 安全 SQL（蛇版 TW P0） | 待登记 | 待填写 | 待填写 |
 | [4](#batch-4) | 主玩法 presentation、图像、scene 与自身存档闭环 | 待登记 | 待填写 | 待填写 |
-| [5](#batch-5) | 蛇版存档互操作与音频 | 已完成确认范围 | 2026-09-03 / Codex | 标准 1808 双向互通、真实音频及生产门禁完成；TUI 真实 TW 因像素能力限制按用户确认记为未验证 |
+| [5](#batch-5) | 蛇版存档互操作与音频 | 已完成确认范围 | 2026-09-03 / Codex | 标准 1808、音频及存档页修复完成；空槽与整页发布已验证，TUI 真实 TW 保留像素能力限制 |
 | [6](#batch-6) | 完整蛇版语言 | 待登记 | 待填写 | 待填写 |
 | [7](#batch-7) | 可选 extension 与渲染能力 | 待登记 | 待填写 | 待填写 |
 
@@ -964,6 +964,87 @@ RustyEra 自有存档闭环**；负责人 / 最近更新：Codex / 2026-09-01。
 - 各功能/测试提交见上表；最终记录和根 `CHANGELOG_PENDING.md` 另行文档提交。更新日志记录标准 1808 行为及用户可见修复，沿用已有音频条目，修正尚未发布的 envelope 描述，不将删除临时 legacy 能力写作新增功能。
 - 完整复现命令、fixture/config、raw verdict、首次全量与各定向 receipt 在 `W/execution-plan.json`。消费者为 `W/tw-consumer`、reference 为 `W/tw-reference`；历史 producer 和 native storage 证据保持实际项目路径及产物身份。
 - 测试执行器均已退出；续做所需副本、脚本、证据和产物按工作区保留规则保留，不自动删除。收尾磁盘可用约 25 GiB；后续只补明确缺口，不因文档/提交调整重跑产品或完整套件。
+
+### 2026-09-03 存档界面修复验收
+
+本次后续修复作为一个小规模跨组件批次，共享一次重构审查和一次首次全量额度；缺失存档说明、
+存档页逐行慢绘制分别提交。`CHKDATA` 的读取与展示时机在 core，HTML 测量强制投影在 Web，
+TUI 需要兼容协议省略的尾部可选字段；没有新增协议、存档格式或发行版本。补齐
+`session/storage/checks.rs` 后，用户报告的缺失模块及 `complete_save_check` 编译错误已消除。
+
+证据根 `S = ../save-menu-work/`（相对于本 core worktree）；命令、参数、退出码和时间保留在
+各目录的 log/receipt，执行清单为 `S/execution-plan.json`，产物摘要为 `S/artifact-identities.json`。
+此处是该修复批次最终记录，不改变批次 5 其余已经登记的能力边界。
+
+#### 所作改动与提交
+
+| 项目 | 组件 / commit 标题 | 动机、实际改动与验证正文摘要 |
+|---|---|---|
+| 缺失存档说明 | core `aa77da0` — `fix(runtime): show empty save slots as four dashes` | CHKDATA/CHKCHARADATA 的 NotFound 返回状态 1、说明 `----`；其他 I/O 错误仍保留。两种 profile 回归与双 oracle 同输入确认 |
+| 存档页读取与发布 | core `1a083dbe1f25d54b2ed567991249411ee3c1e2b4` — `fix(runtime): batch save menu output and inspect only save headers` | 仅分段读取有界存档头，不解码正文；校验 offset/token/大小与响应归属。REDRAW 0 跨 storage 等待保留，整页发布先于输入等待；覆盖损坏正文、短头及 41 槽原子发布 |
+| core 发布绑定 | Web `663754b` — `build(web): bind save-menu runtime fixes` | 清单、完整 SHA 和发布 Cargo.lock 同步到 core `1a083db`；Rust、WASM、原生 host 门禁通过，本地 patch 差异未提交 |
+| HTML 测量 | Web `e8bc8bd` — `fix(web): measure save-menu HTML without publishing partial frames` | 隐藏测量 host 直接使用 canonical resources 和已确认视口，避免每槽强制投影与两次 RAF；保留 epoch/revision/viewport 失效校验。定向 store 及真实 Tauri/三浏览器验证通过 |
+| TUI 分段读取 | TUI `4ee62c2` — `fix(tui): accept omitted range-read change tokens` | storage/resource ReadRange 同时接受尾部 None 省略或显式 null；避免解包异常成为存档说明。定向 124 项、Ruff、compileall 与真实 C ABI 菜单通过 |
+| TUI 绑定及场景 | TUI `3149d6a` — `fix(tui): bind the atomic save-menu runtime` | 绑定同一 core SHA，增加 41 槽固定场景；包内 C ABI 实际等待终态通过，HTML 像素能力边界另外保留 |
+| 测试观测修复 | Web `c22e38c` — `test(web): tolerate dynamic Tauri timeout configuration`；`07095b2` — `test(web): include canonical HTML text in runtime observations` | 修正过时的 runner 断言；测试快照从规范 HTML 树提取文字和换行，避免 HTML 页面被记录为空。没有改变产品文字投影；定向测试与受影响构建通过 |
+| 原生上传脚本 | Web `9705af9` — `test(web): restore file input behavior before native upload` | 创建生产 input 后即恢复原生 click，再交给 WebDriver 上传；修复 Safari 上传超时。3 项回归、typecheck/lint/format 和 Safari 定向恢复通过 |
+
+#### 审查、静态门禁与首次全量
+
+- 唯一重构审查在首条测试前完成，四项要求全部落实：头部 UTF-8/短 magic 与损坏正文边界；
+  错误响应也结束所属等待；统一 64 KiB 限额、累计限额及零进度检查；Tauri 观察真实视口
+  行标识、可见性和 prompt，确认最终完整页面先于开放输入。详见 `S/review-resolution.txt`。
+- 第一条测试时间为 **2026-09-03 10:30:28 UTC**；用户明确延长 60 分钟，截止为
+  **12:30:28 UTC**。全部产品测试于 12:10 UTC 前结束；没有重启审查或重复全量。
+- core 首次 workspace 全量 **1484 passed / 0 failed / 0 ignored**（66 个汇总）；
+  fmt/check/clippy、存档定向测试、C ABI debug 构建通过。证据 `S/core-static/`。
+- Web 首次完整 Vitest exit 0；该次终端聚合数量未持久化，不重新运行补数。store 定向
+  **208 passed**；HTML 测试观测恢复 **38 passed**；typecheck、ESLint、Prettier 和 Web
+  build 通过（ESLint 保留 6 项既有 Vue 警告）。首次 Rust 全量：bridge **29**、Tauri
+  **95 passed / 1 ignored**、WASM **11**；Rust fmt/check/clippy、core pin、WASM 和原生构建通过。
+  证据 `S/web-static/`、`S/web-rust-static/`、`S/web-static-recovery/`。
+- TUI 首次全量 **534 passed / 15 skipped**；首轮 project/wire **125 passed**，Ruff、
+  compileall 通过。首次真实 C ABI 发现尾部可选 token 解包错误，修复后只运行相关
+  `test_project.py` **124 passed**、相关 lint/format/compileall，并重建受影响 PyInstaller 包；
+  没有重跑全量。证据 `S/tui-static/`、`S/tui-dynamic/save-menu/`。
+- 原版 oracle 首次 smoke 通过；蛇版首次 smoke 因从 symlink 项目路径还原 NuGet 图时丢失
+  SQLite 传递依赖失败。改为真实参考源码路径、离线本机缓存和独立产物目录 publish 后，仅
+  重跑 protocol 用例通过；不把它描述为 snake smoke 全量重跑通过。参考源码未修改。
+- 两种 oracle 各 **4/4** 同输入比较通过：缺失 CHKDATA 语句/表达式、仅三行头的有效说明、
+  缺失 CHKCHARADATA。原始终态为 waitingInput，与 Rust 一致；修正比较器原有 completed
+  预期后离线复用已有捕获。语义基准 original `26a35dc9334bb67590b96f7b8efbefbf199e391e`、
+  snake `fc4fb21416768c17256d0e82f997e5f99c9bba91`；wrapper 分别
+  `ffe560dad2fe480c8babddcae0122137350bf021`、`ed52a0ac58f970b4f39069d1dc12d135a299b705`。
+  证据 `S/oracle-original/`、`S/oracle-snake/`、`S/core-static/24-*` 至 `27-*`。
+
+#### 真实客户端、差异与产物绑定
+
+本批最小场景依据蛇版 TW `隨時操作存檔.ERB` 的 REDRAW 0 → CHKDATA → HTML_STRINGLEN →
+HTML_PRINT 流程构造 41 个槽位。Web/Tauri 使用 HTML 版本；TUI 的存储回归使用文本版本，
+并另运行同一 HTML 版本确认能力拒绝，不将文本结果替代完整蛇版 TW 游戏验收。
+
+| 客户端 | 首次结果与定向恢复 | 实际终态 / 证据 |
+|---|---|---|
+| Tauri 原生 WebView | 首次测试快照遗漏 HTML text；修正测试观测后定向通过 | 41 个 `[n] - ----`、integer input enabled；4 个观测帧只含零槽或完整 41 槽，实际 DOM 仅在完整 revision 后挂载。单次最小场景约 **115 ms**，不是完整游戏性能基准。`S/web-dynamic/02-*` |
+| Chromium 151.0.7922.34 | 固定场景首次通过 | 41 槽、完成标记及 `integer_value` 等待；seed 123456、clock 2026-01-01。`S/web-dynamic/03-*`、`chromium-save-menu/trace.ndjson` |
+| Firefox 155 / Gecko 0.37.1 | 目录原生上传被驱动拒绝；改用应用真实导出的同源 `.reraproj` 后定向通过 | 41 槽、无 fault，runner 已断言 canInteract 和完成标记；终态报告未单独持久化精确 wait.kind，不补称该字段已验证。`S/web-dynamic/04-firefox-export/` |
+| Safari 26.6.2 | 首次原生文件上传及快照超时；还原 input 原生行为后同包定向通过 | 41 槽、无 fault、canInteract 和完成标记；精确 wait.kind 同样未单独持久化。`S/web-dynamic/05-safari-export-retry/`，保留首次失败目录 |
+| TUI / 实际包内 C ABI | 首次 tuple 解包错误；修复后定向通过 | seed 123456、phase 5、epoch 2、wait `{id:2,kind:2,stability:0}`、41/41 槽及标记通过、无 fault。`S/tui-dynamic/save-menu-fixed/` |
+| TUI / HTML 能力边界 | 真实执行 exit 3，保持原 verdict | `RuntimeFailure(code=7)` / UnsupportedRuntimeFeature，`ERB/main.erb:5` 的 `html__measure_length` 未协商 `PresentationQuery/html_string_len v2.0`；phase 11、无 active wait。完整 HTML 页仍未通过。`S/tui-dynamic/html-capability-boundary/02-*` |
+
+- Firefox/Safari 的文件来自真实 Chromium 可见“文件 → 导出全量项目文件”下载，37,537 bytes，
+  SHA-256 `d0c53e5c` 前缀；完整摘要和下载事件在 `S/web-dynamic/export-chromium/`。
+  使用真实原生 WebDriver 文件上传，没有脚本合成 FileList/change 作为恢复办法。
+- 三端绑定 core `1a083dbe1f25d54b2ed567991249411ee3c1e2b4`；本组独立 target/WASM/包：
+  WASM SHA-256 `de487a625e0c4c2dcbf157acfc0aefa37f3bc6be9096959a3453d284f1f66e4b`；
+  Tauri `916b94708ca754c267b77d4a6e7c3de9153d3f537fbfcc3c75e9d0e0c12da370`；
+  包内 C ABI `0b28caf71d8c09ba7e5f43a98e99497578a5dd910846639aaf96174cb8878736`。
+- 所有浏览器/原生测试保留独立 5 秒完整 DOM/runtime 看门狗；TUI 按稳定等待点观察。
+  首次失败与最终定向通过分别记录，没有用 wrapper 退出 0 代替行为断言。
+- 原版、蛇版参考仓库只读；用户原有 core 批次 5 计划修改及 Web Cargo.lock 的 19 个本地
+  source 删除保持原样。未修改 master、未推送或合并；根 `CHANGELOG_PENDING.md` 另行提交。
+- 临时运行副本与本任务 Wine prefix 在验收后清理；固定最小 fixture、工具/库、实际可复用
+  构建产物及上述证据保留。测试进程已经结束，不为记录/提交调整重跑产品。
 
 <a id="batch-6"></a>
 
