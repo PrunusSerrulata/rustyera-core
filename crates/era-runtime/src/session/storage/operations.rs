@@ -265,7 +265,8 @@ impl RuntimeSession {
                 } else {
                     4
                 };
-                let writes = self.check_data_writes(&error.message)?;
+                let description = if status == 1 { "----" } else { &error.message };
+                let writes = self.check_data_writes(description)?;
                 self.resume_storage_host_value(request, VmValue::Integer(status), writes)
             }
             (PendingStorage::HostCheck { request, kind }, StorageResult::Read { data, .. }) => {

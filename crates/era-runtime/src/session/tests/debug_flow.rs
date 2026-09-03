@@ -92,7 +92,7 @@ fn chkdata_returns_its_status_and_updates_the_description() {
     assert_eq!(session.phase(), RuntimePhase::WaitingInput);
     let vm = session.vm.as_ref().unwrap();
     assert_eq!(read_runtime_integer(vm, "RESULT", &[], None).unwrap(), 1);
-    assert_eq!(read_runtime_string(vm, "RESULTS").unwrap(), "missing slot");
+    assert_eq!(read_runtime_string(vm, "RESULTS").unwrap(), "----");
 }
 
 #[test]
