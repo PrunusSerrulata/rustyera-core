@@ -136,19 +136,18 @@ impl RuntimeSession {
         if self.phase == RuntimePhase::Running && self.message_skip {
             return Ok(());
         }
-        self.publish_pending_presentation()
-    }
-
-    pub(in super::super) fn flush_presentation_at_drive_boundary(
-        &mut self,
-    ) -> Result<(), RuntimeError> {
-        if self.phase == RuntimePhase::Running
-            && !self.presentation.redraw_enabled()
+        // Storage and other non-visual services may suspend a REDRAW 0 script between rows.
+        // Those protocol boundaries must not expose an unfinished frame. Explicit observation
+        // barriers still publish canonical state through flush_presentation_for_observation.
+        if matches!(
+            self.phase,
+            RuntimePhase::Running | RuntimePhase::WaitingExternal
+        ) && !self.presentation.redraw_enabled()
             && !self.presentation.has_open_wait()
         {
             return Ok(());
         }
-        self.flush_presentation()
+        self.publish_pending_presentation()
     }
 
     pub(in super::super) fn flush_presentation_for_observation(

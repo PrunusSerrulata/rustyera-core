@@ -389,7 +389,7 @@ impl RuntimeSession {
         let cooperative_background_work = self.poll_cooperative_background_work()?;
         #[cfg(all(not(target_arch = "wasm32"), not(test)))]
         let cooperative_background_work = false;
-        self.flush_presentation_at_drive_boundary()?;
+        self.flush_presentation()?;
         let state = self.drive_state();
         Ok(RuntimeDriveReport {
             state,

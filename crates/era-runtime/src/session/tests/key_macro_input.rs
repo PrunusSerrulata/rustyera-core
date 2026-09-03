@@ -717,7 +717,10 @@ pub(super) fn start_input_project(source: &str) -> RuntimeSession {
     )
 }
 
-fn start_snake_input_project(source: &str, client: ClientCapabilities) -> RuntimeSession {
+pub(super) fn start_snake_input_project(
+    source: &str,
+    client: ClientCapabilities,
+) -> RuntimeSession {
     start_input_project_with(
         source,
         erabasic_compat::CompatibilityIdentity::for_profile(

@@ -367,9 +367,16 @@ impl RuntimeSession {
                 PendingStorage::HostCheck {
                     request: request.id,
                     kind: era_runtime_save::SaveFileKind::Normal,
+                    path: save_slot_path(slot),
+                    data: Vec::new(),
+                    change_token: None,
                 },
                 StorageNamespace::Save,
-                StorageOperation::Read,
+                StorageOperation::ReadRange {
+                    offset: 0,
+                    maximum_bytes: crate::session::storage::SAVE_CHECK_CHUNK_BYTES,
+                    change_token: None,
+                },
                 save_slot_path(slot),
             );
         }
@@ -382,9 +389,16 @@ impl RuntimeSession {
                 PendingStorage::HostCheck {
                     request: request.id,
                     kind: era_runtime_save::SaveFileKind::Character,
+                    path: format!("chara_{filename}.dat"),
+                    data: Vec::new(),
+                    change_token: None,
                 },
                 StorageNamespace::Data,
-                StorageOperation::Read,
+                StorageOperation::ReadRange {
+                    offset: 0,
+                    maximum_bytes: crate::session::storage::SAVE_CHECK_CHUNK_BYTES,
+                    change_token: None,
+                },
                 format!("chara_{filename}.dat"),
             );
         }

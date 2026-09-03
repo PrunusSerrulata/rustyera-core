@@ -149,6 +149,9 @@ pub(crate) enum PendingStorage {
     HostCheck {
         request: HostRequestId,
         kind: SaveFileKind,
+        path: String,
+        data: Vec<u8>,
+        change_token: Option<String>,
     },
     HostFunctionWrite {
         request: HostRequestId,

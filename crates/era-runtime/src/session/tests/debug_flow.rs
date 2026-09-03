@@ -66,7 +66,10 @@ fn chkdata_returns_its_status_and_updates_the_description() {
         })
         .expect("CHKDATA storage request");
     assert_eq!(request.relative_path, "save99.sav");
-    assert_eq!(request.operation, StorageOperation::Read);
+    assert!(matches!(
+        request.operation,
+        StorageOperation::ReadRange { offset: 0, .. }
+    ));
 
     submit(
         &mut session,

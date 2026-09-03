@@ -259,43 +259,8 @@ impl RuntimeSession {
                 let writes = self.result_write(0)?;
                 self.resume_storage_host(request, writes)
             }
-            (PendingStorage::HostCheck { request, .. }, StorageResult::Error { error }) => {
-                let status = if error.kind == FrontendIoErrorKind::NotFound {
-                    1
-                } else {
-                    4
-                };
-                let description = if status == 1 { "----" } else { &error.message };
-                let writes = self.check_data_writes(description)?;
-                self.resume_storage_host_value(request, VmValue::Integer(status), writes)
-            }
-            (PendingStorage::HostCheck { request, kind }, StorageResult::Read { data, .. }) => {
-                let vm = self.vm.as_ref().ok_or_else(|| {
-                    RuntimeError::Internal("save check completion has no VM".into())
-                })?;
-                let (status, description) =
-                    match decode_scoped_save(data.as_slice(), vm.vm().artifact(), kind) {
-                        Ok(decoded) => {
-                            let game_base = &vm.vm().artifact().project_data.static_data.game_base;
-                            if decoded.state.unique_code != game_base.unique_code {
-                                (2, String::new())
-                            } else if !vm
-                                .vm()
-                                .artifact()
-                                .project_data
-                                .save_load_context()
-                                .compatibility
-                                .accepts(decoded.state.unique_code, decoded.state.version)
-                            {
-                                (3, String::new())
-                            } else {
-                                (0, decoded.description)
-                            }
-                        }
-                        Err(error) => (4, error.to_string()),
-                    };
-                let writes = self.check_data_writes(&description)?;
-                self.resume_storage_host_value(request, VmValue::Integer(status), writes)
+            (pending @ PendingStorage::HostCheck { .. }, result) => {
+                self.complete_save_check(message_id, pending, result)
             }
             (
                 PendingStorage::HostLoadOrdinary { request, slot },
