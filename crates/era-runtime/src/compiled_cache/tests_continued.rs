@@ -306,11 +306,7 @@ fn project_fixture_version(bytes: &[u8], version: u8) -> Vec<u8> {
     fixture
 }
 
-fn assert_streamed_project_manifest(
-    bytes: &[u8],
-    chunk_size: usize,
-    project: &ProjectManifest,
-) {
+fn assert_streamed_project_manifest(bytes: &[u8], chunk_size: usize, project: &ProjectManifest) {
     let mut decoder = ProjectFileStreamDecoder::new(bytes.len(), bytes.len()).unwrap();
     for chunk in bytes.chunks(chunk_size) {
         decoder.append(chunk).unwrap();
@@ -483,6 +479,7 @@ fn cooperative_cache_encoding_yields_between_sections_and_manifest_chunks() {
         None,
     );
 
+    let creations_before = super::cooperative::MANIFEST_ENCODER_CREATIONS.get();
     assert!(encoder.step().unwrap().is_none());
     let mut steps = 1;
     let bytes = loop {
@@ -494,6 +491,11 @@ fn cooperative_cache_encoding_yields_between_sections_and_manifest_chunks() {
     };
 
     assert!(steps > 16, "cache encoding should span multiple host pumps");
+    assert_eq!(
+        super::cooperative::MANIFEST_ENCODER_CREATIONS.get() - creations_before,
+        1,
+        "manifest compression must allocate one encoder across all host pumps"
+    );
     assert_eq!(bytes, canonical);
     let decoded = decode(&bytes, 64 * 1024 * 1024).unwrap();
     let decoded_files = &decoded.snapshot.manifest.files;
@@ -576,7 +578,13 @@ fn cooperative_manifest_encoding_preserves_empty_payloads_and_reports_file_error
         }
     };
 
+    let creations_before = super::cooperative::MANIFEST_ENCODER_CREATIONS.get();
     let bytes = run(project.clone()).unwrap();
+    assert_eq!(
+        super::cooperative::MANIFEST_ENCODER_CREATIONS.get() - creations_before,
+        1,
+        "full project compression must reuse its manifest encoder"
+    );
     assert_eq!(
         decode_project_file(&bytes, bytes.len())
             .unwrap()

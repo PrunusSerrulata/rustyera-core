@@ -230,9 +230,16 @@ impl CooperativeCompiledCacheEncoder {
                 cancelled,
             )?,
             MANIFEST_SECTION_INDEX => {
+                // Initializing zstd allocates its compression workspace. Keep one encoder for
+                // the entire section instead of eagerly rebuilding it on every host pump.
+                if self.manifest_encoder.is_none() {
+                    self.manifest_encoder =
+                        Some(ManifestSectionEncoder::new(&self.manifest, self.kind)?);
+                }
                 let encoder = self
                     .manifest_encoder
-                    .get_or_insert(ManifestSectionEncoder::new(&self.manifest, self.kind)?);
+                    .as_mut()
+                    .expect("manifest encoder was initialized");
                 let Some(section) = encoder.step(&self.manifest)? else {
                     return Ok(None);
                 };
@@ -334,11 +341,18 @@ pub(super) struct ManifestSectionEncoder {
     kind: ProjectContainerKind,
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static MANIFEST_ENCODER_CREATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl ManifestSectionEncoder {
     pub(super) fn new(
         manifest: &ProjectManifest,
         kind: ProjectContainerKind,
     ) -> Result<Self, String> {
+        #[cfg(test)]
+        MANIFEST_ENCODER_CREATIONS.set(MANIFEST_ENCODER_CREATIONS.get() + 1);
         let encoder = zstd::stream::Encoder::new(Vec::new(), kind.compression_level())
             .map_err(|error| error.to_string())?;
         let mut writer = super::io::CountingWriter::new(encoder, None);
