@@ -1472,7 +1472,7 @@ fn static_call_publication_survives_real_cold_and_warm_full_cache_loads_without_
         warm.export_state(104, StateExportRequest { kind: StateExportKind::VmSnapshot, snapshot_purpose: SnapshotExportPurpose::Normal }).unwrap();
         let export_messages = drain(&mut warm);
         let snapshot = warm.outbound_transfer.take().unwrap_or_else(|| panic!("snapshot export: {export_messages:?}")).bytes;
-        warm.start_vm_snapshot(105, &snapshot).unwrap();
+        warm.start_vm_snapshot(105, &snapshot.copy_range(0..snapshot.len())).unwrap();
         assert_eq!(warm.project_load_id, 1);
         assert!(warm.epoch.0 > before_restore.scope.runtime_epoch);
         assert_eq!(warm.project_diagnostic_publication.as_ref().unwrap().scope, before_restore.scope);

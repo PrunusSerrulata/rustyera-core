@@ -149,7 +149,7 @@ pub(crate) fn encode_full_project_for_test(
     });
     loop {
         if let Some(bytes) = encoder.step()? {
-            return Ok(bytes);
+            return Ok(bytes.into_vec());
         }
     }
 }
@@ -176,7 +176,7 @@ pub(crate) fn encode_compiled_cache_for_test(
     );
     loop {
         if let Some(bytes) = encoder.step()? {
-            return Ok(bytes);
+            return Ok(bytes.into_vec());
         }
     }
 }

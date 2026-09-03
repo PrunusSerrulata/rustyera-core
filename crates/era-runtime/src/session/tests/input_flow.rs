@@ -894,7 +894,10 @@ fn cold_project_metadata_is_transactional_and_low_memory_commit_is_sparse() {
     let old_payload = old_snapshot.manifest.files[0].payload.clone();
     let old_artifact = std::ptr::from_ref(session.artifact.as_ref().unwrap().artifact()).addr();
     session.compiled_project_cache = Some(Arc::new(vec![1, 2, 3]));
-    session.full_project_file = Some(Arc::new(vec![4, 5, 6]));
+    session.full_project_file = Some(Arc::new(crate::compiled_cache::ContainerBytes::new(
+        false,
+        vec![4, 5, 6],
+    )));
     session.client_preferences = Some(ClientPreferenceLayers {
         project_revision: 1,
         global: Vec::new(),
@@ -950,7 +953,13 @@ fn cold_project_metadata_is_transactional_and_low_memory_commit_is_sparse() {
         session.compiled_project_cache.as_deref(),
         Some(&vec![1, 2, 3])
     );
-    assert_eq!(session.full_project_file.as_deref(), Some(&vec![4, 5, 6]));
+    assert_eq!(
+        session
+            .full_project_file
+            .as_ref()
+            .map(|bytes| bytes.copy_range(0..bytes.len())),
+        Some(vec![4, 5, 6])
+    );
     submit(
         &mut session,
         3,
@@ -981,7 +990,13 @@ fn cold_project_metadata_is_transactional_and_low_memory_commit_is_sparse() {
         session.compiled_project_cache.as_deref(),
         Some(&vec![1, 2, 3])
     );
-    assert_eq!(session.full_project_file.as_deref(), Some(&vec![4, 5, 6]));
+    assert_eq!(
+        session
+            .full_project_file
+            .as_ref()
+            .map(|bytes| bytes.copy_range(0..bytes.len())),
+        Some(vec![4, 5, 6])
+    );
     assert_eq!(
         session
             .client_preferences

@@ -361,7 +361,7 @@ pub(crate) struct CooperativeCompiledCacheEncoder {
     manifest_encoder: Option<ManifestSectionEncoder>,
     manifest_hash_offset: Option<usize>,
     pending_section: Option<(Vec<u8>, usize)>,
-    output: Option<(Vec<u8>, blake3::Hasher)>,
+    output: Option<(ContainerBytes, blake3::Hasher)>,
     trailing_data: Vec<u8>,
     progress_completed: u64,
     progress_total: u64,
@@ -752,6 +752,8 @@ pub struct ProjectConfigurationUpdate {
     pub identity: ProjectIdentity,
 }
 
+mod buffer;
+pub(crate) use buffer::ContainerBytes;
 mod cooperative;
 mod decode;
 mod identity;

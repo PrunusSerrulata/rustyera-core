@@ -106,7 +106,7 @@ impl RuntimeSession {
             };
             self.outbound_transfer = Some(OutboundStateTransfer {
                 descriptor: descriptor.clone(),
-                bytes,
+                bytes: OutboundBytes::Contiguous(bytes),
                 next_offset: 0,
             });
             return self.emit(
@@ -165,12 +165,18 @@ impl RuntimeSession {
                 transfer_id,
                 kind: request.kind,
                 total_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
-                digest: ProtocolBytes::new(blake3::hash(&bytes).as_bytes().to_vec()),
+                digest: ProtocolBytes::new({
+                    let mut hasher = blake3::Hasher::new();
+                    bytes
+                        .hash_range(0..bytes.len(), &mut hasher)
+                        .map_err(RuntimeError::Internal)?;
+                    hasher.finalize().as_bytes().to_vec()
+                }),
                 artifact_id: None,
             };
             self.outbound_transfer = Some(OutboundStateTransfer {
                 descriptor: descriptor.clone(),
-                bytes,
+                bytes: OutboundBytes::Container(bytes),
                 next_offset: 0,
             });
             return self.emit(
@@ -214,7 +220,7 @@ impl RuntimeSession {
             };
             self.outbound_transfer = Some(OutboundStateTransfer {
                 descriptor: descriptor.clone(),
-                bytes: Arc::new(bytes),
+                bytes: OutboundBytes::Contiguous(Arc::new(bytes)),
                 next_offset: 0,
             });
             return self.emit(
@@ -424,7 +430,7 @@ impl RuntimeSession {
             };
             self.outbound_transfer = Some(OutboundStateTransfer {
                 descriptor: descriptor.clone(),
-                bytes: Arc::new(bytes),
+                bytes: OutboundBytes::Contiguous(Arc::new(bytes)),
                 next_offset: 0,
             });
             StateExportResult::Ready {

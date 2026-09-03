@@ -485,7 +485,7 @@ fn cooperative_cache_encoding_yields_between_sections_and_manifest_chunks() {
     let bytes = loop {
         steps += 1;
         if let Some(bytes) = encoder.step().unwrap() {
-            break bytes;
+            break bytes.into_vec();
         }
         assert!(steps < 256, "cooperative cache encoder did not finish");
     };
@@ -530,7 +530,7 @@ fn cooperative_cache_encoding_yields_between_sections_and_manifest_chunks() {
 
 #[test]
 fn cooperative_manifest_encoding_preserves_empty_payloads_and_reports_file_errors() {
-    let resource: Vec<u8> = (0..16_384_u64)
+    let resource: Vec<u8> = (0..163_840_u64)
         .flat_map(|index| blake3::hash(&index.to_le_bytes()).as_bytes().to_vec())
         .collect();
     let project = ProjectManifest {
@@ -584,7 +584,7 @@ fn cooperative_manifest_encoding_preserves_empty_payloads_and_reports_file_error
                     assert!(encoder.manifest.files.iter().all(|file| matches!(&file.payload,
                         FilePayload::Bytes(value) if value.as_slice().is_empty()
                     )), "completed export files must release their payloads");
-                    break Ok(bytes);
+                    break Ok(bytes.into_vec());
                 }
                 Ok(None) => {}
                 Err(error) => break Err(error),

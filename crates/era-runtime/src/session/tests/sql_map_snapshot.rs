@@ -273,14 +273,13 @@ fn export_snapshot_bytes(fixture: &mut SqlHostFixture, message_id: u64) -> Vec<u
         )),
         "{messages:#?}"
     );
-    fixture
+    let bytes = fixture
         .session
         .outbound_transfer
         .take()
         .expect("snapshot transfer bytes")
-        .bytes
-        .as_ref()
-        .clone()
+        .bytes;
+    bytes.copy_range(0..bytes.len())
 }
 
 fn assert_standard_save(bytes: &[u8]) {
@@ -522,14 +521,13 @@ fn export_traditional_save_bytes(fixture: &mut SqlHostFixture, message_id: u64) 
         )),
         "{messages:#?}"
     );
-    fixture
+    let bytes = fixture
         .session
         .outbound_transfer
         .take()
         .expect("traditional save transfer bytes")
-        .bytes
-        .as_ref()
-        .clone()
+        .bytes;
+    bytes.copy_range(0..bytes.len())
 }
 
 #[test]

@@ -947,7 +947,8 @@ fn assert_journaled_configuration_reopens(
     pending_source: &str,
 ) {
     let bytes = session.full_project_file.as_ref().unwrap();
-    let decoded = crate::compiled_cache::decode_project_file(bytes, bytes.len()).unwrap();
+    let bytes = bytes.copy_range(0..bytes.len());
+    let decoded = crate::compiled_cache::decode_project_file(&bytes, bytes.len()).unwrap();
     assert_eq!(&decoded.identity, pending_identity);
     let decoded_source = decoded
         .manifest
@@ -967,7 +968,7 @@ fn assert_journaled_configuration_reopens(
                 manifest: None,
                 compiled_cache_transfer_id: None,
             },
-            Some(bytes),
+            Some(&bytes),
             None,
         )
         .expect("journaled configuration rebuilds from the embedded project sources");

@@ -283,7 +283,7 @@ impl RuntimeSession {
         let response = StateExportChunk {
             transfer_id: request.transfer_id,
             offset: request.offset,
-            data: ProtocolBytes::new(transfer.bytes[offset..end].to_vec()),
+            data: ProtocolBytes::new(transfer.bytes.copy_range(offset..end)),
             complete,
         };
         self.emit(RuntimeMessage::StateExportChunk(response), Some(message_id))?;

@@ -940,6 +940,7 @@ fn html_lines_input_snapshot_restores_exact_flow_and_rejects_tampered_owner() {
             .take()
             .expect("stable HTML width INPUT snapshot")
             .bytes;
+        let bytes = bytes.copy_range(0..bytes.len());
         drain(&mut session);
         let before_epoch = session.epoch;
         let before_wait = session.operations.active_input().unwrap().wait.clone();

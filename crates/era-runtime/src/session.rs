@@ -615,8 +615,29 @@ impl InboundStateTransfer {
 #[derive(Debug)]
 struct OutboundStateTransfer {
     descriptor: StateTransferDescriptor,
-    bytes: Arc<Vec<u8>>,
+    bytes: OutboundBytes,
     next_offset: u64,
+}
+
+#[derive(Debug)]
+enum OutboundBytes {
+    Contiguous(Arc<Vec<u8>>),
+    Container(Arc<crate::compiled_cache::ContainerBytes>),
+}
+
+impl OutboundBytes {
+    fn len(&self) -> usize {
+        match self {
+            Self::Contiguous(bytes) => bytes.len(),
+            Self::Container(bytes) => bytes.len(),
+        }
+    }
+    fn copy_range(&self, range: std::ops::Range<usize>) -> Vec<u8> {
+        match self {
+            Self::Contiguous(bytes) => bytes[range].to_vec(),
+            Self::Container(bytes) => bytes.copy_range(range),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -811,7 +832,7 @@ pub struct RuntimeSession {
     project_diagnostic_publication: Option<ProjectDiagnosticPublication>,
     compiled_cache_task: Option<ProjectContainerTask>,
     compiled_cache_failure: Option<String>,
-    full_project_file: Option<Arc<Vec<u8>>>,
+    full_project_file: Option<Arc<crate::compiled_cache::ContainerBytes>>,
     full_project_task: Option<ProjectContainerTask>,
     full_project_failure: Option<String>,
 }

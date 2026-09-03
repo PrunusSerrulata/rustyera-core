@@ -191,7 +191,7 @@ impl RuntimeSession {
         match result {
             Ok(bytes) => {
                 self.compiled_cache_failure = None;
-                self.compiled_project_cache = Some(Arc::new(bytes));
+                self.compiled_project_cache = Some(Arc::new(bytes.into_vec()));
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
                         context: None,
@@ -298,7 +298,10 @@ fn install_export_configuration(
 fn poll_project_container_task(
     task: &mut Option<ProjectContainerTask>,
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables))] panic_message: &'static str,
-) -> (Option<Result<Vec<u8>, String>>, bool) {
+) -> (
+    Option<Result<crate::compiled_cache::ContainerBytes, String>>,
+    bool,
+) {
     let Some(active) = task.as_mut() else {
         return (None, false);
     };
@@ -333,7 +336,10 @@ fn poll_project_container_task(
             let result = handle
                 .join()
                 .unwrap_or_else(|_| Err(panic_message.to_owned()));
-            (Some(result), false)
+            (
+                Some(result.map(|bytes| crate::compiled_cache::ContainerBytes::new(false, bytes))),
+                false,
+            )
         }
     }
 }

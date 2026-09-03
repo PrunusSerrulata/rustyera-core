@@ -269,7 +269,7 @@ pub(super) fn encode_manifest_section(
             return Err("compiled cache build cancelled".into());
         }
         if let Some(section) = encoder.step(manifest)? {
-            return Ok(section);
+            return Ok(section.into_vec());
         }
     }
 }

@@ -175,7 +175,7 @@ fn snapshot_identity_mismatches_preserve_the_live_vm_and_wait() {
         "outer_artifact",
         "inner_artifact",
     ] {
-        let mut payload = runtime_snapshot::decode(&bytes, usize::MAX).unwrap();
+        let mut payload = runtime_snapshot::decode(&bytes.copy_range(0..bytes.len()), usize::MAX).unwrap();
         match mismatch {
             "outer_profile" => payload.compatibility = snake.clone(),
             "outer_artifact" => payload.artifact_id = erabasic_bytecode::Digest([7; 32]),
