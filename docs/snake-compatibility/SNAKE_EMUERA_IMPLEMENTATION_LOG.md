@@ -1,6 +1,6 @@
 # 蛇版 Emuera 适配：分批次实施与验收记录
 
-> 文档状态：批次 0、批次 1 已完成；批次 2 产品实施与功能行为验收完成，保留一项规模采集基础设施缺口；后续批次仍待登记。各批明确差异继续保留，已完成批次均不代表完整蛇版语义或蛇版 TW 可玩性。
+> 文档状态：批次 0、批次 1 已完成；批次 2 产品实施与功能行为验收完成，保留一项规模采集基础设施缺口；批次 5 已完成用户确认范围，TUI 真实 TW 消费端保留能力限制；其余状态见各批记录。各批明确差异继续保留，已完成批次均不代表完整蛇版语义或蛇版 TW 可玩性。
 >
 > 2026-08-30 按用户明确要求完成全历史本地材料清理：已删除可再生构建产物、运行 payload、
 > 原始日志、DOM/runtime 快照和缓存；保留测试脚本、fixture/config、工具、环境、review、索引及
@@ -46,7 +46,7 @@ core SHA、库/bundle 路径及后续发布绑定变更，须在对应实施批�
 | [2](#batch-2) | 确定性 API、输入与兼容差异骨架 | 功能验收完成；规模证据有缺口 | 2026-08-30 / Codex | 2A–2F 产品与三端行为已交付；峰值 RSS 因沙箱权限未取得，后续性能批次补采 |
 | [3](#batch-3) | 安全 SQL（蛇版 TW P0） | 待登记 | 待填写 | 待填写 |
 | [4](#batch-4) | 主玩法 presentation、图像、scene 与自身存档闭环 | 待登记 | 待填写 | 待填写 |
-| [5](#batch-5) | 蛇版存档互操作与音频 | 待登记 | 待填写 | 待填写 |
+| [5](#batch-5) | 蛇版存档互操作与音频 | 已完成确认范围 | 2026-09-03 / Codex | 标准 1808 双向互通、真实音频及生产门禁完成；TUI 真实 TW 因像素能力限制按用户确认记为未验证 |
 | [6](#batch-6) | 完整蛇版语言 | 待登记 | 待填写 | 待填写 |
 | [7](#batch-7) | 可选 extension 与渲染能力 | 待登记 | 待填写 | 待填写 |
 
@@ -875,45 +875,95 @@ RustyEra 自有存档闭环**；负责人 / 最近更新：Codex / 2026-09-01。
 
 ## 批次 5：蛇版存档互操作与音频
 
-计划入口：[改造思路 / 批次 5](SNAKE_EMUERA_MIGRATION_PLAN.md#batch-5)。状态：待登记；负责人 / 最近更新：待填写。
+计划入口：[批次 5 详细方案](SNAKE_EMUERA_BATCH_5_IMPLEMENTATION_PLAN.md)。状态：已完成用户确认的范围；负责人 / 最近更新：Codex / 2026-09-03。真实蛇版 TW 的 TUI 消费端因既有像素能力限制未验证，用户明确同意留待后续；不将它算作通过。
 
 ### 具体实施方案
 
-- 目标、S/D/C/N 编号、范围与明确不做项：待填写。
-- 前置批次/子项、已通过门禁和对应证据：待填写；区分可并行实现与必须汇合的集成验收。
-- 受影响仓库/模块、接口与数据格式、profile/cache/save/service 版本变化：待填写。
-- 分项步骤、文件/hunk 归属、共享基础依赖、资源隔离与提交划分：待填写。
-- 验收目标、最小 fixture、获准测试范围、风险/回退方案与用户时限：待填写。
+- D18 的非 Float 普通/GLOBAL 存档采用标准 Emuera 1808 Binary、ERAZIP/GZip、Text；普通存档不携带 GLOBAL、SFMT 或 SQL revision，`RANDDATA` 只有显式 `INITRAND` 才作用于 RNG。VM snapshot 继续承载精确运行状态。
+- D16/C07 实现五项音频函数、10 个 sound channel 和独立 BGM；实际播放状态来自 revision-bound provider。蛇版 API 没有 Seek action，本批不实现 Seek、Float 或 `.NET Random` 状态序列化。
+- 前置为批次 3 的 SQL 服务和批次 4 的真实图形路线。5.0–5.7 的产物按各自提交汇合；5.8 只对最终来源构建、负向生产门禁及实际双向存档/音频做集成验收，不重复上游完整套件。
+- Runtime 协议 46.0、蛇版 identity 12、`snake_emuera1808_interop_v1`、`rustyera.audio@1` / `audio_observation@1` 保持既定版本。未发布的旧私有存档能力已完全移除，不进行迁移、目录探测、fallback 或用户文件删除。
+- 用户取消本次全过程的 60 分钟总预算；后来允许非原生框架驱动，但仍禁止 computer use 和系统焦点依赖。最后明确授权仅项目加载阶段以连续 4 个 5 秒无变化区间判卡死；每次完整捕获仍限 5 秒，交互、导出、错误及加载后的运行保持原规则。加载性能留待后续。
 
 ### 所作改动
 
-| 功能/修复项编号 | 组件与文件 | 实际改动及理由 | 契约/兼容性影响 | commit 与依赖 |
-|---|---|---|---|---|
-| 待填写 | 待填写 | 待填写 | 待填写 | 待填写 |
+| 功能/修复项 | 组件与主要模块 | 实际改动及兼容性影响 | commit 与依赖 |
+|---|---|---|---|
+| 5.0 oracle 冻结 | core `tools`、参考 fixture | 固定三种普通/GLOBAL 格式、破损/Float 拒绝、真实 TW 输入及音频返回/控制语义；固定参考 Text writer 不写 Map/XML/DT 的差异 | `3ee5976` |
+| 5.1/5.2/5.3 存档契约 | core protocol、save、runtime storage | 标准 1808 codec 和原子加载；移除 `RERASAV`、owned state、legacy namespace、checksum/parser；普通加载保留现有 GLOBAL/RNG/SQL | `9bd44e8`、`2b9e697`、`6257601`；测试断言整理 `fefb75b` |
+| 5.4 音频语义 | core VM/runtime/audio protocol | GET/ISPLAYING 查询实际 provider；pause/resume/stop/rate/pitch、首空闲声道和全忙覆盖 0；缺能力稳定失败 | `1d1aa34`；断言修正 `34838c1` |
+| 5.5 TUI | TUI project/storage/services | 主存档映射项目 `sav`，音频观察保持明确 unsupported，发布绑定 core `34838c1` | `84973ea`；5.8 无 TUI 源码变更，不创建空提交 |
+| 5.6/5.7 Web/Tauri | BrowserProject、native storage、audio provider | 项目标准存档交换；10 个媒体声道与独立 BGM 的真实观察、控制、资源释放和结构化错误 | `80d0470`、`9727042` |
+| 编译错误可恢复 | Web runtime logs | 在 Vue 发布前限制通知数量，保留有界详细诊断，缺少 rename 配置产生大量 invalid-HIR 时结束 loading 并恢复打开项目入口 | `3c419ff` |
+| 配置迁移启动时序 | Web project configuration/startup | 等待迁移确认事务完成，再应用初始偏好并启动；拒绝旧生命周期继续提交 | `d79e26d` |
+| 整包暂存写入 | Web `browserProject.ts` | 以 256 KiB 缓冲合并 CBOR 小写入，保留字节、hash、取消及 1 GiB 限额；不声称解决剩余大项目整包导出卡死 | `2f3fdd1` |
+| 5.8 生产门禁 | core `tools/snake_release_gate.py` | 显式清单、来源摘要、UTF-8/UTF-16 双字节序、跨块扫描和精确 test 排除；缺失/变化输入失败 | `288b6c8` |
+| 5.8 真实客户端验收 | Web `scripts`、`src/testing`、native storage observation | 类型化公共调试值、实际请求/响应关联、原生存储记录、有界证据、后台 DOM 输入、来源严格复用；不伪造服务或存档结果 | `4737b1c` |
+| 临时加载看门狗策略 | Web `tauri-test-support` 和回归 | 显式 `RUSTYERA_TEST_LOADING_STALL_INTERVALS=4`，只作用于无 wait/交互/export 的项目加载；进展重置计数 | `dc65e0e` |
 
 ### 审查与验收结果
 
-- 实现/测试输入 revision、工作目录、环境、游戏/资源 hash、profile/seed：待填写。
-- 重构审查是否触发、唯一审查记录、结论及要求落实情况：待填写；未触发须说明。
-- 首条测试命令时间、已用/剩余墙钟预算、首次全量启动记录：待填写。
-- Oracle 选择与理由、语义基准和 wrapper revision：待填写；按范围分别记录原版与蛇版，或说明不适用。
+本节证据根 `W` 为本组 `batch-5-work/5.8/`，Web 捕获位于本组 `rustyera-web/.rustyera/test-runs/`；均为本机保留的已忽略证据，不加入产品仓库。5.0 基准另在 core `.audit/batch-5/5.0/final-capture.json`。上游 5.1–5.7 的测试结论仅引用相应提交说明和现存证据，不声称在 5.8 重跑过。
 
-| 验收项 / 静态或动态阶段 | 命令与 fixture | 预期 | 首次结果 / 退出码 / 时间 | 修复后定向复验 | 证据与结论 |
-|---|---|---|---|---|---|
-| 待填写 | 待填写 | 待填写 | 待填写 | 待填写 | 待填写 |
+- 5.8 唯一重构审查 `review_5_8` 在首条测试前完成，要求已落实：补 wire legacy 名称负向门禁、严格 typed shape/值、关联 session/epoch/request、原子写确认、原始证据先落盘、明确 lifecycle restore 与实际槽位读的边界，以及 narrow 类型声明。见 `W/review-completed.md`；首测后未重开审查。
+- 首条 core 门禁记录为 2026-09-02 18:15:26 UTC；最后原生消费端完成于 2026-09-03 08:17:30 UTC。总预算已取消；单次全量、静态先行、最小定向复验和独立看门狗始终保留。
+- 发布 core pin、C ABI/WASM/原生 host 的实际编译来源均为 `34838c1c3bbaf6b8ca7c1c7722d2c12630f6167e`。新增 core 门禁提交 `288b6c8e71568acfda190ba303959477d600d5b7` 只改 Python 工具，随后文档提交也不改变编译输入，故不更新前端 pin/锁或重建产品。TUI 为 `84973eafabe5f2717588db97b7b36ad1d5bbba82`；最终 Web 为 `dc65e0ef5668810e36f4284b88bbcbb975c2aead`，源码内容与已验产物一致。
+- 蛇版语义基准 `fc4fb21416768c17256d0e82f997e5f99c9bba91`，reference CLI 当前 wrapper `ed52a0ac…`；原版基准 `26a35dc9334bb67590b96f7b8efbefbf199e391e` 只用于共同格式基线/原版回归。5.8 未修改参考仓库或原游戏。真实蛇版 TW 基线 `667b9cd0…a6fa2f`，`UseNewRandom=true`；运行均用专属副本、seed `123456`、clock `2026-01-01T00:00:00Z`。
+- 使用现有 Chrome for Testing 151、Firefox 155、Safari 26.6.2、SafariDriver/GeckoDriver、Tauri 内嵌 WebDriver provider；没有下载替代浏览器或请求 computer use。锁屏 Safari/Tauri 验证使用真实 WebView/媒体和后台 DOM；实际锁屏依据独立 OS 记录，不由 `document.hasFocus` 推断。
+
+| 验收项 / 阶段 | 命令与 fixture | 首次结果 | 定向复验与最终结论 | 证据入口 |
+|---|---|---|---|---|
+| core 静态 | release-gate unittest；save codec、audio_runtime、save_lifecycle、sql_map_snapshot 定向集合 | 分别 7、21、13、14、15 通过；Python 首次外层 wrapper 赋值保留变量失败发生在 7 tests OK 之后 | 接受完整持久化结果，不为 wrapper 后处理失败重跑；本次不重复 core 全量 | `W/core-static/` |
+| TUI 静态 | project/services/wire pytest、Ruff | 152 passed；Ruff exit 0 | 未重跑上游 5.5 的完整 544 passed / 5 skipped；最终独立 PyInstaller 包构建成功并展开扫描 | `W/tui-static/`；`84973ea` |
+| Web 首次完整 Vitest | `npm test` | **105 files / 1497 tests passed**，exit 0，12.34s | 后续代码/测试修复仅跑受影响集合，未重新运行全量；typecheck/lint/format/build 均恢复通过 | `W/web-static/npm-test.*`；各 `*-static/` |
+| Web Rust 首次完整 workspace | 官方 cargo-local `test --workspace` | **135 passed / 1 ignored**，exit 0，157.090s | ignored 为独立 source-index handoff driver，不作为已执行；修改后的相关 Rust fmt/check/clippy/定向测试通过，无第二次全量 | `W/native-storage-static/v1-workspace-test.*` |
+| 新 release 与禁止能力扫描 | 新隔离 core/WASM/TUI/Tauri target；显式源码、原生文件、WASM、JS/map、已展开 Python 包 | 742 production sources、1389 artifacts、56 排除文件；25 markers × 3 encodings，0 finding / 0 error | 只扫描实际变化来源/产物，delta、v2、source-v3、v4、v5 均 clean；首次外层 wrapper 后处理 exit 1、v5 零 source 的 CLI exit 2 均保留，最终 artifact delta exit 0 | `W/release-report.json`、`release-*-report.json`、相关 receipt |
+| rename 缺失编译失败 | Chromium / Tauri project-load-failure | 大量诊断已导致 loading=false；早期证据 ledger 容量不足，原始失败保留 | 有界通知和证据容量修复后 Chromium regression-v2 exit 0 / 51.921s、Tauri regression-v3 exit 0 / 20.386s；34461 diagnostics / 14354 invalid-HIR，fault=null、打开项目可用 | `W/configuration-chromium/`、`W/configuration-native/` |
+| RustyEra producer | 真 Tauri 标题→继续→1000→确认→游戏 SAVE→覆盖确认 | 初期真实读取成功，报告传输/描述符分页/重复查询造成基础设施失败 | producer-background-v7 exit 0 / 228.527s；保存前后 12 项一致，67→152 native storage records，ordinary/GLOBAL 原子写确认；OS 锁屏前后均阳性 | `W/tauri-dynamic/producer-background-v7.*`；`tauri-preferences-xZctsy/tw-producer/.rustyera/batch5-interop-result.json` |
+| 蛇版 reference 回写 | `reference_roundtrip.py`，实际 producer pair | cwd 导致 SQLite14、随后错误假设 SAVE 设置 RESULT=1；原始失败保留 | v3 exit 0 / 14.741s：12 项加载一致，MONEY+7、GLOBAL+11，写两文件、清空后再次加载比较 12 项；SAVE 不赋 RESULT，实际返回 0 正确 | `W/reference-roundtrip-v3-run.*`、`W/reference-roundtrip-v3/` |
+| Chromium consumer | `test:game` 实际标题/LOADDATA + typed/storage | 早期完整 ledger 序列化和 action settle 超时；未重复全量 | v5 的 12 typed 与 114 storage 断言通过；随后额外整包导出失败，**该命令整体仍为 exit 3**，不改成成功 | `W/chromium-consumer/v5.*`、`interop-raw.json` |
+| Firefox consumer | `test:browser-compat --browser firefox --background-dom --snake-interop` | portable-v1 被执行者误把合成 focus 字段当作系统焦点依赖而 SIGINT，非产品结论 | portable-v2 exit 0 / 224.861s；真实 cold load/OPFS、12 typed 全同、114 storage 无溢出/失败。OS 前后未锁，不宣称本次是锁屏验证 | `W/firefox-consumer/portable-v2.*`；`browser-compat-firefox-1788422404572/` |
+| Safari consumer | 同上，`--browser safari --safari-allow-autoplay` | portable-v1 exit 0 / 302.461s | 真实 cold load/OPFS、12 typed 全同、114 storage 无溢出/失败；后台 fixture FileList，非 native chooser；OS 前后未锁 | `W/safari-consumer/portable-v1.*`；`browser-compat-safari-1788422795818/` |
+| Tauri consumer | `test:tauri --spec tests/tauri/snake-interop.spec.mjs --release --require-reuse-build --background-dom` | v1 exit 1 / 6.961s，在 GUI/构建前严格拒绝 SDKROOT 不同 | 显式恢复构建使用且 xcrun 当前返回的 SDKROOT；v2 exit 0 / 72.695s，strict reuse v13、12 typed 全同、67 native pairs、fault=null、consumer result=passed；OS 前后未锁 | `W/tauri-consumer/background-v1.*` / `background-v2.*`；`tauri-preferences-LSxFTx/tw-consumer/.rustyera/batch5-interop-result.json` |
+| 音频矩阵 | Chromium full/stress/natural/error；Firefox/Safari、Tauri；TUI 实际 C ABI 查询 | Chromium 四段 exit 0（11.146/3.605/5.151/2.106s）；Firefox packaged-v1 实际音频关系通过，但错误进度比较器使 raw exit 1 | Firefox 仅离线修正比较器，保留 raw verdict；Safari background-v5 exit 0 / 7.291s、Tauri background-v1 exit 0 / 7.417s，各 17 关系及资源释放；两者 OS 锁屏前后阳性。TUI 明确 `runtime.audio_observation_unavailable` | `W/*audio*/`、`W/tauri-audio/`、`W/tui-audio-query/` |
+
+关键互操作输入及副作用：
+
+- 原 TW ordinary 54050 B / SHA-256 `442b1d41d3d17f2dbfdb6587ae521361bf07174f653affdc0bb82a9693dae0a2`；GLOBAL 539 B / `56f80b52a8a6c8fc7dd080f9a69967758fb83df966a45330123bbc3d8a1e37cf`。
+- RustyEra producer ordinary 52959 B / `a2937d85e611e550f05a9acd90e0068ba1e34c986b8c6d3de7dd1c7f3669bb67`；GLOBAL 553 B / `dc0c44671e6641c1a6798f6a9265894729e147ebde92067e5d628adedb46381d`。
+- Reference 回写 ordinary 54767 B / `e74d8feeae83d289f1cc56e0ab8b79e542f81a26c86196e1f256341ee6df7e44`；GLOBAL 542 B / `ed0bce542ed60e91727548eef31642a84379fe954383c9d8ce2de8951c58b12f`。图形消费端实际比较 `DAY=1, MONEY=100006, TIME=0, MASTER=0, TARGET=1, GLOBAL=11, GLOBALS="", NO@0=0, NAME/CALLNAME@0=你, BASE@0:0=2000, CFLAG@0:0=0`。
+- 消费端标题会正常再次 SAVEGLOBAL；最终 Tauri ordinary 摘要不变，GLOBAL 变成 555 B / `05e808033c58f48ba9b0e7ec0c03c65d48adbbe9b1d0f6599599da0ec31d515d`。比较的是实际 scope 值和请求响应，不以文件必须逐字节不变代替游戏副作用检查。
+
+最终产物 SHA-256（完整构建命令、SDK/feature/provider 与输入清单见对应 receipt/manifest）：
+
+| 产物 | 路径 / 构建 | SHA-256 |
+|---|---|---|
+| C ABI release | `W/target-core/release/libera_runtime_capi.dylib` | `1640a8a850a5e135876bd701ac70a218013d7b857cf63f55f22be808fb3515f7` |
+| WASM | Web `public/wasm/era_web_wasm_bg.wasm` | `4287835755bc9a9cb6a61958130ad0ed9c566dd6b1998377bd6cc42ae433c00d` |
+| TUI executable / signed C ABI | `W/tui-dist-rerun/rustyera_tui/` | exe `0161db60f1b6c34efe93abffb262d7f822777feabbd4b8501eb917c14ff0ecad`；dylib `c7b0418f275c295557a14c1028072e5fc251d70ed47233d950b14cbbf0258c7f` |
+| Browser production JS | `W/production-browser-dist-v3/assets/index-Djdnntyn.js` | `41e1097a5f4431d41cb937d409e154b3ae593827faa2bda837b02b1ba7c6823c` |
+| Tauri production app v5 | `W/target-tauri-production/release/bundle/macos/RustyEra.app/Contents/MacOS/era-web-tauri` | `e794e7f5d67e935daea44a64125d1e199655e838715c35856fb86ac9021fb220` |
+| Tauri webdriver v13 / manifest | `W/target-tauri-webdriver/release/era-web-tauri` | binary `79dced1149cc1542255c514a259dce15a5f5e71031cd74bb55162fe7f4c26187`；manifest `08bfc23d9383ce5d5867c3681d3483a9d89ecdf07202948d9079cf1c8a7045c0` |
+| producer/锁屏 audio 所用 webdriver v11 | `W/configuration-native/artifacts-v11/` | binary `c1830f95a322dca6825a5b53fcf4f8f7b76c4ce54644decfdf22c3497ea89689`；不把旧运行绑定改成 v13 |
 
 ### 未完成项、阻塞与计划偏差
 
-| 项目 | 未完成原因 / 依赖 | 影响与已验证边界 | 下一步及解除条件 | 是否需更新改造思路 |
-|---|---|---|---|---|
-| 待填写 | 待填写 | 待填写 | 待填写 | 待填写 |
+| 项目 | 实际边界 / 原因 | 处理与后续 |
+|---|---|---|
+| TUI 真实 TW 消费端 | 正常标题先初始化 GLOBAL/SQL，随后必经 MAXWIDTH/HTML_STRINGLEN v2；TUI 无像素测量。直接 ordinary restore 绕过标题，EVENTLOAD 因 SQL 未打开失败 | 用户于 2026-09-03 明确同意记为能力限制导致未验证；像素适配留后续，不注入 SQL/GLOBAL、不改游戏、不用 snapshot 冒充 `.sav` |
+| 原生输入与默认 Safari 激活 | 后台 DOM 事件 `isTrusted=false`；Safari 音频使用会话级 `webkit:alwaysAllowAutoplay` | 不覆盖 native chooser、可信键鼠、IME、默认 autoplay 或用户手势解锁；锁屏媒体语义实际通过，不能扩大结论 |
+| 项目加载性能 | 用户只允许加载时 4×5s 暂时窗口 | 性能尚未修复；`W/loading-performance-deferred.json` 保留阶段/缓存观察，默认看门狗不自动放宽 |
+| 真实 TW 整包导出 | 独立额外 export v4 在读完 15766 个文件后，连续相同完整快照失败，未生成 `.reraproj`；详细传输证据已有 observation_limit，无法断言具体卡住的协议子阶段 | 原始 exit 3 保留；CBOR 缓冲的 100 项单元/序列化断言通过，但不宣称完整导出修复。Firefox/Safari 改用真实 source→FileList→生产 OPFS import，不需要这个额外项目包 |
+| Text、Float、RNG 和 Seek | 固定参考 Text 不写 Map/XML/DT；Float 明确拒绝；标准 `.sav` 没有可恢复 SFMT/SQL；蛇版 API 无 Seek | 已登记格式/能力边界，不宣称任意蛇版状态精确恢复；Float 留批次 6，不自动开始下一批 |
+
+平台特有失败先核对官方资料：Safari 的后台自动化/自动播放能力及 WebKit 媒体路径、Chrome OPFS 写入、Playwright 下载超时。未找到与 TW 大项目导出相符的已证实 macOS Chromium 内核缺陷；本地缓冲改动依据大量细碎写入源码证据。参考入口：[Safari WebDriver](https://developer.apple.com/documentation/webkit/testing-with-webdriver-in-safari)、[Chrome 文件系统 API](https://developer.chrome.com/docs/capabilities/web-apis/file-system-access)、[Playwright 下载等待](https://playwright.dev/docs/api/class-page#page-wait-for-event)。检索和旧失败证据保留于 `W/execution-plan.json`。
 
 ### 交付与续做入口
 
-- 本批结论、已完成与未验证范围、是否满足整批验收：待填写。
-- 各组件提交、分项对应关系、发布/迁移注意事项、CHANGELOG_PENDING 更新情况：待填写。
-- 当前轮次/起止时间、最近观察状态或指标、材料与复现命令、下一步恢复入口：待填写。
-- 临时材料保留/清理、相关进程停止与资源释放情况：待填写。
+- 已完成用户最终确认的 5.8 范围；未验证项如上。未升级发行版本、未推送或合并，原工作树不变；用户原有详细计划修改保持原样，不混入本次提交。
+- 各功能/测试提交见上表；最终记录和根 `CHANGELOG_PENDING.md` 另行文档提交。更新日志记录标准 1808 行为及用户可见修复，沿用已有音频条目，修正尚未发布的 envelope 描述，不将删除临时 legacy 能力写作新增功能。
+- 完整复现命令、fixture/config、raw verdict、首次全量与各定向 receipt 在 `W/execution-plan.json`。消费者为 `W/tw-consumer`、reference 为 `W/tw-reference`；历史 producer 和 native storage 证据保持实际项目路径及产物身份。
+- 测试执行器均已退出；续做所需副本、脚本、证据和产物按工作区保留规则保留，不自动删除。收尾磁盘可用约 25 GiB；后续只补明确缺口，不因文档/提交调整重跑产品或完整套件。
 
 <a id="batch-6"></a>
 

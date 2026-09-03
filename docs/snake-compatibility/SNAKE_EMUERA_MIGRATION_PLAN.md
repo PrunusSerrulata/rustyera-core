@@ -160,13 +160,16 @@ Browser/Tauri 完成真实服务，TUI 本批对像素测量/pointer/canvas 明�
 
 ### 批次 5：蛇版存档互操作与音频
 
-前置：批次 4 的自身存档闭环和批次 3 的 SQL 外部状态契约。
+前置：批次 4 的图形游戏路线与批次 3 的 SQL 外部状态契约。最终实施和验收见[批次 5 记录](SNAKE_EMUERA_IMPLEMENTATION_LOG.md#batch-5)；2026-09-03 已完成用户确认范围。
 
-- 实施 D18 的非 Float 子集：先读 ERAZIP 和蛇版 Integer/String、自定义数组及已支持的 RNG 状态，复用自身存档闭环；明确单向或双向兼容。未知 RNG/codec 与 Float tags 必须显式拒绝，不得丢弃、转成 Integer 或声称已兼容任意蛇版存档。
-- 实施 D16/C07：规范化音频期望状态和 revision-bound 实际查询；缺能力客户端给稳定诊断。
-- 按批次 3 的数据库策略验证外部存档导入/迁移，不把外部数据库假装包含在普通 save 内。
+- D18 非 Float 子集直接读写标准 Emuera 1808 Binary、ERAZIP/GZip、Text；普通 `.sav` 不携带 GLOBAL、SFMT 或 SQL revision。普通加载保持当前 GLOBAL/RNG/SQL，GLOBAL 文件只恢复 global scope；`RANDDATA` 作为变量导入，只有显式 `INITRAND` 改变 RNG。
+- 当前 `UseNewRandom=true` 的蛇版 TW 标准存档不因缺少 `.NET Random` 恢复能力而拒绝。未知 tag、Float、损坏及超限输入明确拒绝并保持原子性；不承诺任意蛇版存档的精确运行状态，精确恢复由 VM snapshot 提供。
+- 所有前端主存档只使用项目 `sav`。未发布的 `RERASAV`/owned-state/legacy namespace 已移除，无迁移、探测或 fallback，不删除用户旧文件。协议 46.0、identity 12、`snake_emuera1808_interop_v1` 保持既定版本。
+- D16/C07 通过版本化服务实现 10 个声道与 BGM 的实际查询和 pause/resume/stop/rate/preserve-pitch；蛇版没有 Seek action。TUI 对实际音频查询明确 unsupported，不伪造 stopped。
+- 集成闭环为真实 TW→RustyEra 新 ERAZIP→蛇版 reference 修改并保存→Chromium/Firefox/Safari/Tauri 对比 ordinary/GLOBAL 及实际存储。用户确认 TUI 真实 TW 标题受 HTML_STRINGLEN v2 像素能力限制，本项记为未验证，像素适配留后续；不改变既有 TUI 不伪造像素能力的范围。
+- 用户允许无焦点、无 computer use 的后台 DOM 验收；真实锁屏 Safari/Tauri 媒体通过，但原生输入、默认 Safari autoplay 不在其覆盖内。项目加载临时允许显式 4×5s 无变化区间，加载性能和大项目整包导出剩余问题单独保留，不影响已完成的标准 `.sav` 互通判断。
 
-验收：已支持类型/codec/RNG 的真实蛇版存档 fixture 保留变量 shape、RNG、GLOBAL 并落实数据库策略，未支持类型有明确拒绝结果；音频查询不支持时不会悄悄返回误导值。Float 存档互操作在批次 6 补验。
+验收：已支持类型的实际存档形状、变量与作用域边界一致，项目 Save/GlobalSave 请求有实际响应且没有私有路径 fallback；生产源码和新构建的 release 产物禁止能力扫描无命中。Text 的固定参考省略、TUI 图形缺能力等实际差异逐项保留；Float 在批次 6 补验，不自动扩大本批。
 
 <a id="batch-6"></a>
 
