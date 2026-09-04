@@ -1258,6 +1258,56 @@ Runtime…”且无法交互；同时要求继续验证动态地图单帧成本�
   `/private/tmp/rustyera-snake-map-cache-current.reracache`（SHA-256
   `a24f4db1e89a309f71e16b4b36049bbacd05507d901bc429eae20517e37a08e6`）按循环任务规则保留。
 
+### 2026-09-05 蛇版 Web Bad Apple 与 Tauri 视口回归修复验收
+
+本次是批次 5 既有客户端能力上的 Web 定向修复批次，不修改 core、协议、profile、缓存或
+存档身份。Web/WASM/Tauri 继续绑定 core
+`23c01c5b534b56b4f35c1a8865816cd99c070fe8`；主线 Tauri 视口修复先提交，再同步到蛇版
+分支。用户解除本任务的 60 分钟测试预算，并将浏览器 33 ms 帧间隔由硬门禁调整为尽力优化
+和如实测量；唯一重构审查、静态先行、首次全量一次及 5 秒完整 DOM/runtime 看门狗仍保留。
+
+- Tauri 过去把刚读取的内容视口尺寸与尚未稳定的外层窗口边框混用；启动配置可能以零边框
+  或当前布局的不同口径重复换算，保存视口后每次重启高度继续缩小。现在 Tauri 等待已挂载
+  游戏视口的稳定测量，只复用该测量缓存的 chrome 宽高应用 `WindowX/WindowY`；真实
+  Tauri 往返验证宽高误差均不超过 1 CSS px。主线 Web commit
+  `ad0cdd45363dca8d286c6ff28548b4cb2097ce44`，蛇版同步 commit
+  `f4a0d101ad0233fdc1bec90356294dfc21a5c0f6`。
+- Bad Apple 的脚本在 `AWAIT` 设备泵中逐帧更新展示，再用 `GETTEXTBOX` 判断终止。Web 过去
+  只在普通输入等待发布展示，设备泵帧留在 staged 状态，禁用的 prompt 又无法把键盘/鼠标
+  反映为文本状态，因而标题图不变且 Runtime 永久运行。现在在实际 DevicePump service
+  边界发布观察帧，并在设备泵期间保持临时文本观察；非修饰键、Enter、Escape、普通字符和
+  鼠标按下均能结束播放。多行字符画在无普通 input wait 时仍保留几何并滚动到当前帧。
+- 浏览器项目资源按规范化路径建立索引并复用 manifest identity，避免动画资源查找时反复
+  枚举目录和读取同一文件。冷启动后 30 帧样本仍受首轮文件/解码影响，最大帧间隔
+  818 ms；后续 6 帧为 662.5 ms，完全预热后的两组 5 帧分别为 43.9/45.2 ms，DOM 均按帧
+  同步且 presentation revision 固定步进 25。真实 Tauri 120 帧样本最大帧间隔 48 ms，
+  120 帧全部进入 DOM、步进固定且无 long task；paint checkpoint 受审计回调约 1002 ms
+  超时，因此不把 33 ms 或 paint 延迟宣称为达标。
+- Bad Apple 与资源/遥测/回归场景由 Web commit
+  `76443387faafda0e0a56fb8acd91271f281e963f` 提交。唯一重构审查要求把帧发布绑定到真实
+  DevicePump 边界、避免延时猜测释放并复用现有投影状态；均在动态测试前落实。一次
+  `requestAnimationFrame` 让步实验没有实质改善（48 ms 到 46 ms，paint 仍超时），已撤回。
+
+静态门禁中，首次且唯一完整 Vitest 为 **1597/1601 passed**；4 个失败经对应 trace 定位并
+修复后只做定向复验，不重跑全量。最终受影响 runtimeStore **216/216**、Web runner
+**91/91**、testing control **41/41**、Tauri performance audit **12/12**、runner policy
+**74/74** 通过；typecheck、定向 ESLint/Prettier、Web build 与 `build:wasm` 均 exit 0。
+
+| 客户端 / 场景 | 结果与证据 |
+|---|---|
+| Chromium 151 蛇版 TW Bad Apple | exit 0；四轮分别以鼠标左键、Enter、Escape、普通字符退出，均返回标题且音频停止；字符画多行 DOM 可见，无 5 秒静止。`.rustyera/test-runs/snake-tw-bad-apple-20260904193926496-18836/trace.ndjson` |
+| Tauri WebDriver Bad Apple | exit 0；真实 native bridge 观察至少 120 帧、固定 revision 步进、逐帧 DOM 同步；可信 W3C 左键退出后返回标题且音频停止。`.rustyera/test-runs/tauri-snapshots/2026-09-04T21-04-13.965Z-snake-bad-apple.spec.mjs.jsonl` |
+| Tauri WebDriver 视口往返 | 主线和蛇版均 exit 0，保存当前游戏视口并重启后宽高误差各不超过 1 px。主线 `.rustyera/test-runs/tauri-snapshots/2026-09-04T21-17-30.840Z-preferences.spec.mjs.jsonl`；蛇版 `.rustyera/test-runs/tauri-snapshots/2026-09-04T21-18-50.119Z-preferences.spec.mjs.jsonl` |
+| eraRorona 回归 | opening-right-skip、presentation-atomicity、master-interactions 三个真实 Chromium 场景均 exit 0，原子展示与可交互终态保持。证据分别为 `.rustyera/test-runs/erarorona-opening-right-skip-20260904194457082-19240/trace.ndjson`、`.rustyera/test-runs/erarorona-presentation-atomicity-20260904200541940-21048/trace.ndjson`、`.rustyera/test-runs/erarorona-master-interactions-20260904200624991-21122/trace.ndjson` |
+| Firefox 155 | 完整兼容断面 exit 0，存档导出终态通过。`.rustyera/test-runs/browser-compat-firefox-1788556999028/snapshots.ndjson` |
+| Safari 26.6.2 | 两次均在任何产品断言前因 SafariDriver automation window 无法取得 document focus 失败；显式系统激活的定向实验没有改变失败并已撤回。保留基础设施失败，不宣称 Safari 产品通过。`.rustyera/test-runs/browser-compat-safari-1788557037896/snapshots.ndjson`、`.rustyera/test-runs/browser-compat-safari-1788557222040/snapshots.ndjson` |
+
+本批未修改两个参考实现及其 CLI；客户端设备输入、DOM 投影和平台文件读取不适用新的
+EraBasic oracle 差分，蛇版 TW 真实脚本和三端客户端状态作为验收输入。用户既有 Web
+`Cargo.lock`、`.rustyera/` 及 core 批次 5 计划修改均未纳入提交。根
+`CHANGELOG_PENDING.md` 由 `2f4bc83` 登记两项行为修复；未推送或合并组件分支，所有测试
+进程已结束，现有可复现 trace/快照按循环任务续做规则保留。
+
 <a id="batch-6"></a>
 
 ## 批次 6：完整蛇版语言
