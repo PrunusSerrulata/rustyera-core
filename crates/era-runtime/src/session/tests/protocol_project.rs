@@ -861,9 +861,19 @@ const ERAFL_HTML_CANONICAL: &str = "<button value='[MODE:TITLE_POINT]'><font col
 const ERAFL_UIC_SOURCE: &str = "ERB/SYSTEM/UI/CONTAINER/UI_CONTAINER_MAIN.ERB";
 
 fn run_erafl_html_entry(entry: &str) -> (RuntimeSession, Vec<RuntimeMessage>) {
+    run_erafl_html_entries(&[entry])
+}
+
+fn run_erafl_html_entries(entries: &[&str]) -> (RuntimeSession, Vec<RuntimeMessage>) {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     let mut client = capabilities();
     client.html = true;
+    let calls = entries.iter().fold(String::new(), |mut calls, entry| {
+        calls.push_str("CALL ");
+        calls.push_str(entry);
+        calls.push('\n');
+        calls
+    });
     submit(
         &mut session,
         0,
@@ -889,9 +899,7 @@ fn run_erafl_html_entry(entry: &str) -> (RuntimeSession, Vec<RuntimeMessage>) {
                 SubmittedFile {
                     relative_path: "main.erb".into(),
                     category: FileCategory::Erb,
-                    payload: FilePayload::Utf8(format!(
-                        "@SYSTEM_TITLE\nCALL {entry}\nWAIT\nRETURN\n"
-                    )),
+                    payload: FilePayload::Utf8(format!("@SYSTEM_TITLE\n{calls}WAIT\nRETURN\n")),
                     content_hash: None,
                 },
                 SubmittedFile {
@@ -1064,6 +1072,13 @@ fn erafl_crossed_html_print_warns_then_preserves_two_buttons() {
     let (session, messages) = run_erafl_html_entry("ORACLE_ERAFL_HTML_CROSSING");
     assert_eq!(runtime_result_string(&session, 35), ERAFL_HTML_CANONICAL);
     assert_two_erafl_tab_intents(&session);
+
+    assert_erafl_crossing_warnings(&messages, "HTML_PRINT", 96);
+}
+
+#[test]
+fn repeated_crossed_html_print_warns_once_per_source_range_and_epoch() {
+    let (_session, messages) = run_erafl_html_entries(&["ORACLE_ERAFL_HTML_CROSSING"; 2]);
 
     assert_erafl_crossing_warnings(&messages, "HTML_PRINT", 96);
 }

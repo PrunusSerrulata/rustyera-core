@@ -117,6 +117,7 @@ impl RuntimeSession {
             device_input: crate::device_input::DeviceInput::default(),
             environment: crate::environment::Environment::default(),
             input_notice_sites: BTreeSet::new(),
+            html_warning_sites: BTreeSet::new(),
             hotkey_state: Vec::new(),
             key_macros: KeyMacros::default(),
             queued_input: VecDeque::new(),

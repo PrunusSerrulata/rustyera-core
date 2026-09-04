@@ -707,6 +707,16 @@ struct ProjectDiagnosticPublication {
     sites: BTreeSet<ProjectDiagnosticSite>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct HtmlWarningSite {
+    code: &'static str,
+    generation: u64,
+    function: erabasic_bytecode::SymbolKey,
+    instruction: u32,
+    start: usize,
+    end: usize,
+}
+
 /// Single-owner runtime actor. Methods only enqueue, drive, and dequeue messages;
 /// no frontend code can run inside a VM instruction dispatch.
 #[allow(clippy::struct_excessive_bools)]
@@ -761,6 +771,7 @@ pub struct RuntimeSession {
     device_input: crate::device_input::DeviceInput,
     environment: crate::environment::Environment,
     input_notice_sites: BTreeSet<(String, u64, erabasic_bytecode::SymbolKey, u32)>,
+    html_warning_sites: BTreeSet<HtmlWarningSite>,
     hotkey_state: Vec<i64>,
     key_macros: KeyMacros,
     queued_input: VecDeque<QueuedInput>,

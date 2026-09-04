@@ -959,24 +959,42 @@ fn emit_html_warnings(
     warnings: &[erabasic_html::HtmlWarning],
     origin: &erabasic_vm::VmExecutionOrigin,
 ) -> Result<(), RuntimeError> {
-    let source = protocol_execution_origin(origin.clone()).source;
+    let mut source = None;
     for warning in warnings {
+        let code = match warning.kind {
+            erabasic_html::HtmlWarningKind::CrossedClosingTag => {
+                "runtime.html.nonstandard_crossed_closing_tag"
+            }
+        };
+        let site = HtmlWarningSite {
+            code,
+            generation: origin.generation.0,
+            function: origin.function,
+            instruction: origin.instruction,
+            start: warning.start,
+            end: warning.end,
+        };
+        // Compatibility markup in animated maps executes from the same instruction every frame.
+        // Preserve every distinct warning at that source site, but do not flood transport and
+        // frontend projection with an identical diagnostic until the runtime epoch changes.
+        if !session.html_warning_sites.insert(site) {
+            continue;
+        }
         let crossed = warning
             .crossed
             .iter()
             .map(|kind| format!("<{}>", kind.tag_name()))
             .collect::<Vec<_>>()
             .join(", ");
-        let (code, message) = match warning.kind {
-            erabasic_html::HtmlWarningKind::CrossedClosingTag => (
-                "runtime.html.nonstandard_crossed_closing_tag",
+        let message = match warning.kind {
+            erabasic_html::HtmlWarningKind::CrossedClosingTag => {
                 format!(
                     "{command} normalized non-standard crossed closing tag </{}> at UTF-8 bytes {}..{} across open {crossed}; use properly nested markup",
                     warning.closing.tag_name(),
                     warning.start,
                     warning.end
-                ),
-            ),
+                )
+            }
         };
         session.emit(
             RuntimeMessage::Diagnostic(ProtocolDiagnostic {
@@ -984,7 +1002,9 @@ fn emit_html_warnings(
                 code: code.into(),
                 level: RuntimeLogLevel::Warning,
                 message,
-                source: source.clone(),
+                source: source
+                    .get_or_insert_with(|| protocol_execution_origin(origin.clone()).source)
+                    .clone(),
                 notification: DiagnosticNotification::LogOnly,
             }),
             None,
