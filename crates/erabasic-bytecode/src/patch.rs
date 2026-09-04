@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 use erabasic_data::ProjectData;
 use serde::{Deserialize, Serialize};
@@ -50,10 +53,10 @@ pub fn create_patch(base: &BytecodeArtifact, target: &BytecodeArtifact) -> Bytec
         .iter()
         .map(|function| (function.key, function))
         .collect();
-    let target_keys: BTreeMap<_, _> = target
+    let target_keys: BTreeSet<_> = target
         .functions
         .iter()
-        .map(|function| (function.key, function))
+        .map(|function| function.key)
         .collect();
     BytecodePatch {
         base_artifact_id: base.manifest.artifact_id,
@@ -90,7 +93,7 @@ pub fn create_patch(base: &BytecodeArtifact, target: &BytecodeArtifact) -> Bytec
         removed_functions: base
             .functions
             .iter()
-            .filter(|function| !target_keys.contains_key(&function.key))
+            .filter(|function| !target_keys.contains(&function.key))
             .map(|function| function.key)
             .collect(),
         event_groups: (base.event_groups != target.event_groups)

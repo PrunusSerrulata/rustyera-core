@@ -175,12 +175,7 @@ impl InstructionPayload {
 impl From<Vec<u8>> for InstructionPayload {
     fn from(value: Vec<u8>) -> Self {
         if value.len() <= INLINE_PAYLOAD_BYTES {
-            let mut bytes = [0; INLINE_PAYLOAD_BYTES];
-            bytes[..value.len()].copy_from_slice(&value);
-            Self(InstructionPayloadStorage::Inline {
-                bytes,
-                length: u8::try_from(value.len()).expect("inline payload length fits in u8"),
-            })
+            Self::from_slice(&value)
         } else {
             Self(InstructionPayloadStorage::Heap(value.into_boxed_slice()))
         }
@@ -189,7 +184,7 @@ impl From<Vec<u8>> for InstructionPayload {
 
 impl Default for InstructionPayload {
     fn default() -> Self {
-        Self::from(Vec::new())
+        Self::from_slice(&[])
     }
 }
 
