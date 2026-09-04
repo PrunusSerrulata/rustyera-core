@@ -1,7 +1,6 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use era_protocol::{
@@ -17,8 +16,8 @@ use era_runtime_protocol::{
     ProjectionStringIndexRequest, ProjectionStringResponse, ProtocolDiagnostic,
     RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeLogLevel, RuntimeMessage,
     SequenceAcknowledgement, ServiceCapability, ServiceKind, ServiceResponse, ServiceResult,
-    ShutdownRequest, SnapshotExportPurpose, StartMode, StartRequest, StateExportKind,
-    StateExportRequest, StateExportResult, StateImportBegin, StateImportChunk, StateImportCommit,
+    ShutdownRequest, StartMode, StartRequest, StateExportKind, StateImportBegin, StateImportChunk,
+    StateImportCommit,
     StorageCapabilities, StorageNamespace, StorageOperation, StorageResponse, StorageResult,
     SubmittedFile, WaitChange,
 };
@@ -28,10 +27,16 @@ use erabasic_compiler::{ExecutionBinding, default_host_registry};
 mod baseline;
 mod compile_audit;
 mod coverage;
+mod perf;
+mod perf_allocator;
 mod project_extractor;
 mod project_inputs;
 mod snake_observations;
 mod watchdog;
+
+#[global_allocator]
+static AUDIT_ALLOCATOR: perf_allocator::CountingAllocator =
+    perf_allocator::CountingAllocator::new();
 
 fn diagnostics_with_level(
     diagnostics: &[ProtocolDiagnostic],
@@ -144,10 +149,10 @@ fn main() {
             "snake-observations",
             snake_observations::run_cli,
         )),
+        "perf-run" => run_audit_command(watchdog::supervise("perf-run", perf::run_cli)),
         "registry" => audit_registry(),
-        "minimal" => audit_minimal(false, false),
-        "minimal-root-paths" => audit_minimal(true, false),
-        "benchmark" => audit_minimal(true, true),
+        "minimal" => audit_minimal(false),
+        "minimal-root-paths" => audit_minimal(true),
         "restore-saved" => audit_restore_saved(),
         "parse-file" => audit_parse_file(),
         "csv" => audit_csv(),
@@ -278,35 +283,18 @@ fn audit_registry() {
 const MINIMAL_AUDIT_ANSWERS: &[i64] = &[
     0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 9999, 0, 2, 1999, 0, 100, 1,
 ];
-const ERATW_BENCHMARK_ANSWERS: &[i64] = &[
-    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 9999, 0, 2, 1999, 0, 100, 1, 2000, 1999, 0, 100, 1, 100,
-];
-
-fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
-    let total_started = std::time::Instant::now();
+fn audit_minimal(keep_root_paths: bool) {
     let root_argument = env::args().nth(2);
     let diagnostic_filter = env::args().nth(3);
-    let root = root_argument.map_or_else(
-        || {
-            if benchmark {
-                default_project()
-            } else {
-                tool_root().join("fixture-declaration")
-            }
-        },
-        PathBuf::from,
-    );
+    let root = root_argument.map_or_else(|| tool_root().join("fixture-declaration"), PathBuf::from);
     let paths = collect_project_files(&root);
     let files = project_inputs::ProjectInputs::new(&root, &paths).submitted_files(
         &root,
         &paths,
         keep_root_paths,
     );
-    let file_prepare_elapsed = total_started.elapsed();
-    if !benchmark {
-        println!("submitted_files={}", files.len());
-    }
-    let restore_files = (!benchmark).then(|| files.clone());
+    println!("submitted_files={}", files.len());
+    let restore_files = files.clone();
 
     let mut runtime_options = RuntimeOptions::default();
     runtime_options.limits.maximum_envelope_bytes = 128 * 1024 * 1024;
@@ -355,15 +343,12 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
     );
     drive(&mut session);
     for message in drain(&mut session) {
-        if let RuntimeMessage::ServerHello(hello) = message
-            && !benchmark
-        {
+        if let RuntimeMessage::ServerHello(hello) = message {
             println!("selected_features={:?}", hello.features);
             println!("selected_capabilities={:?}", hello.selected_capabilities);
         }
     }
 
-    let project_load_started = std::time::Instant::now();
     submit(
         &mut session,
         1,
@@ -374,29 +359,19 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
         }),
     );
     drive(&mut session);
-    let project_load_elapsed = project_load_started.elapsed();
-    if benchmark {
-        report_rss("after_project_load");
-    }
     let messages = drain(&mut session);
     for message in &messages {
         match message {
             RuntimeMessage::ProjectLoadReport(report) => {
-                if !benchmark {
-                    println!("load_success={}", report.success);
-                }
+                println!("load_success={}", report.success);
                 let errors =
                     diagnostics_with_level(&report.diagnostics, RuntimeLogLevel::Error).count();
                 let warnings =
                     diagnostics_with_level(&report.diagnostics, RuntimeLogLevel::Warning).count();
-                if !benchmark {
-                    println!(
-                        "diagnostics={} errors={} warnings={}",
-                        report.diagnostics.len(),
-                        errors,
-                        warnings
-                    );
-                }
+                println!(
+                    "diagnostics={} errors={} warnings={}",
+                    report.diagnostics.len(), errors, warnings
+                );
                 let mut by_code = std::collections::BTreeMap::<String, usize>::new();
                 let mut by_file = std::collections::BTreeMap::<String, usize>::new();
                 for diagnostic in
@@ -417,16 +392,15 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
                 by_code.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
                 let mut by_file = by_file.into_iter().collect::<Vec<_>>();
                 by_file.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
-                if !benchmark {
-                    println!(
-                        "top_error_codes={:?}",
-                        by_code.into_iter().take(20).collect::<Vec<_>>()
-                    );
-                    println!(
-                        "top_error_files={:?}",
-                        by_file.into_iter().take(20).collect::<Vec<_>>()
-                    );
-                    for diagnostic in report
+                println!(
+                    "top_error_codes={:?}",
+                    by_code.into_iter().take(20).collect::<Vec<_>>()
+                );
+                println!(
+                    "top_error_files={:?}",
+                    by_file.into_iter().take(20).collect::<Vec<_>>()
+                );
+                for diagnostic in report
                         .diagnostics
                         .iter()
                         .filter(|diagnostic| {
@@ -439,8 +413,8 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
                             })
                         })
                         .take(200)
-                    {
-                        println!(
+                {
+                    println!(
                             "{:?}\t{}\t{}:{}:{}\t{}",
                             diagnostic.level,
                             diagnostic.code,
@@ -451,28 +425,22 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
                             diagnostic.source.as_ref().and_then(|s| s.line).unwrap_or(0),
                             diagnostic.source.as_ref().map_or(0, |s| s.byte_start),
                             diagnostic.message.replace('\n', " ")
-                        );
-                    }
+                    );
                 }
             }
             RuntimeMessage::ServiceRequest(request) => {
-                if !benchmark {
-                    println!("load_service={:?}/{}", request.kind, request.operation);
-                }
+                println!("load_service={:?}/{}", request.kind, request.operation);
             }
-            RuntimeMessage::Fault(fault) if !benchmark => println!("load_fault={fault:?}"),
+            RuntimeMessage::Fault(fault) => println!("load_fault={fault:?}"),
             _ => {}
         }
     }
-    if !benchmark {
-        println!("phase_after_load={:?}", session.phase());
-    }
+    println!("phase_after_load={:?}", session.phase());
     if !messages.iter().any(
         |message| matches!(message, RuntimeMessage::ProjectLoadReport(report) if report.success),
     ) {
         return;
     }
-    let start_started = std::time::Instant::now();
     submit(
         &mut session,
         2,
@@ -481,68 +449,28 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
         }),
     );
     let mut sequence = 3;
-    let answers = if benchmark {
-        ERATW_BENCHMARK_ANSWERS
-    } else {
-        MINIMAL_AUDIT_ANSWERS
-    };
+    let answers = MINIMAL_AUDIT_ANSWERS;
     let mut answer_index = 0;
     let mut last_text = String::new();
     let mut storage =
         std::collections::BTreeMap::<(StorageNamespace, String), (ProtocolBytes, String)>::new();
-    let mut day_one_elapsed = None;
-    let mut wake_started = None;
-    let mut wake_instruction = None;
-    let mut wake_to_home_elapsed = None;
-    let mut total_vm_instructions = 0_u64;
-    let mut snapshot_count = 0_u64;
-    let mut delta_count = 0_u64;
     let mut presentation_lines = Vec::<DisplayLine>::new();
     for step in 0..20_000 {
-        let drive_started = std::time::Instant::now();
-        let drive_report = session
+        session
             .drive(RuntimeDriveBudget {
                 maximum_vm_instructions: 10_000,
                 maximum_runtime_transitions: 128,
             })
             .unwrap();
-        let drive_elapsed = drive_started.elapsed();
-        total_vm_instructions = total_vm_instructions.saturating_add(drive_report.vm_instructions);
-        let drain_started = std::time::Instant::now();
         let (out, last_outbound_sequence) = drain_with_last_sequence(&mut session);
-        let drain_elapsed = drain_started.elapsed();
-        if benchmark && (drive_elapsed.as_millis() >= 250 || drain_elapsed.as_millis() >= 250) {
-            println!(
-                "slow_step={step} drive_ms={} drain_ms={} instructions={} transitions={} envelopes={}",
-                drive_elapsed.as_millis(),
-                drain_elapsed.as_millis(),
-                drive_report.vm_instructions,
-                drive_report.runtime_transitions,
-                drive_report.queued_envelopes,
-            );
-        }
         let mut followups = Vec::new();
         let mut unplanned_wait = false;
         for message in out {
             match &message {
                 RuntimeMessage::PresentationSnapshot(snapshot) => {
-                    snapshot_count += 1;
                     presentation_lines.clone_from(&snapshot.history.logical_lines);
-                    if benchmark {
-                        println!(
-                            "snapshot step={step} elapsed_ms={} revision={} lines={} history={} sprites={} canvases={} redraw={}",
-                            start_started.elapsed().as_millis(),
-                            snapshot.revision,
-                            snapshot.history.logical_lines.len(),
-                            snapshot.history.operations.len(),
-                            snapshot.resources.sprites.len(),
-                            snapshot.resources.canvases.len(),
-                            snapshot.redraw.enabled,
-                        );
-                    }
                 }
                 RuntimeMessage::PresentationDelta(delta) => {
-                    delta_count += 1;
                     apply_presentation_delta(&mut presentation_lines, &delta.operations);
                 }
                 _ => {}
@@ -597,17 +525,15 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
                         },
                     }));
                 }
-                RuntimeMessage::ServiceRequest(request) if !benchmark => println!(
+                RuntimeMessage::ServiceRequest(request) => println!(
                     "runtime_service_step={step} {:?}/{}",
                     request.kind, request.operation
                 ),
                 RuntimeMessage::StorageRequest(request) => {
-                    if !benchmark {
-                        println!(
-                            "runtime_storage_step={step} {:?} {} {:?}",
-                            request.namespace, request.relative_path, request.operation
-                        );
-                    }
+                    println!(
+                        "runtime_storage_step={step} {:?} {} {:?}",
+                        request.namespace, request.relative_path, request.operation
+                    );
                     let key = (request.namespace, request.relative_path.clone());
                     let not_found = || StorageResult::Error {
                         error: FrontendIoError {
@@ -682,51 +608,17 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
                     }));
                 }
                 RuntimeMessage::WaitChanged(wait) => {
-                    if !benchmark {
-                        println!("runtime_wait_step={step} {wait:?}");
-                        println!("runtime_wait_text={last_text}");
-                    }
+                    println!("runtime_wait_step={step} {wait:?}");
+                    println!("runtime_wait_text={last_text}");
                     if let WaitChange::Opened(wait) = wait {
                         let intent = if wait.kind == era_runtime_protocol::WaitKind::EnterKey {
                             InputIntent::Enter
                         } else if let Some(answer) = answers.get(answer_index).copied() {
                             answer_index += 1;
-                            if benchmark && answer == 100 {
-                                let contains_wake_prompt = presentation_lines
-                                    .iter()
-                                    .flat_map(|line| line.runs.iter())
-                                    .map(display_text)
-                                    .any(|text| text.contains("睜開眼睛"));
-                                if contains_wake_prompt && wake_started.is_none() {
-                                    println!("wake_input_instruction={total_vm_instructions}");
-                                    wake_started = Some(std::time::Instant::now());
-                                    wake_instruction = Some(total_vm_instructions);
-                                }
-                            }
-                            if !benchmark {
-                                println!("runtime_answer[{answer_index}]={answer}");
-                            }
+                            println!("runtime_answer[{answer_index}]={answer}");
                             InputIntent::CommitText(answer.to_string())
                         } else {
-                            if wait.system_input {
-                                let reached_home = std::time::Instant::now();
-                                day_one_elapsed = Some(reached_home.duration_since(start_started));
-                                wake_to_home_elapsed = wake_started
-                                    .map(|started| reached_home.duration_since(started));
-                            }
                             println!("runtime_unplanned_wait={wait:?}");
-                            if benchmark {
-                                let visible_text = presentation_lines
-                                    .iter()
-                                    .rev()
-                                    .take(12)
-                                    .rev()
-                                    .flat_map(|line| line.runs.iter())
-                                    .map(display_text)
-                                    .collect::<Vec<_>>()
-                                    .join(" | ");
-                                println!("runtime_unplanned_text={visible_text}");
-                            }
                             unplanned_wait = true;
                             continue;
                         };
@@ -739,7 +631,7 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
                         }));
                     }
                 }
-                RuntimeMessage::PresentationSnapshot(snapshot) if !benchmark => {
+                RuntimeMessage::PresentationSnapshot(snapshot) => {
                     last_text = snapshot
                         .history
                         .logical_lines
@@ -752,7 +644,7 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
                         .collect::<Vec<_>>()
                         .join(" | ");
                 }
-                RuntimeMessage::StateChanged(state) if !benchmark => {
+                RuntimeMessage::StateChanged(state) => {
                     println!("runtime_state_step={step} {:?}", state.phase)
                 }
                 _ => {}
@@ -773,93 +665,13 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
         if unplanned_wait {
             break;
         }
-        if benchmark && step != 0 && step % 1_000 == 0 {
-            println!(
-                "progress_step={step} elapsed_ms={} snapshots={snapshot_count} deltas={delta_count}",
-                start_started.elapsed().as_millis()
-            );
-        }
     }
-    if benchmark {
-        report_rss("at_day1");
-        submit(
-            &mut session,
-            sequence,
-            RuntimeMessage::StateExportRequest(StateExportRequest {
-                kind: StateExportKind::VmSnapshot,
-                snapshot_purpose: SnapshotExportPurpose::Normal,
-            }),
-        );
-        drive(&mut session);
-        for message in drain(&mut session) {
-            if let RuntimeMessage::StateExportReady(ready) = message {
-                match ready.result {
-                    StateExportResult::Ready { transfer } => {
-                        println!("vm_snapshot_bytes={}", transfer.total_bytes);
-                    }
-                    StateExportResult::Ineligible { reasons } => {
-                        println!("vm_snapshot_ineligible={reasons:?}");
-                    }
-                }
-            }
-        }
-        report_rss("after_snapshot_export");
-        println!("file_prepare_ms={}", file_prepare_elapsed.as_millis());
-        println!("project_load_ms={}", project_load_elapsed.as_millis());
-        println!("vm_instructions_to_day1={total_vm_instructions}");
-        println!(
-            "wake_to_home_ms={}",
-            wake_to_home_elapsed.map_or(u128::MAX, |elapsed| elapsed.as_millis())
-        );
-        println!(
-            "wake_to_home_instructions={}",
-            wake_instruction.map_or(u64::MAX, |started| {
-                total_vm_instructions.saturating_sub(started)
-            })
-        );
-        println!(
-            "start_to_day1_ms={}",
-            day_one_elapsed.map_or(u128::MAX, |elapsed| elapsed.as_millis())
-        );
-        println!("total_to_day1_ms={}", total_started.elapsed().as_millis());
-        println!("snapshots={snapshot_count} deltas={delta_count}");
-        println!("phase_after_start={:?}", session.phase());
-        if env::var_os("ERA_AUDIT_PAUSE").is_some() {
-            println!("audit_pid={} paused", std::process::id());
-            let mut line = String::new();
-            std::io::stdin().read_line(&mut line).unwrap();
-        }
-        return;
-    }
-    if let (Some(restore_files), Some((save, _))) = (
-        restore_files.as_ref(),
-        storage.get(&(StorageNamespace::Save, "save99.sav".into())),
-    ) {
+    if let Some((save, _)) = storage.get(&(StorageNamespace::Save, "save99.sav".into())) {
         fs::write(artifact_path("save99.sav"), save.as_slice()).expect("persist audit autosave");
-        audit_restore(restore_files, save.clone());
+        audit_restore(&restore_files, save.clone());
     }
     println!("runtime_final_text={last_text}");
     println!("phase_after_start={:?}", session.phase());
-}
-
-fn report_rss(stage: &str) {
-    let pid = std::process::id().to_string();
-    let Ok(output) = Command::new("/bin/ps")
-        .args(["-o", "rss=", "-p", &pid])
-        .output()
-    else {
-        println!("rss_{stage}_bytes=unavailable");
-        return;
-    };
-    let Ok(stdout) = String::from_utf8(output.stdout) else {
-        println!("rss_{stage}_bytes=unavailable");
-        return;
-    };
-    let Ok(rss_kib) = stdout.trim().parse::<u64>() else {
-        println!("rss_{stage}_bytes=unavailable");
-        return;
-    };
-    println!("rss_{stage}_bytes={}", rss_kib.saturating_mul(1024));
 }
 
 fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
