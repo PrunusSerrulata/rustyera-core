@@ -189,6 +189,7 @@ fn visible_button_activation_completes_enter_and_any_key_waits() {
             timeout_message: None,
             submission_token: submission,
             countdown_remaining_ms: None,
+            viewport_policy: era_runtime_protocol::InputViewportPolicy::FollowOutput,
         },
         result_name: Some("RESULT".into()),
         choices: BTreeMap::from([(button, VmValue::String("0".into()))]),
@@ -246,6 +247,7 @@ fn visible_button_activation_closes_a_real_any_key_wait() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "any-key-button.erb".into(),
