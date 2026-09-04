@@ -214,11 +214,7 @@ impl HtmlStringLengthPlan {
         pixel_flag: i64,
         limits: HtmlQueryLimits,
     ) -> Result<Self, HtmlQueryError> {
-        if settings.font_size_pixels <= 0
-            || settings.drawable_width_pixels <= 0
-            || settings.foreground_rgb > 0x00ff_ffff
-            || settings.focus_rgb > 0x00ff_ffff
-        {
+        if !valid_settings(settings) {
             return Err(error(
                 HtmlQueryErrorKind::InvalidMeasurement,
                 "invalid HTML query base settings",
@@ -227,23 +223,13 @@ impl HtmlStringLengthPlan {
         let mapped =
             parse_document_with_source_map(source, HtmlQueryEntityPolicy::ReferenceQuery, limits)?;
         let built = build::build(source, &mapped, settings, limits)?;
-        let values = vec![None; built.probes.len()];
-        Ok(Self {
+        Ok(Self::with_built_layout(
             settings,
             pixel_flag,
             limits,
-            source: LengthSource::Mapped(mapped),
-            probes: built.probes,
-            values,
-            parts: built.parts,
-            layouts: built.layouts,
-            root_layout: built.root_layout,
-            suffix_probes: BTreeMap::new(),
-            work_bytes: built.work_bytes,
-            measurement_units: built.measurement_units,
-            completed: None,
-            failure: None,
-        })
+            LengthSource::Mapped(mapped),
+            built,
+        ))
     }
 
     /// Use an already parsed scalar/atomic `HTML_SUBSTRING` subprobe without serializing
@@ -258,21 +244,33 @@ impl HtmlStringLengthPlan {
         pixel_flag: i64,
         limits: HtmlQueryLimits,
     ) -> Result<Self, HtmlQueryError> {
-        if settings.font_size_pixels <= 0
-            || settings.drawable_width_pixels <= 0
-            || settings.foreground_rgb > 0x00ff_ffff
-            || settings.focus_rgb > 0x00ff_ffff
-        {
+        if !valid_settings(settings) {
             return Err(invalid_measurement());
         }
         super::check_document(&document, limits)?;
         let built = build::build_document(&document, settings, limits)?;
-        let values = vec![None; built.probes.len()];
-        Ok(Self {
+        Ok(Self::with_built_layout(
             settings,
             pixel_flag,
             limits,
-            source: LengthSource::Canonical(document),
+            LengthSource::Canonical(document),
+            built,
+        ))
+    }
+
+    fn with_built_layout(
+        settings: HtmlStringLengthSettings,
+        pixel_flag: i64,
+        limits: HtmlQueryLimits,
+        source: LengthSource,
+        built: build::Built,
+    ) -> Self {
+        let values = vec![None; built.probes.len()];
+        Self {
+            settings,
+            pixel_flag,
+            limits,
+            source,
             probes: built.probes,
             values,
             parts: built.parts,
@@ -283,7 +281,7 @@ impl HtmlStringLengthPlan {
             measurement_units: built.measurement_units,
             completed: None,
             failure: None,
-        })
+        }
     }
 
     #[must_use]
@@ -498,6 +496,13 @@ impl HtmlStringLengthPlan {
         }
         Ok(())
     }
+}
+
+const fn valid_settings(settings: HtmlStringLengthSettings) -> bool {
+    settings.font_size_pixels > 0
+        && settings.drawable_width_pixels > 0
+        && settings.foreground_rgb <= 0x00ff_ffff
+        && settings.focus_rgb <= 0x00ff_ffff
 }
 
 fn validate_value(

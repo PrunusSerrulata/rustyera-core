@@ -28,8 +28,8 @@ struct MeasuredButton {
 }
 
 pub(super) struct CompletedLayout {
-    pub first_line_pixels: i64,
-    pub lines: usize,
+    pub(super) first_line_pixels: i64,
+    pub(super) lines: usize,
 }
 
 /// None is a continuation wait for one newly appended suffix probe.

@@ -117,7 +117,6 @@ struct OpenElement {
 ///
 /// Returns an error with a UTF-8 byte range for malformed tags, attributes,
 /// nesting, or entities.
-#[allow(clippy::too_many_lines)]
 pub fn parse_document(source: &str) -> Result<HtmlDocument, HtmlError> {
     parse_document_with_warnings(source).map(|(document, _)| document)
 }
@@ -129,7 +128,6 @@ pub fn parse_document(source: &str) -> Result<HtmlDocument, HtmlError> {
 ///
 /// Returns an error with a UTF-8 byte range for markup that cannot be
 /// normalized without changing its meaning.
-#[allow(clippy::too_many_lines)]
 pub fn parse_document_with_warnings(
     source: &str,
 ) -> Result<(HtmlDocument, Vec<HtmlWarning>), HtmlError> {

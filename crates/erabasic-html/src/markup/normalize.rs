@@ -278,18 +278,14 @@ fn normalize_division(
 }
 
 fn parse_length(value: &str) -> Result<HtmlLength, ()> {
-    if let Some(value) = value
-        .strip_suffix("px")
-        .or_else(|| value.strip_suffix("PX"))
-        .or_else(|| value.strip_suffix("Px"))
-        .or_else(|| value.strip_suffix("pX"))
-    {
-        value.parse().map(HtmlLength::Pixels).map_err(|_| ())
-    } else {
+    let number = strip_ascii_case_suffix(value, "px");
+    if number.len() == value.len() {
         value
             .parse()
             .map(HtmlLength::FontHeightHundredths)
             .map_err(|_| ())
+    } else {
+        number.parse().map(HtmlLength::Pixels).map_err(|_| ())
     }
 }
 

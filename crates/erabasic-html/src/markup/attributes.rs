@@ -39,14 +39,7 @@ fn parse_attributes_inner(
     let mut result = Vec::new();
     let mut cursor = 0;
     while cursor < source.len() {
-        while cursor < source.len()
-            && source[cursor..]
-                .chars()
-                .next()
-                .is_some_and(char::is_whitespace)
-        {
-            cursor += source[cursor..].chars().next().unwrap().len_utf8();
-        }
+        skip_whitespace(source, &mut cursor);
         if cursor == source.len() {
             break;
         }
@@ -59,14 +52,7 @@ fn parse_attributes_inner(
             cursor += c.len_utf8();
         }
         let name = source[start..cursor].to_ascii_lowercase();
-        while cursor < source.len()
-            && source[cursor..]
-                .chars()
-                .next()
-                .is_some_and(char::is_whitespace)
-        {
-            cursor += source[cursor..].chars().next().unwrap().len_utf8();
-        }
+        skip_whitespace(source, &mut cursor);
         if name.is_empty() || !source[cursor..].starts_with('=') {
             return Err(error(
                 HtmlErrorKind::InvalidAttribute,
@@ -75,14 +61,7 @@ fn parse_attributes_inner(
             ));
         }
         cursor += 1;
-        while cursor < source.len()
-            && source[cursor..]
-                .chars()
-                .next()
-                .is_some_and(char::is_whitespace)
-        {
-            cursor += source[cursor..].chars().next().unwrap().len_utf8();
-        }
+        skip_whitespace(source, &mut cursor);
         let quote = source[cursor..]
             .chars()
             .next()
@@ -123,6 +102,15 @@ fn parse_attributes_inner(
         result.push(HtmlAttribute { name, value });
     }
     Ok(result)
+}
+
+fn skip_whitespace(source: &str, cursor: &mut usize) {
+    while let Some(character) = source[*cursor..].chars().next() {
+        if !character.is_whitespace() {
+            break;
+        }
+        *cursor += character.len_utf8();
+    }
 }
 
 pub(super) const fn error(kind: HtmlErrorKind, start: usize, end: usize) -> HtmlError {
