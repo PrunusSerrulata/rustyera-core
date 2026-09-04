@@ -183,28 +183,27 @@ pub(crate) fn load_rename(
         if line.starts_with(';') {
             continue;
         }
-        let tokens = split_unescaped_comma(line);
-        if tokens.len() == 2 {
+        if let Some((replacement, name)) = split_once_unescaped_comma(line) {
             rename.insert(
-                format!("[[{}]]", tokens[1].trim()),
-                tokens[0].trim().to_owned(),
+                format!("[[{}]]", name.trim()),
+                replacement.trim().to_owned(),
             );
         }
     }
     rename
 }
 
-fn split_unescaped_comma(value: &str) -> Vec<&str> {
-    let mut result = Vec::new();
-    let mut start = 0;
+fn split_once_unescaped_comma(value: &str) -> Option<(&str, &str)> {
+    let mut delimiter = None;
     let mut previous_backslash = false;
     for (offset, character) in value.char_indices() {
         if character == ',' && !previous_backslash {
-            result.push(&value[start..offset]);
-            start = offset + 1;
+            if delimiter.is_some() {
+                return None;
+            }
+            delimiter = Some(offset);
         }
         previous_backslash = character == '\\';
     }
-    result.push(&value[start..]);
-    result
+    delimiter.map(|offset| (&value[..offset], &value[offset + 1..]))
 }

@@ -18,9 +18,7 @@ pub(super) fn parse_era_integer(value: &str) -> Option<i64> {
         .or_else(|| value.strip_prefix("0X"))
     {
         (
-            hex.chars()
-                .take_while(char::is_ascii_hexdigit)
-                .collect::<String>(),
+            digit_prefix(hex, |character| character.is_ascii_hexdigit()),
             16,
         )
     } else if let Some(binary) = value
@@ -28,28 +26,25 @@ pub(super) fn parse_era_integer(value: &str) -> Option<i64> {
         .or_else(|| value.strip_prefix("0B"))
     {
         (
-            binary
-                .chars()
-                .take_while(|character| matches!(character, '0' | '1'))
-                .collect::<String>(),
+            digit_prefix(binary, |character| matches!(character, '0' | '1')),
             2,
         )
     } else {
         (
-            value
-                .chars()
-                .take_while(char::is_ascii_digit)
-                .collect::<String>(),
+            digit_prefix(value, |character| character.is_ascii_digit()),
             10,
         )
     };
-    (!digits.is_empty())
-        .then(|| {
-            i64::from_str_radix(&digits, radix)
-                .ok()
-                .map(|number| number * sign)
-        })
-        .flatten()
+    i64::from_str_radix(digits, radix)
+        .ok()
+        .map(|number| number * sign)
+}
+
+fn digit_prefix(value: &str, predicate: impl Fn(char) -> bool) -> &str {
+    let end = value
+        .find(|character| !predicate(character))
+        .unwrap_or(value.len());
+    &value[..end]
 }
 
 pub(super) fn character_csv_number(path: &str) -> i64 {
@@ -57,12 +52,11 @@ pub(super) fn character_csv_number(path: &str) -> i64 {
     let Some(start) = upper.find("CHARA") else {
         return 0;
     };
-    path[start + "CHARA".len()..]
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect::<String>()
-        .parse()
-        .unwrap_or(0)
+    digit_prefix(&path[start + "CHARA".len()..], |character| {
+        character.is_ascii_digit()
+    })
+    .parse()
+    .unwrap_or(0)
 }
 
 pub(super) fn equal_keyword(left: &str, right: &str, ignore_case: bool) -> bool {

@@ -219,11 +219,5 @@ fn physical_lines(content: &str) -> Vec<(&str, usize, usize)> {
         result.push((line, offset, offset + line.len()));
         offset += line_with_newline.len();
     }
-    if content.is_empty() {
-        return result;
-    }
-    if !content.ends_with('\n') && result.is_empty() {
-        result.push((content, 0, content.len()));
-    }
     result
 }

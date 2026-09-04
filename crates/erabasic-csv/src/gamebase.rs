@@ -17,15 +17,16 @@ pub(crate) fn load_game_base(
     let mut window_title_defined = false;
     let mut fatal = false;
     for line in enabled_lines(&file.source_path, &file.content, options, diagnostics) {
-        let tokens: Vec<_> = line.text.split(',').collect();
-        if tokens.len() < 2 {
+        let mut tokens = line.text.split(',');
+        let key = tokens.next().unwrap_or_default();
+        let Some(value) = tokens.next() else {
             continue;
-        }
-        match tokens[0] {
+        };
+        match key {
             "コード" => {
-                if let Some(value) = parse_game_number(tokens[1]) {
-                    game_base.unique_code = value;
-                    if value == 0 {
+                if let Some(number) = parse_game_number(value) {
+                    game_base.unique_code = number;
+                    if number == 0 {
                         diagnostics.push(at_line(
                             CsvDiagnosticCode::InvalidInteger,
                             CsvDiagnosticSeverity::Notice,
@@ -37,37 +38,37 @@ pub(crate) fn load_game_base(
                 }
             }
             "バージョン" => {
-                if let Some(value) = parse_game_number(tokens[1]) {
-                    game_base.version = value;
+                if let Some(number) = parse_game_number(value) {
+                    game_base.version = number;
                     game_base.version_defined = true;
                 }
             }
             "バージョン違い認める" => {
-                if let Some(value) = parse_game_number(tokens[1]) {
-                    game_base.compatible_min_version = value;
+                if let Some(number) = parse_game_number(value) {
+                    game_base.compatible_min_version = number;
                 }
             }
             "最初からいるキャラ" => {
-                if let Some(value) = parse_game_number(tokens[1]) {
-                    game_base.default_character = value;
+                if let Some(number) = parse_game_number(value) {
+                    game_base.default_character = number;
                 }
             }
             "アイテムなし" => {
-                if let Some(value) = parse_game_number(tokens[1]) {
-                    game_base.no_item = value;
+                if let Some(number) = parse_game_number(value) {
+                    game_base.no_item = number;
                 }
             }
-            "タイトル" => tokens[1].clone_into(&mut game_base.title),
-            "作者" => tokens[1].clone_into(&mut game_base.author),
-            "製作年" => tokens[1].clone_into(&mut game_base.year),
-            "追加情報" => tokens[1].clone_into(&mut game_base.info),
+            "タイトル" => value.clone_into(&mut game_base.title),
+            "作者" => value.clone_into(&mut game_base.author),
+            "製作年" => value.clone_into(&mut game_base.year),
+            "追加情報" => value.clone_into(&mut game_base.info),
             "ウィンドウタイトル" => {
-                game_base.window_title = Some(tokens[1].to_owned());
+                game_base.window_title = Some(value.to_owned());
                 window_title_defined = true;
             }
             "動作に必要なEmueraのバージョン" => {
-                tokens[1].clone_into(&mut game_base.required_emuera_version);
-                let required = parse_version(tokens[1]);
+                value.clone_into(&mut game_base.required_emuera_version);
+                let required = parse_version(value);
                 let current = parse_version(&options.current_emuera_version);
                 match (required, current) {
                     (Some(required), Some(current)) if current < required => {
@@ -76,7 +77,7 @@ pub(crate) fn load_game_base(
                             CsvDiagnosticSeverity::Fatal,
                             2,
                             &line,
-                            format!("project requires Emuera {}", tokens[1]),
+                            format!("project requires Emuera {value}"),
                         ));
                         fatal = true;
                         break;
@@ -91,8 +92,8 @@ pub(crate) fn load_game_base(
                     _ => {}
                 }
             }
-            "バージョン情報URL" => tokens[1].clone_into(&mut game_base.update_url),
-            "バージョン名" => tokens[1].clone_into(&mut game_base.version_name),
+            "バージョン情報URL" => value.clone_into(&mut game_base.update_url),
+            "バージョン名" => value.clone_into(&mut game_base.version_name),
             _ => {}
         }
     }
@@ -100,7 +101,7 @@ pub(crate) fn load_game_base(
         game_base.window_title = Some(if game_base.title.is_empty() {
             "Emuera".into()
         } else {
-            format!("{} {}", game_base.title, version_text(game_base.version))
+            format!("{} {}", game_base.title, game_base.script_version_text())
         });
     }
     (game_base, fatal)
@@ -110,28 +111,19 @@ fn parse_game_number(value: &str) -> Option<i64> {
     if let Ok(value) = value.trim().parse() {
         return Some(value);
     }
-    let prefix: String = value.chars().take_while(char::is_ascii_digit).collect();
-    (!prefix.is_empty()).then(|| prefix.parse().ok()).flatten()
+    let end = value
+        .find(|character: char| !character.is_ascii_digit())
+        .unwrap_or(value.len());
+    value[..end].parse().ok()
 }
 
 fn parse_version(value: &str) -> Option<[u32; 4]> {
-    let parts: Vec<_> = value.split('.').collect();
-    if parts.len() != 4 {
-        return None;
-    }
-    Some([
-        parts[0].parse().ok()?,
-        parts[1].parse().ok()?,
-        parts[2].parse().ok()?,
-        parts[3].parse().ok()?,
-    ])
-}
-
-fn version_text(version: i64) -> String {
-    let fraction = version.rem_euclid(1000);
-    if fraction % 10 != 0 {
-        format!("{}.{fraction:03}", version / 1000)
-    } else {
-        format!("{}.{:02}", version / 1000, fraction / 10)
-    }
+    let mut parts = value.split('.');
+    let version = [
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    ];
+    parts.next().is_none().then_some(version)
 }

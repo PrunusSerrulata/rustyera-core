@@ -182,8 +182,9 @@ fn load_primary_names(
 ) -> BTreeMap<i64, String> {
     let mut names = BTreeMap::new();
     for line in enabled_lines(&file.relative_path, &file.content, options, diagnostics) {
-        let tokens: Vec<_> = line.text.split(',').collect();
-        if tokens.len() < 2 {
+        let mut tokens = line.text.split(',');
+        let index_text = tokens.next().unwrap_or_default();
+        let Some(name) = tokens.next() else {
             diagnostics.push(at_line(
                 CsvDiagnosticCode::MissingComma,
                 CsvDiagnosticSeverity::Warning,
@@ -192,8 +193,8 @@ fn load_primary_names(
                 "user index row requires an index and name",
             ));
             continue;
-        }
-        let Ok(index) = tokens[0].trim().parse::<i32>() else {
+        };
+        let Ok(index) = index_text.trim().parse::<i32>() else {
             diagnostics.push(at_line(
                 CsvDiagnosticCode::InvalidInteger,
                 CsvDiagnosticSeverity::Warning,
@@ -207,10 +208,7 @@ fn load_primary_names(
             diagnostics.push(out_of_range(&line));
             continue;
         }
-        if names
-            .insert(i64::from(index), tokens[1].to_owned())
-            .is_some()
-        {
+        if names.insert(i64::from(index), name.to_owned()).is_some() {
             diagnostics.push(at_line(
                 CsvDiagnosticCode::DuplicateIndex,
                 CsvDiagnosticSeverity::Warning,

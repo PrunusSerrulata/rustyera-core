@@ -112,8 +112,9 @@ fn load_table(
 ) {
     let mut defined = BTreeSet::new();
     for line in enabled_lines(path, content, options, diagnostics) {
-        let tokens: Vec<_> = line.text.split(',').collect();
-        if tokens.len() < 2 {
+        let mut tokens = line.text.split(',');
+        let index_text = tokens.next().unwrap_or_default();
+        let Some(name) = tokens.next() else {
             diagnostics.push(at_line(
                 CsvDiagnosticCode::MissingComma,
                 CsvDiagnosticSeverity::Warning,
@@ -122,8 +123,8 @@ fn load_table(
                 "a name table row requires an index and value",
             ));
             continue;
-        }
-        let Ok(index) = tokens[0].trim().parse::<i32>() else {
+        };
+        let Ok(index) = index_text.trim().parse::<i32>() else {
             diagnostics.push(at_line(
                 CsvDiagnosticCode::InvalidInteger,
                 CsvDiagnosticSeverity::Warning,
@@ -160,9 +161,11 @@ fn load_table(
                 format!("index {index} is defined more than once; the last value wins"),
             ));
         }
-        table.names[index_usize] = Some(tokens[1].to_owned());
-        if kind == NameTableKind::Item && tokens.len() >= 3 {
-            match tokens[2].trim().parse::<i64>() {
+        table.names[index_usize] = Some(name.to_owned());
+        if kind == NameTableKind::Item
+            && let Some(price) = tokens.next()
+        {
+            match price.trim().parse::<i64>() {
                 Ok(price) => item_prices[index_usize] = price,
                 Err(_) => diagnostics.push(at_line(
                     CsvDiagnosticCode::InvalidInteger,

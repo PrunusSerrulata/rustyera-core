@@ -25,7 +25,6 @@ struct RawCharacterNames {
     master_name: Option<String>,
 }
 
-#[derive(Clone)]
 struct ParsedCharacter {
     template: CharacterTemplate,
     names: RawCharacterNames,
@@ -69,8 +68,8 @@ pub(crate) fn load_characters(
             diagnostics,
             &mut characters,
         );
-        characters.sort_by_key(|character| character.template.no);
     }
+    characters.sort_by_key(|character| character.template.no);
     let mut name_lookup = CharacterNameLookup::default();
     // The reference indexes reverse No order before applying CALLNAME fallback.
     // Use Rust's total i64 order, not its overflowing Int32 subtraction comparator.
@@ -136,7 +135,7 @@ fn load_character_file(
     diagnostics: &mut Vec<CsvDiagnostic>,
     output: &mut Vec<ParsedCharacter>,
 ) {
-    let mut template: Option<ParsedCharacter> = None;
+    let mut character_index = None;
     for line in enabled_lines(path, content, options, diagnostics) {
         let tokens: Vec<_> = line.text.split(',').collect();
         if tokens.len() < 2 {
@@ -160,7 +159,7 @@ fn load_character_file(
             continue;
         }
         if equal_keyword(tokens[0], "NO", options.ignore_case) || tokens[0] == "番号" {
-            if template.is_some() {
+            if character_index.is_some() {
                 diagnostics.push(at_line(
                     CsvDiagnosticCode::DuplicateCharacterNumberField,
                     CsvDiagnosticSeverity::Warning,
@@ -180,19 +179,18 @@ fn load_character_file(
                 ));
                 continue;
             };
-            let value = ParsedCharacter {
+            output.push(ParsedCharacter {
                 template: CharacterTemplate {
                     no,
                     csv_no: character_csv_number(path),
                     ..CharacterTemplate::default()
                 },
                 names: RawCharacterNames::default(),
-            };
-            output.push(value.clone());
-            template = Some(value);
+            });
+            character_index = Some(output.len() - 1);
             continue;
         }
-        let Some(current) = template.as_mut() else {
+        let Some(index) = character_index else {
             diagnostics.push(at_line(
                 CsvDiagnosticCode::CharacterDataBeforeNumber,
                 CsvDiagnosticSeverity::Warning,
@@ -202,6 +200,7 @@ fn load_character_file(
             ));
             continue;
         };
+        let current = &mut output[index];
         if !apply_character_field(
             &mut current.template,
             &mut current.names,
@@ -212,13 +211,6 @@ fn load_character_file(
             diagnostics,
         ) {
             break;
-        }
-        if let Some(last) = output
-            .iter_mut()
-            .rev()
-            .find(|item| item.template.no == current.template.no)
-        {
-            last.clone_from(current);
         }
     }
 }

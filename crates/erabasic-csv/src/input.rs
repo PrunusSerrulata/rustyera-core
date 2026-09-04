@@ -49,6 +49,15 @@ pub(crate) enum FileRoot {
     Erb,
 }
 
+impl FileRoot {
+    const fn key(self) -> u8 {
+        match self {
+            Self::Csv => 0,
+            Self::Erb => 1,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct IndexedFile {
     pub root: FileRoot,
@@ -97,6 +106,8 @@ impl FileIndex {
         input_order: &mut usize,
     ) {
         for entry in entries {
+            let current_order = *input_order;
+            *input_order += 1;
             let submitted_source = entry.source_path.as_deref().unwrap_or(&entry.relative_path);
             let Some(source_path) = normalize_path(submitted_source) else {
                 diagnostics.push(CsvDiagnostic::new(
@@ -107,7 +118,6 @@ impl FileIndex {
                     None,
                     "source paths must be relative and may not contain '..'",
                 ));
-                *input_order += 1;
                 continue;
             };
             let Some(path) = normalize_path(&entry.relative_path) else {
@@ -119,7 +129,6 @@ impl FileIndex {
                     None,
                     "paths must be relative and may not contain '..'",
                 ));
-                *input_order += 1;
                 continue;
             };
             let content = match entry.payload {
@@ -140,15 +149,10 @@ impl FileIndex {
                             format!("frontend I/O error: {}", error.message),
                         ));
                     }
-                    *input_order += 1;
                     continue;
                 }
             };
-            let root_key = match root {
-                FileRoot::Csv => 0,
-                FileRoot::Erb => 1,
-            };
-            let key = (root_key, ascii_fold(&path));
+            let key = (root.key(), ascii_fold(&path));
             if self.by_key.contains_key(&key) {
                 diagnostics.push(CsvDiagnostic::new(
                     CsvDiagnosticCode::DuplicatePath,
@@ -158,7 +162,6 @@ impl FileIndex {
                     None,
                     "duplicate normalized path; the first file is used",
                 ));
-                *input_order += 1;
                 continue;
             }
             let index = self.files.len();
@@ -167,10 +170,9 @@ impl FileIndex {
                 path,
                 source_path,
                 content,
-                input_order: *input_order,
+                input_order: current_order,
             });
             self.by_key.insert(key, index);
-            *input_order += 1;
         }
     }
 
@@ -179,12 +181,8 @@ impl FileIndex {
     }
 
     pub fn file(&self, root: FileRoot, path: &str) -> Option<&IndexedFile> {
-        let root_key = match root {
-            FileRoot::Csv => 0,
-            FileRoot::Erb => 1,
-        };
         self.by_key
-            .get(&(root_key, ascii_fold(path)))
+            .get(&(root.key(), ascii_fold(path)))
             .map(|index| &self.files[*index])
     }
 

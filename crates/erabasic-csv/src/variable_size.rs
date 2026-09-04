@@ -214,7 +214,8 @@ fn apply_size(schema: &mut ProjectSchema, name: &str, dimensions: &[usize]) {
 
 fn set_variable_size(schema: &mut ProjectSchema, name: &str, dimensions: &[usize]) {
     if let Some(variable) = schema.variables.get_mut(name) {
-        variable.dimensions.clone_from(&dimensions.to_vec());
+        variable.dimensions.clear();
+        variable.dimensions.extend_from_slice(dimensions);
     }
 }
 

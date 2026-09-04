@@ -24,8 +24,9 @@ pub(crate) fn load_extensions(
     candidates.sort_by_key(|file| file.input_order);
     for file in candidates {
         for line in enabled_lines(&file.source_path, &file.content, options, diagnostics) {
-            let tokens: Vec<_> = line.text.split(',').collect();
-            if tokens.len() < 2 {
+            let mut tokens = line.text.split(',');
+            let category = tokens.next().unwrap_or_default();
+            let Some(first_name) = tokens.next() else {
                 diagnostics.push(at_line(
                     CsvDiagnosticCode::MissingComma,
                     CsvDiagnosticSeverity::Warning,
@@ -34,8 +35,8 @@ pub(crate) fn load_extensions(
                     "VarExt row requires a category and at least one name",
                 ));
                 continue;
-            }
-            if tokens[0].is_empty() {
+            };
+            if category.is_empty() {
                 diagnostics.push(at_line(
                     CsvDiagnosticCode::StartedWithComma,
                     CsvDiagnosticSeverity::Warning,
@@ -46,9 +47,9 @@ pub(crate) fn load_extensions(
                 continue;
             }
             let category = if options.ignore_case {
-                tokens[0].to_ascii_uppercase()
+                category.to_ascii_uppercase()
             } else {
-                tokens[0].to_owned()
+                category.to_owned()
             };
             let target = match category.as_str() {
                 "GLOBAL_MAPS" => Some(&mut result.global_maps),
@@ -63,7 +64,11 @@ pub(crate) fn load_extensions(
                 _ => None,
             };
             if let Some(target) = target {
-                target.extend(tokens[1..].iter().map(|value| value.trim().to_owned()));
+                target.extend(
+                    std::iter::once(first_name)
+                        .chain(tokens)
+                        .map(|value| value.trim().to_owned()),
+                );
             }
         }
     }
