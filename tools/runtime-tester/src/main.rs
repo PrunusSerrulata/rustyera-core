@@ -10,11 +10,11 @@ use era_protocol::{
 };
 use era_runtime::{RuntimeDriveBudget, RuntimeOptions, RuntimeSession};
 use era_runtime_protocol::{
-    ClientCapabilities, ClientHello, DisplayLine, FileCategory, FilePayload, FrontendInput,
-    FrontendIoError, FrontendIoErrorKind, HTML_GET_PRINTED_STR_OPERATION,
-    HTML_GET_PRINTED_STR_OPERATION_VERSION, InputIntent, InputModality, LOCAL_DATE_TIME_OPERATION,
-    LOCAL_DATE_TIME_OPERATION_VERSION, LineAlignment, LocalDateTimeResponse, PresentationOperation,
-    ProjectManifest, ProjectionStringIndexRequest, ProjectionStringResponse, ProtocolDiagnostic,
+    ClientCapabilities, ClientHello, DisplayLine, FileCategory, FrontendInput, FrontendIoError,
+    FrontendIoErrorKind, HTML_GET_PRINTED_STR_OPERATION, HTML_GET_PRINTED_STR_OPERATION_VERSION,
+    InputIntent, InputModality, LOCAL_DATE_TIME_OPERATION, LOCAL_DATE_TIME_OPERATION_VERSION,
+    LineAlignment, LocalDateTimeResponse, PresentationOperation, ProjectManifest,
+    ProjectionStringIndexRequest, ProjectionStringResponse, ProtocolDiagnostic,
     RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeLogLevel, RuntimeMessage,
     SequenceAcknowledgement, ServiceCapability, ServiceKind, ServiceResponse, ServiceResult,
     ShutdownRequest, SnapshotExportPurpose, StartMode, StartRequest, StateExportKind,
@@ -25,7 +25,13 @@ use era_runtime_protocol::{
 use erabasic_analyzer::{builtin_function_names, builtin_instruction_names};
 use erabasic_compiler::{ExecutionBinding, default_host_registry};
 
+mod baseline;
+mod compile_audit;
+mod coverage;
 mod project_extractor;
+mod project_inputs;
+mod snake_observations;
+mod watchdog;
 
 fn diagnostics_with_level(
     diagnostics: &[ProtocolDiagnostic],
@@ -58,6 +64,22 @@ fn read_project_text(path: impl AsRef<Path>) -> std::io::Result<String> {
             format!("{} is not valid UTF-8, Windows-31J, or GBK", path.display()),
         )
     })
+}
+
+fn read_submitted_text(path: impl AsRef<Path>, category: FileCategory) -> std::io::Result<String> {
+    let path = path.as_ref();
+    if !matches!(category, FileCategory::Als | FileCategory::Erd)
+        && !path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("reraconfig.toml"))
+    {
+        return read_project_text(path);
+    }
+    let bytes = fs::read(path)?;
+    std::str::from_utf8(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes))
+        .map(str::to_owned)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 fn repository_root() -> PathBuf {
@@ -116,6 +138,12 @@ fn artifact_path(name: &str) -> PathBuf {
 fn main() {
     let command = env::args().nth(1).unwrap_or_else(|| "registry".into());
     match command.as_str() {
+        "baseline" => run_audit_command(watchdog::supervise("baseline", baseline::run_cli)),
+        "coverage" => run_audit_command(watchdog::supervise("coverage", coverage::run_cli)),
+        "snake-observations" => run_audit_command(watchdog::supervise(
+            "snake-observations",
+            snake_observations::run_cli,
+        )),
         "registry" => audit_registry(),
         "minimal" => audit_minimal(false, false),
         "minimal-root-paths" => audit_minimal(true, false),
@@ -123,39 +151,25 @@ fn main() {
         "restore-saved" => audit_restore_saved(),
         "parse-file" => audit_parse_file(),
         "csv" => audit_csv(),
-        "analyzer" => audit_analyzer(false),
-        "compile" => audit_analyzer(true),
+        "analyzer" => run_audit_command(compile_audit::run(false)),
+        "compile" => run_audit_command(compile_audit::supervise()),
         "project-extractor-all" => project_extractor::audit_all_reference_games(),
         other => panic!("unknown command {other}"),
+    }
+}
+
+fn run_audit_command(result: Result<(), Box<dyn std::error::Error>>) {
+    if let Err(error) = result {
+        eprintln!("audit failed: {error}");
+        std::process::exit(2);
     }
 }
 
 fn audit_restore_saved() {
     let root = project_argument(2);
     let paths = collect_project_files(&root);
-    let mut files = Vec::new();
-    for relative in paths {
-        let lower = relative.to_ascii_lowercase();
-        let category = if lower.ends_with(".erb") {
-            FileCategory::Erb
-        } else if lower.ends_with(".erh") {
-            FileCategory::Erh
-        } else if lower.ends_with(".csv") {
-            FileCategory::Csv
-        } else if lower.ends_with(".config") {
-            FileCategory::Configuration
-        } else {
-            continue;
-        };
-        files.push(SubmittedFile {
-            relative_path: relative.clone(),
-            category,
-            payload: FilePayload::Utf8(
-                read_project_text(root.join(relative)).expect("decode submitted project source"),
-            ),
-            content_hash: None,
-        });
-    }
+    let files =
+        project_inputs::ProjectInputs::new(&root, &paths).submitted_files(&root, &paths, true);
     let save_path = env::args()
         .nth(3)
         .map(PathBuf::from)
@@ -164,265 +178,22 @@ fn audit_restore_saved() {
     audit_restore(&files, save);
 }
 
-fn audit_analyzer(compile: bool) {
-    let total_started = std::time::Instant::now();
-    let root = project_argument(2);
-    let paths = collect_project_files(&root);
-    let mut csv_files = erabasic_csv::ProjectFiles::default();
-    let mut sources = Vec::new();
-    for relative in paths {
-        let lower = relative.to_ascii_lowercase();
-        if !matches!(lower.rsplit('.').next(), Some("csv" | "erb" | "erh")) {
-            continue;
-        }
-        let text = read_project_text(root.join(&relative)).unwrap();
-        if lower.ends_with(".csv") {
-            let stripped = relative
-                .strip_prefix("CSV/")
-                .or_else(|| relative.strip_prefix("csv/"))
-                .unwrap_or(&relative)
-                .to_owned();
-            csv_files.csv.push(erabasic_csv::FrontendFile {
-                relative_path: stripped,
-                payload: erabasic_csv::FilePayload::Utf8(text),
-            });
-        } else {
-            sources.push(erabasic_analyzer::ProjectSource {
-                relative_path: relative,
-                payload: erabasic_analyzer::SourcePayload::Utf8(text),
-            });
-        }
-    }
-    let files_elapsed = total_started.elapsed();
-    let csv_started = std::time::Instant::now();
-    let csv = erabasic_csv::load_project(
-        &csv_files,
-        &erabasic_csv::CsvLoadOptions {
-            use_rename_file: true,
-            search_subdirectories: true,
-            sort_with_filename: true,
-            allow_full_width_space: true,
-            ..Default::default()
-        },
-    );
-    let csv_elapsed = csv_started.elapsed();
-    println!("csv_diagnostics={}", csv.diagnostics.len());
-    let options = erabasic_analyzer::AnalyzerOptions {
-        sort_with_filename: true,
-        warn_function_overloading: false,
-        ignore_uncalled_functions: true,
-        compatible_function_argument_auto_convert: true,
-        system_save_in_binary: true,
-        allow_full_width_space: true,
-        ..Default::default()
-    };
-    let analyze_started = std::time::Instant::now();
-    let report = erabasic_analyzer::analyze_project(
-        erabasic_analyzer::AnalysisInput {
-            project_data: csv.data.unwrap(),
-            sources,
-        },
-        &options,
-        &Default::default(),
-    );
-    let analyze_elapsed = analyze_started.elapsed();
-    println!(
-        "files_ms={} csv_ms={} analyze_ms={}",
-        files_elapsed.as_millis(),
-        csv_elapsed.as_millis(),
-        analyze_elapsed.as_millis()
-    );
-    let errors = report
-        .diagnostics
-        .iter()
-        .filter(|diagnostic| {
-            matches!(
-                diagnostic.severity,
-                erabasic_analyzer::AnalyzerDiagnosticSeverity::Error
-                    | erabasic_analyzer::AnalyzerDiagnosticSeverity::Fatal
-            )
-        })
-        .collect::<Vec<_>>();
-    let mut by_code = std::collections::BTreeMap::new();
-    for diagnostic in &errors {
-        *by_code
-            .entry(format!("{:?}", diagnostic.code))
-            .or_insert(0usize) += 1;
-    }
-    println!(
-        "analyzer_diagnostics={} errors={} by_code={by_code:?}",
-        report.diagnostics.len(),
-        errors.len()
-    );
-    for diagnostic in errors.iter().take(300) {
-        let source = diagnostic.source.as_ref();
-        println!(
-            "{:?}\t{}:{}\t{}",
-            diagnostic.code,
-            source.map_or("", |s| s.relative_path.as_str()),
-            source.map_or(0, |s| s.physical_line),
-            diagnostic.message
-        );
-    }
-    if compile && errors.is_empty() {
-        let project = report.project.unwrap();
-        let started = std::time::Instant::now();
-        let validation = erabasic_validator::validate_hir(&project.program, &project.data);
-        println!(
-            "hir_validation_ms={} valid={} diagnostics={}",
-            started.elapsed().as_millis(),
-            validation.is_valid(),
-            validation.diagnostics.len()
-        );
-        let started = std::time::Instant::now();
-        let compiled = erabasic_compiler::compile_project(
-            &project,
-            &Default::default(),
-            &erabasic_compiler::default_host_registry(),
-            None,
-        );
-        println!(
-            "compile_ms={} artifact={} diagnostics={} stats={:?}",
-            started.elapsed().as_millis(),
-            compiled.artifact.is_some(),
-            compiled.diagnostics.len(),
-            compiled.stats
-        );
-        if let Some(artifact) = &compiled.artifact {
-            let instruction_count = artifact
-                .functions
-                .iter()
-                .map(|function| function.code.len())
-                .sum::<usize>();
-            let instruction_payload_bytes = artifact
-                .functions
-                .iter()
-                .flat_map(|function| &function.code)
-                .map(|instruction| instruction.payload.len())
-                .sum::<usize>();
-            let instruction_capacity_bytes = artifact
-                .functions
-                .iter()
-                .map(|function| {
-                    function.code.capacity()
-                        * std::mem::size_of::<erabasic_bytecode::EncodedInstruction>()
-                })
-                .sum::<usize>();
-            let mergeable_source_entries = artifact
-                .source_map
-                .entries
-                .windows(2)
-                .filter(|entries| {
-                    let [left, right] = entries else { return false };
-                    left.function == right.function
-                        && left.code_end == right.code_start
-                        && left.source_index == right.source_index
-                        && left.byte_start == right.byte_start
-                        && left.byte_end == right.byte_end
-                        && left.statement_fingerprint == right.statement_fingerprint
-                        && left.origin_chain == right.origin_chain
-                })
-                .count();
-            println!(
-                "functions={} instructions={} instruction_payload_bytes={} instruction_capacity_bytes={} source_entries={} statement_fingerprints={} mergeable_source_entries={} size_source_entry={} size_encoded_instruction={} size_vm_value={}",
-                artifact.functions.len(),
-                instruction_count,
-                instruction_payload_bytes,
-                instruction_capacity_bytes,
-                artifact.source_map.entries.len(),
-                artifact.source_map.statement_fingerprints.len(),
-                mergeable_source_entries,
-                std::mem::size_of::<erabasic_bytecode::SourceMapEntry>(),
-                std::mem::size_of::<erabasic_bytecode::EncodedInstruction>(),
-                std::mem::size_of::<erabasic_vm::VmValue>(),
-            );
-            report_rss("after_compile");
-            for function in artifact
-                .functions
-                .iter()
-                .filter(|function| function.name.eq_ignore_ascii_case("EVENTTRAIN"))
-            {
-                let statics = artifact
-                    .globals
-                    .iter()
-                    .filter(|global| global.owner == Some(function.key))
-                    .map(|global| (global.name.as_str(), global.storage))
-                    .collect::<Vec<_>>();
-                println!("eventtrain={:?} statics={statics:?}", function.key);
-            }
-            println!(
-                "artifact_id={} execution_id={}",
-                artifact.manifest.artifact_id, artifact.manifest.program_version.execution_id
-            );
-            let mut cells = artifact
-                .globals
-                .iter()
-                .map(|global| {
-                    let elements = global
-                        .dimensions
-                        .iter()
-                        .copied()
-                        .fold(1u128, |product, length| {
-                            product.saturating_mul(length.into())
-                        });
-                    (
-                        elements,
-                        global.name.as_str(),
-                        global.storage,
-                        global.value_type,
-                    )
-                })
-                .collect::<Vec<_>>();
-            cells.sort_by_key(|entry| std::cmp::Reverse(entry.0));
-            let mut storage_elements = std::collections::BTreeMap::new();
-            for (elements, _, storage, _) in &cells {
-                *storage_elements
-                    .entry(format!("{storage:?}"))
-                    .or_insert(0u128) += *elements;
-            }
-            println!(
-                "global_elements={} storage_elements={storage_elements:?} top_globals={:?}",
-                cells.iter().map(|entry| entry.0).sum::<u128>(),
-                &cells[..cells.len().min(20)]
-            );
-        }
-        for diagnostic in compiled.diagnostics.iter().take(100) {
-            let where_ = diagnostic.location.map_or_else(String::new, |location| {
-                project
-                    .program
-                    .sources
-                    .iter()
-                    .find(|source| source.id == location.source)
-                    .map_or_else(String::new, |source| {
-                        let line = source
-                            .line_starts
-                            .partition_point(|start| *start <= location.span.start as u64);
-                        format!("{}:{}:{} ", source.relative_path, line, location.span.start)
-                    })
-            });
-            println!(
-                "compiler {:?}: {where_}{}",
-                diagnostic.code, diagnostic.message
-            );
-        }
-    }
-}
-
 fn audit_csv() {
     let root = project_argument(2);
     let paths = collect_project_files(&root);
+    let inputs = project_inputs::ProjectInputs::new(&root, &paths);
     let mut files = erabasic_csv::ProjectFiles::default();
     for relative in paths {
-        if !relative.to_ascii_lowercase().ends_with(".csv") {
+        let Some(category) = inputs.classify(&relative) else {
+            continue;
+        };
+        if inputs.data_root(&relative, category) != Some(project_inputs::DataRoot::Csv) {
             continue;
         }
-        let content = read_project_text(root.join(&relative)).unwrap();
-        let path = relative
-            .strip_prefix("CSV/")
-            .unwrap_or(&relative)
-            .to_owned();
+        let content = read_submitted_text(root.join(&relative), category).unwrap();
         files.csv.push(erabasic_csv::FrontendFile {
-            relative_path: path,
+            relative_path: project_inputs::DataRoot::Csv.relative_path(&relative),
+            source_path: Some(relative),
             payload: erabasic_csv::FilePayload::Utf8(content),
         });
     }
@@ -489,7 +260,10 @@ fn audit_registry() {
         .filter(|name| {
             matches!(
                 registry.classification(name),
-                Some(ExecutionBinding::Unsupported { .. })
+                Some(
+                    ExecutionBinding::Unsupported { .. }
+                        | ExecutionBinding::UnsupportedCapability { .. },
+                )
             )
         })
         .collect::<Vec<_>>();
@@ -523,39 +297,11 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
         PathBuf::from,
     );
     let paths = collect_project_files(&root);
-    let mut files = Vec::new();
-    for relative in paths {
-        let lower = relative.to_ascii_lowercase();
-        let category = if lower.ends_with(".erb") {
-            FileCategory::Erb
-        } else if lower.ends_with(".erh") {
-            FileCategory::Erh
-        } else if lower.ends_with(".csv") {
-            FileCategory::Csv
-        } else if lower.ends_with(".config") {
-            FileCategory::Configuration
-        } else {
-            continue;
-        };
-        let text = read_project_text(root.join(&relative)).expect("decode project source");
-        let submitted_path = if keep_root_paths {
-            relative.clone()
-        } else {
-            relative
-                .strip_prefix("CSV/")
-                .or_else(|| relative.strip_prefix("ERB/"))
-                .or_else(|| relative.strip_prefix("csv/"))
-                .or_else(|| relative.strip_prefix("erb/"))
-                .unwrap_or(&relative)
-                .to_owned()
-        };
-        files.push(SubmittedFile {
-            relative_path: submitted_path,
-            category,
-            payload: FilePayload::Utf8(text),
-            content_hash: None,
-        });
-    }
+    let files = project_inputs::ProjectInputs::new(&root, &paths).submitted_files(
+        &root,
+        &paths,
+        keep_root_paths,
+    );
     let file_prepare_elapsed = total_started.elapsed();
     if !benchmark {
         println!("submitted_files={}", files.len());
@@ -585,6 +331,7 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
             ],
             requested_limits,
             capabilities: ClientCapabilities {
+                environment: Vec::new(),
                 input_modalities: vec![InputModality::Keyboard],
                 rich_text: false,
                 html: false,
@@ -621,6 +368,7 @@ fn audit_minimal(keep_root_paths: bool, benchmark: bool) {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files,
         }),
@@ -1140,6 +888,7 @@ fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
             ],
             requested_limits,
             capabilities: ClientCapabilities {
+                environment: Vec::new(),
                 input_modalities: vec![InputModality::Keyboard],
                 rich_text: false,
                 html: false,
@@ -1169,6 +918,7 @@ fn audit_restore(files: &[SubmittedFile], save: ProtocolBytes) {
         1,
         Some(1),
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: files.to_vec(),
         }),
@@ -1418,7 +1168,7 @@ fn apply_presentation_delta(lines: &mut Vec<DisplayLine>, operations: &[Presenta
                 lines.drain(..count);
             }
             PresentationOperation::SetTitle { .. }
-            | PresentationOperation::SetBackgrounds { .. }
+            | PresentationOperation::ApplySceneDelta { .. }
             | PresentationOperation::SetAudio { .. }
             | PresentationOperation::SetInputWait { .. }
             | PresentationOperation::SetSettings { .. }
@@ -1504,44 +1254,73 @@ fn display_text(run: &era_runtime_protocol::DisplayRun) -> String {
     }
 }
 
-fn collect(root: &Path, current: &Path, out: &mut Vec<String>) {
-    for entry in fs::read_dir(current).expect("read fixture directory") {
-        let entry = entry.expect("read fixture entry");
+fn try_collect(
+    root: &Path,
+    current: &Path,
+    out: &mut Vec<String>,
+    progress: &mut dyn FnMut(&Path, usize),
+) -> std::io::Result<()> {
+    let mut entries = fs::read_dir(current)
+        .map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!(
+                    "cannot read project directory {}: {error}",
+                    current.display()
+                ),
+            )
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
         let path = entry.path();
-        if path.is_dir() {
-            collect(root, &path, out);
-        } else {
+        let file_type = entry.file_type().map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("cannot inspect project entry {}: {error}", path.display()),
+            )
+        })?;
+        if file_type.is_symlink() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("project inventory rejects symbolic link {}", path.display()),
+            ));
+        }
+        if file_type.is_dir() {
+            try_collect(root, &path, out, progress)?;
+        } else if file_type.is_file() {
             out.push(
                 path.strip_prefix(root)
-                    .unwrap()
+                    .map_err(|error| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!("project entry {} escaped root: {error}", path.display()),
+                        )
+                    })?
                     .to_string_lossy()
                     .replace('\\', "/"),
             );
+            progress(&path, out.len());
         }
     }
+    Ok(())
+}
+
+fn try_collect_project_files(
+    root: &Path,
+    progress: &mut dyn FnMut(&Path, usize),
+) -> std::io::Result<Vec<String>> {
+    let mut paths = Vec::new();
+    try_collect(root, root, &mut paths, progress)?;
+    let inputs = project_inputs::ProjectInputs::new(root, &paths);
+    paths.retain(|path| inputs.classify(path).is_some());
+    paths.sort();
+    Ok(paths)
 }
 
 fn collect_project_files(root: &Path) -> Vec<String> {
-    let mut paths = Vec::new();
-    collect(root, root, &mut paths);
-    let has_csv_root = has_direct_child_directory(root, "CSV");
-    let has_erb_root = has_direct_child_directory(root, "ERB");
-    paths.retain(|relative| {
-        let lower = relative.to_ascii_lowercase();
-        let first = lower.split('/').next().unwrap_or_default();
-        if lower.ends_with(".csv") && has_csv_root {
-            return first == "csv";
-        }
-        if (lower.ends_with(".erb") || lower.ends_with(".erh")) && has_erb_root {
-            return first == "erb";
-        }
-        if lower.ends_with(".config") && has_csv_root && lower.contains('/') {
-            return first == "csv";
-        }
-        true
-    });
-    paths.sort();
-    paths
+    try_collect_project_files(root, &mut |_, _| {})
+        .unwrap_or_else(|error| panic!("cannot inventory project {}: {error}", root.display()))
 }
 
 fn has_direct_child_directory(root: &Path, expected: &str) -> bool {
@@ -1623,7 +1402,7 @@ fn audit_wire_limits() -> WireLimits {
 mod tests {
     use super::{
         collect_project_files, decode_project_text, diagnostics_with_level, display_text,
-        headless_html_printed_str,
+        headless_html_printed_str, try_collect_project_files,
     };
     use era_runtime_protocol::{
         DisplayLine, DisplayRun, LineAlignment, ProtocolDiagnostic, RuntimeLogLevel, TextStyle,
@@ -1642,6 +1421,7 @@ mod tests {
             logical_line_start,
             line_end: true,
             alignment,
+            text_background_eligible: !text.trim().is_empty(),
             runs: vec![DisplayRun::Text {
                 text: text.into(),
                 style: TextStyle::default(),
@@ -1661,6 +1441,8 @@ mod tests {
     #[test]
     fn protocol_diagnostics_are_filtered_by_runtime_log_level() {
         let diagnostic = |code: &str, level| ProtocolDiagnostic {
+            context: None,
+            notification: era_runtime_protocol::DiagnosticNotification::default(),
             code: code.into(),
             level,
             message: String::new(),
@@ -1729,6 +1511,27 @@ mod tests {
             paths,
             ["CSV/GAMEBASE.CSV", "ERB/GUIDE/main.erb", "emuera.config"]
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_collection_rejects_symbolic_links() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "rustyera-runtime-tester-symlink-project-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("CSV")).unwrap();
+        fs::write(root.join("outside.csv"), "コード,1\n").unwrap();
+        symlink(root.join("outside.csv"), root.join("CSV/GAMEBASE.CSV")).unwrap();
+
+        let error = try_collect_project_files(&root, &mut |_, _| {}).unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("rejects symbolic link"));
         fs::remove_dir_all(root).unwrap();
     }
 

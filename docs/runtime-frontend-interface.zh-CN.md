@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.8`、公共信封 `2.0`、Runtime 协议 `34.0`。源码入口：
+> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `46.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -18,9 +18,9 @@
 
 | 层 | 当前稳定性 | 用途 |
 | --- | --- | --- |
-| C ABI 3.8 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
+| C ABI 3.9 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
 | 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
-| Runtime 协议 34.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
+| Runtime 协议 46.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
 | `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
 
 破坏性变更必须提升相应版本，并同步 Schema、C 头、文档与测试。数字消息标记已经是
@@ -87,12 +87,14 @@ get_api → create → ClientHello → ServerHello
                                                 destroy
 ```
 
-## 3. C ABI 3.8
+## 3. C ABI 3.9
 
 ### 3.1 数据结构
 
 所有结构均为 C 布局；未写入的 `reserved` 必须置零。`EraCallHeader` 字段是
 `struct_size: uint32_t` 和 `abi_version: { major: uint16_t, minor: uint16_t }`。
+头文件同时公开 `ERA_RUNTIME_PROTOCOL_MAJOR=46`、`ERA_RUNTIME_PROTOCOL_MINOR=0`；协议升级
+不改变 C 函数表形状，C 调用方仍通过 `session_submit/session_poll` 传输统一 CBOR 信封。
 
 | 类型 | 字段及含义 | 所有权/约束 |
 | --- | --- | --- |
@@ -363,7 +365,7 @@ epoch 时会清理两个 channel 的接受 ID，但仍不重置 sequence；VM sn
 | 0 | `runtime_versions` | `{min,max}`，两端闭区间 |
 | 1 | `client_name` | UTF-8，不作为身份授权 |
 | 2 | `features` | `RuntimeFeature[]` 请求集合 |
-| 3 | `requested_limits` | 六个非负限制字段 |
+| 3 | `requested_limits` | 七个非负限制字段 |
 | 4 | `capabilities` | 下表；session 固定 |
 | 5 | `preferred_locales` | 有序 BCP-47；当前选择 `zh-Hans`、`en` 或默认 `ja` |
 
@@ -377,7 +379,11 @@ resync、11 storage、12 input undo、13 project analysis、14 key macros。当�
 gamepad=3）；1–8 依次为 `rich_text/html/graphics/audio/video/font_metrics/
 column_cells/separators`；9 `available_fonts[]`（ServerHello 按大小写不敏感排序/去重并
 保留选中的拼写；runtime 内部再小写化供 CHKFONT 查询）；
-10 `services[]`；11 `StorageCapabilities`。当前 `video` 总被选为 false；
+10 `services[]`；11 `StorageCapabilities`；12 `EnvironmentCapability[]`，每项为规范名称与
+版本范围。当前输入环境名称为 `input.timed_viewport`、`input.device_latch`、
+`input.device_pump`、`input.sequence` 和 `input.macros`；后两项由 runtime 自身选择，
+`input.device_pump` 还要求协商 `InputState/device_pump@1.0` 服务。未知名称不会由 modality
+或宿主 OS 推导。当前 `video` 总被选为 false；
 `font_metrics` 还要求 `gget_text_size` 服务。布尔值没有缺省，前端必须全部发送。
 
 `RuntimeLimits` 键 0–6：`maximum_envelope_bytes:u64`、`maximum_payload_bytes:u64`、
@@ -419,7 +425,7 @@ payload 使用 minicbor enum 形式 `[tag, [value]]`；无值变体为 `[tag, []
 | 28 | `ApplyClientPreferences` | 29 `ClientPreferencesApplied`；只改变客户端展示画像 |
 | 30 | `Input` | 消费当前 wait/token |
 | 31 | `AdvanceTime` | 推进 deadline/countdown |
-| 33 | `DeviceStateChanged` | 更新设备采样时间 |
+| 33 | `DeviceStateChanged` | 按 epoch 内事件序号更新 runtime 设备状态 |
 | 34 | `ClientStateChanged` | 更新焦点/音频等前端状态 |
 | 35 | `ProjectionObservation` | 36 `ProjectionState` 或拒绝 |
 | 37 | `InputUndoRequest` | 38 `InputUndoStateChanged` |
@@ -486,11 +492,12 @@ byte column，前端可用提交的 UTF-8 源码按 `byte_start..byte_end` 显�
 
 ### 7.2 输入
 
-`InteractionToken { epoch, id }` 由 runtime 创建和撤销。`InputWait` 的 13 个字段是：
+`InteractionToken { epoch, id }` 由 runtime 创建和撤销。`InputWait` 的 14 个字段是：
 `wait_id`、`kind`、`stability`、`one_input`、`stop_message_skip`、`system_input`、
 `mouse_input`、`default_value?`、`deadline_ns?`、`display_time`、`timeout_message?`、
-`submission_token`、`countdown_remaining_ms?`。`countdown_remaining_ms` 只供显示，超时
-判定仍由 runtime 完成。
+`submission_token`、`countdown_remaining_ms?`、`viewport_policy`。最后一项为
+`FollowOutput=0` 或 `PreserveUserViewport=1`；只描述前端上滚策略，不改变超时或输入语义。
+`countdown_remaining_ms` 只供显示，超时判定仍由 runtime 完成。
 
 `WaitKind`：EnterKey、AnyKey、IntegerValue、StringValue、Void、AnyValue、
 IntegerButton、StringButton、PrimitiveMouseKey。无 deadline 且用户可恢复的 wait 才是
@@ -507,12 +514,19 @@ ActivateKeyMacro `{group,slot}`。前端从不提供 `RESULT[5]`；按钮必须�
 
 `AdvanceTime { monotonic_time_ns }` 驱动超时。当前边界为：时间采样达到 deadline 会超时；
 恰在 deadline 观察到的输入仍可能被接受，而晚于 deadline 的输入让 runtime 先完成
-超时。前端应使用同一单调时钟并按观察顺序发送。
+超时。前端应使用同一单调时钟并按观察顺序发送。Runtime 严格按收到的信封 FIFO 处理
+外部输入、设备事件和 `AdvanceTime`，不会用前端时间戳倒推或重新排序胜负。
 
-`DeviceStateChanged` 字段是 `device, code, pressed, x, y, monotonic_time_ns`。当前 runtime
-只吸收单调时间，尚未把其余字段转为通用设备状态。`ClientStateChanged` 字段为
+`DeviceStateChanged` 字段是 `device, code, pressed, x, y, monotonic_time_ns,
+event_sequence, toggle, repeat`。`event_sequence` 在每个 epoch 从 1 连续递增；旧值、跳号、
+越界 key code 和无效 repeat/up 组合原子拒绝。Runtime 保存键盘 0–255 与鼠标左/右/中键
+（code 1/2/4）的 held、toggle 和一次性 latch；完整 down/up 在同一设备泵中仍保留 latch。
+`InputState/device_pump@1.0` 请求携带 epoch 与 runtime 已接受的事件水位，前端经过真实事件
+循环边界、提交所有已排队设备事件后，返回同 epoch 的精确最终水位。
+`ClientStateChanged` 字段为
 `focused, visible, audio_available, reduce_motion, high_contrast, screen_reader`；当前
-只有 `focused` 和 `audio_available` 进入行为判断，其余仅属于已定义协议面。
+`focused && visible` 决定设备查询是否活动，失焦不消费 latch；`audio_available` 进入音频
+行为判断，其余仍属于已定义协议面。
 
 undo 请求返回 token；`InputUndoState` 字段为 `enabled, available_steps, in_progress,
 runtime_revision, token?`。
@@ -540,10 +554,10 @@ optional`。调用通过 `ServiceKind::Extension`；payload 是
 `delta.base_revision == local_revision` 时应用 `PresentationDelta`。不相等时停止应用并
 请求 resync，不能“尽力合并”。
 
-`PresentationSnapshot` 字段：`revision, title, history, backgrounds, audio, input_wait?,
+`PresentationSnapshot` 字段：`revision, title, history, scene, audio, input_wait?,
 settings, tooltip, resources, html_island, redraw`。`PresentationDelta` 字段：
 `base_revision, new_revision, operations[]`；operation 为 AppendLine、DeleteLines、
-Clear、SetTitle、SetBackgrounds、SetAudio、SetInputWait、ReplaceLine、
+Clear、SetTitle、ApplySceneDelta、SetAudio、SetInputWait、ReplaceLine、
 SetSettings、SetTooltip、SetResources、SetHtmlIsland、SetRedraw、
 SetButtonGeneration、TrimLines。
 
@@ -552,7 +566,7 @@ SetButtonGeneration、TrimLines。
 | 类型 | 字段/变体与单位 |
 | --- | --- |
 | `Color` | RGBA `u8`；派生默认值全 0（透明黑） |
-| `TextStyle` | foreground、background?、bold、italic、underline、strikeout、font_family?、font_millipoints（1/1000 point） |
+| `TextStyle` | foreground、background?、bold、italic、underline、strikeout、font_family?、font_millipixels（1/1000 logical pixel） |
 | `LogicalLength(i64)` | 1 个脚本逻辑单位 = 1000 milliunits；不是像素 |
 | `PresentationLength` | `Logical` 或 `FontHeightHundredths` |
 | `LogicalRect` | x/y/width/height；均为 LogicalLength |
@@ -560,11 +574,11 @@ SetButtonGeneration、TrimLines。
 | `MediaPlacement` | resource_id、x/y/width/height、depth、opacity、revision、hover/mask resource?、requested width/height/y? |
 | `RationalOpacity` | numerator:i64、denominator:u32；前端不应制造分母 0 |
 | `Shape` | kind、parameters[]、foreground?、background? |
-| `DisplayLine` | line_id、temporary、logical_line_start、line_end、alignment、runs[] |
-| `PresentationSettings` | drawable_width、line_height、background、button_focus_foreground、maximum_physical_lines、prevent_button_wrap、legacy_nonbutton_wrap |
+| `DisplayLine` | line_id、temporary、logical_line_start、line_end、alignment、runs[]、text_background_eligible |
+| `PresentationSettings` | drawable_width、drawable_height、line_height、background、button_focus_foreground、maximum_physical_lines、prevent_button_wrap、legacy_nonbutton_wrap、text_line_background? |
 | `PresentationHistory` | logical_lines 和可重放 operations；snapshot 不是无限审计日志 |
 | `RedrawState` | enabled |
-| `AudioState` | channel_id、resource_id、repeat_count、volume_millionths、playing、revision |
+| `AudioState` | `Sound(0..9)`/`Bgm` target、resource_id、repeat_count、volume_millionths、Stopped/Playing/Paused、revision、rate_millionths、preserve_pitch |
 | `TooltipSettings` | foreground/background、delay_ms、duration_ms、font、font_millipoints、custom、原始 format、images、normalized_format |
 
 `DisplayRun` 变体：
@@ -573,7 +587,9 @@ SetButtonGeneration、TrimLines。
 - `Button{runs,token,title?,hover_style?,value,generation,enabled}`；disabled 不得提交；
 - `HtmlDocument{document}`；
 - `Image{placement,alt_text?}`、`Shape{shape}`；
-- `ColumnCell{content,alignment,preferred_columns}`；
+- `ColumnCell{content,alignment,width}`；`width` 是 `ProjectColumns(u32)` 或
+  `LogicalPixels(u32)`。前者由 runtime 按项目列宽投影，后者保留 HTML_PRINTC/LC 的
+  逻辑像素宽度，前端不得把它换算回列数；两者均不截断超宽内容；
 - `Separator{pattern,role=Rule}`；
 - `Space{width}`。
 
@@ -586,17 +602,59 @@ history operation 是 Append、DeletePhysical、ReplaceTemporary、Clear、
 SetButtonGeneration、TrimPhysical。`TrimPhysical`/`TrimLines` 只裁掉最旧物理行，不改变
 脚本逻辑行计数。
 
+`text_line_background` 是独立的全宽整行背景，不等于 console `background` 或 run style
+背景。前端只对 `text_background_eligible=true` 的行投影它；开关变化通过 SetSettings
+重绘已保留和虚拟化历史行。Browser/Tauri 保留 RGBA，TUI 将其按 8-bit sRGB 通道合成到
+不透明 console 背景。
+
+scene 是所有背景与独立图层的唯一权威来源：
+
+- `SceneStateV1 {revision,layers}`；图层按 depth 降序、再按不可变 sequence 升序投影；
+- `SceneLayerV1` 固定携带 layer_id、sequence、source、depth、anchor、offset、size、
+  opacity、可选 5×5 color_matrix、scroll_policy、interaction?、scene_revision 和
+  document_origin_y；后者来自独立、非负、饱和递增的 runtime canonical document
+  cursor，不随 CLEARLINE、MaxLog trim 或可回绕的 LINECOUNT 回退。只有 Viewport +
+  FollowContent 使用创建时 cursor；Viewport + Fixed 与所有 DisplayLine anchor 必须为 0。
+  前端据此结合自己的当前滚动位置投影；它不是 DOM scrollTop、终端行号或设备观测；
+- `SceneInteractionV1` 除 token、value、enabled 外，可携带 hover_source、hit_map 与 title；
+  CBG 按钮映射只影响 runtime 已发出的交互能力，前端不得从 canvas 像素自行构造脚本值；
+- source 是 Resource、Sprite 或 Canvas，并携带其精确 `resource_revision`；
+- `SceneDeltaV1 {base_revision,new_revision,operations}` 只在 base 与本地 scene revision
+  相等且 new 严格递增时原子应用；operation 固定为 UpsertLayer、RemoveLayer、
+  ClearDepth、ClearAnchoredLine、ReplaceScene。失败不得留下部分修改；
+- Upsert 不得改变已有 layer 的 sequence，也不得回退 scene_revision；空 operation 列表
+  仍是有效 revision 变更。断线重放与实时 delta 必须产生相同 SceneStateV1。
+
 资源重放字段：
 
 - `ResourceReplay {sprites, canvases, animation_timer_ms}`；
-- `SpriteReplay {name,size,position,frames,canvas_id?,canvas_rectangle?}`；
+- sprites 和 canvases 是按 `(name,revision)`、`(canvas_id,revision)` 排序的数组，同一名称
+  或 canvas_id 可以出现多个修订；前端必须以完整二元 identity 索引，不能转成只保留最新
+  值的 map，也不能经浮点 number 转换 revision；replay 只携带当前资源及 scene/resource
+  引用（包括尚未附到图层的 CBG button map）可达的历史依赖闭包。runtime 以显式工作队列
+  完整收集并验证闭包后才原子发布/剪枝；缺少任一精确边时拒绝发布；
+- `SpriteReplay {name,size,position,frames,canvas_id?,canvas_rectangle?,revision,
+  canvas_revision?}`；scene 中的
+  Sprite source 必须绑定该 revision，不得只按同名资源取“最新值”；
 - `SpriteFrameReplay {resource_id,source_rectangle[4],offset[2],delay_ms,
-  destination_size?,canvas_id?}`；
+  destination_size?,canvas_id?,content_digest?,canvas_revision?}`；文件资源必须携带精确
+  内容摘要，canvas frame 不携带摘要但必须携带精确 canvas_revision；前端可按摘要去重
+  解码，但仍按 resource_id 解析项目资源；
 - `CanvasReplay {canvas_id,size,commands,revision}`；
 - canvas 命令为 Clear、DrawSprite、SetPixel、FillRectangle、SetBrush、SetPen、
-  SetDashStyle、SetFont、DrawLine、DrawText、DrawCanvas、LoadEncodedImage；字段与
+  SetDashStyle、SetFont、DrawLine、DrawText、DrawCanvas、LoadEncodedImage、
+  PolygonPointAdd、PolygonPointClear、DrawPolygon、FillPolygon；字段与
   [`presentation.rs`](../crates/era-runtime-protocol/src/presentation.rs) 同名。颜色矩阵
-  是整数数组；DrawCanvas 的 5×5 值为 1/256 定点，rotation 是 millidegrees。
+  是整数数组；DrawSprite 携带精确 sprite resource_revision；DrawCanvas 的 source、mask
+  分别携带精确 canvas revision，5×5 值为 1/256 定点，rotation 是 millidegrees。
+  `SpriteReplay`、`SpriteFrameReplay` 的 canvas_id/canvas_revision，以及 DrawCanvas 的
+  mask_canvas_id/mask_revision 都是不可拆分的成对字段；两者只出现一个即为非法 replay。
+  当前与历史 canvas 命令按 `(canvas_id,revision)` 去重后共同受 64 MiB 保留预算约束；
+  多边形点列是 canvas 重放状态：PolygonPointAdd/Clear 依次更新它，后续 DrawPolygon 与
+  FillPolygon 消费当时的完整点列；前端不得把四类命令当作彼此独立的无状态增量。
+
+`animation_timer_ms` 是 runtime 持有的逻辑重绘节拍：0 表示停用，1–9ms 规范化为 10ms。
+前端据此安排绘制，但不得用渲染帧推进游戏时间或反向覆盖该值。
 
 tooltip 的 `normalized_format.flags` 是明确枚举，`unknown_bits` 保留未识别原始位；前端
 应使用规范 flags，同时在往返/诊断中保留 unknown bits。
@@ -617,6 +675,18 @@ Shape、Division 或 Break；其公开字段逐一见
 或 FontHeightHundredths；box model 的 border/radius/margin/padding 和 border_colors
 按四边数组传递。前端只投影 semantic，不应通过原始 attribute 猜出另一套含义。
 
+蛇版 profile 额外把 font 的 size/valign/render/edging/hinting、img 的 xpos/ypos/
+width/height/display/cm，以及 div 的 position/size/depth/display/border/padding/radius
+规范化为上述 typed semantic。颜色矩阵在线上只允许 runtime 已解析的 25 个 1/256
+定点整数；VM 变量名和索引不得发送给前端。原版 profile 对这些蛇版专属属性在打印与
+HTML 查询中都先拒绝，provider 不会看到它们。HTML_PRINTC 右对齐、HTML_PRINTLC
+左对齐；显式正宽度和默认 `PrintCLength × FontSize / 2` 都以 LogicalPixels 保留，空串
+不产生 cell，超宽内容不截断并按当前行剩余宽度决定换行。
+
+测试/日志用 serde JSON 中，`HtmlColorMatrix` 固定使用 adjacent tag：解析阶段为
+`{"type":"variable","value":{"name":...,"indices":[...]}}`，跨 presentation 边界后为
+`{"type":"fixed","value":[25 个整数]}`；该 JSON 形状不改变线上 CBOR enum 编码。
+
 ### 8.3 投影反馈
 
 `ProjectionLength(i64)` 是权威前端的设备无关空间，例如 CSS pixel。前端提交：
@@ -635,19 +705,27 @@ text_box_layout}`；layout 的 width=0 表示配置默认宽度。
 effect 是短暂命令，不替代 snapshot 中可恢复的 audio/scene 状态。`EffectBatch` 含
 `EffectEvent {effect_id, kind}`；kind 是 Audio、StartAnimation、Video、
 Extension(name,value)、OpenConfiguration、PresentNow{presentation_revision}。
-Audio 字段为 channel、Play/Stop/SetVolume、resource?、repeat_count、
-volume_millionths；Video 是 resource/skippable。
+Audio target 是 `Sound(0..9)` 或独立的 `Bgm`；effect 字段为 target、
+Play/Stop/SetVolume/Pause/Resume/SetRate、resource?、repeat_count、volume_millionths、
+revision、rate_millionths 与 preserve_pitch。一次性 sound 仍是短暂 effect；可恢复的 BGM
+期望状态留在 presentation snapshot。前端必须按 target/revision 应用，不能把迟到 effect
+覆盖到新一代播放器状态。处理 `RuntimeResynchronized` 时，前端必须先清空全部 sound
+channel 及其 revision；runtime 同时丢弃所有未确认 sound effect，且不会在随后的
+`EffectBatch` 重放它们。BGM 仍由 presentation snapshot 恢复，未确认的 BGM effect 仍可重放。
+Video 是 resource/skippable。
 
 每个已知 effect ID 只能在一个 `EffectAcknowledgement` 中出现一次，outcome 为
 Completed/Failed/Cancelled 和可空 message。未知、重复结果会被拒绝；非 Completed
-结果还会产生诊断。未确认 effect 留在 journal，resync 后会重发。
+结果还会产生诊断。除上述一次性 sound 外，未确认 effect 留在 journal，resync 后会重发。
 
 ## 9. Storage、Service 和状态传输
 
 ### 9.1 Storage
 
 所有实际文件 I/O 都由前端完成。namespace：Project、Save、GlobalSave、Data、Log、
-Resource。`StorageRequest` 字段为 `request_id, namespace, relative_path, operation,
+Resource。传统存档只使用项目 `sav` 对应的 Save/GlobalSave；runtime 不探测、读取、
+迁移或删除旧 profile 私有存档。
+`StorageRequest` 字段为 `request_id, namespace, relative_path, operation,
 idempotency_key, deadline_ns?`。同一幂等键重试必须具有相同效果。
 
 operation：
@@ -688,6 +766,7 @@ Error{code,message}。不要返回 JSON、平台对象或错误栈。
 | Network | `update_check` | URL → remote version/download URL |
 | OpenUrl | `open_url` | URL → opened bool |
 | PresentationQuery | `get_display_line` | context + index → context + string |
+| PresentationQuery | `get_line_geometry_v1` | context + stable line_id → context + line_id + top/height/viewport_height |
 | PresentationQuery | `html_get_printed_str` | context + index → context + string |
 | PresentationQuery | `html_string_len` | context + markup + argument → context + integer |
 | PresentationQuery | `html_substring` | 同上 → context + head/tail |
@@ -697,12 +776,44 @@ Error{code,message}。不要返回 JSON、平台对象或错误栈。
 | Canvas | `sample_canvas_pixel` | context + canvas/revision/point → context + revision/ARGB |
 | Canvas | `decode_canvas_image` | encoded bytes → width/height |
 | Canvas | `encode_canvas_png` | canvas/revision → encoded bytes |
+| Audio | `audio_observation` | `AudioObservationRequestV1` → `AudioObservationResponseV1` |
+| Sql | `rustyera.sql` | `SqlRequestV1` → `SqlResponseV1` |
 | Extension | 动态声明的 operation | `ExtensionInvocation` → `ExtensionResult` |
 
 presentation query 的 `context` 是 presentation/environment/projection-space 三个 revision；
+`get_line_geometry_v1@1.0` 只接受 runtime 已解析的稳定 line_id。`GETLINEY` 的脚本 display
+index 不跨边界，runtime 验证响应的三个 revision 与 line_id 后计算
+`top + height - viewport_height`；任一 revision 过期、行消失、负尺寸或算术溢出都令查询失败，
+不得写回 VM。
 响应必须原样带回，runtime 用它拒绝已过时的物理观察。普通 service 错误通常成为终止
 `ServiceFailure`；少数宿主路径有源码明确的兼容降级，因此前端仍应返回真实 Error，
 不能自行伪造成功。
+
+`Audio/audio_observation@1.0` 请求携带 `Sound(0..9)`/`Bgm` target 与 expected revision；
+响应原样携带 target/revision、整数毫秒 duration/position、Stopped/Playing/Paused、
+millionths 音量与速率、preserve-pitch 和前端单调时间戳。target 或 revision 不一致是 stale
+response，不能提交给 VM；时间戳只排序外部观察，不推进逻辑游戏时间。
+同一 target 的后续响应时间戳不得小于此前已接受值，否则 runtime 以 service failure 拒绝。
+
+`Sql/rustyera.sql@1.0` 是蛇版兼容身份要求的安全 SQL 服务。协议只传 session epoch 限定的
+provider/connection/reader 逻辑句柄、项目 Resource ID 与摘要、不可变数据库修订和类型化
+`Null/Integer/String` 值；不得传操作系统路径、任意连接字符串或 provider 原生句柄。请求
+覆盖 Open、Execute、ReaderRead/Get/IsNull/Close、ImportMapRows 和 Disconnect；响应始终
+回传权威 connection transaction/durable revision 与 reader 状态，SQL 语义错误使用
+`SqlResultV1::Error` 的稳定 code/context，只有传输或 provider 崩溃才使用外层
+`ServiceResult::Error`。v1 固定限制为 8 个连接、32 个 reader、256 KiB SQL、64 个参数、
+8 MiB 参数总量、1 MiB 单元格、64 MiB 单数据库、100,000 行/8 MiB MAP 数据、1,000,000
+reader 行与 5 秒 provider 执行预算。
+
+蛇版 profile semantic/policy v12 固定 `rustyera.sql@1`、`rustyera.sql.limits@1`、
+`rustyera.scene@1` 与 `rustyera.audio@1`，`save_codec` 为
+`snake_emuera1808_interop_v1`；这些字段参与项目、缓存和 snapshot identity。该 v12 identity
+约定标准传统存档不拥有 GLOBAL、SFMT RNG 或 SQL revision，精确 SQL/RNG 仍只属于 VM
+snapshot；实际 codec 路由与编解码在子批次 5.2 接入。传统存档只接受并生成标准
+Emuera 1808 Binary、ERAZIP/GZip 或 Text；RustyEra 私有 envelope 不属于受支持格式。
+前端没有精确协商
+`Sql/rustyera.sql@1.0` 时，兼容身份解析和项目加载会在读取项目源码、storage 或缓存前返回
+`runtime.missing_sql_service`；音频服务的实际查询门禁由音频运行时接入阶段执行。
 
 ### 9.3 状态传输
 
@@ -871,7 +982,7 @@ JSON number，摘要使用小写 BLAKE3 十六进制。历史最多
 Canvas 命令的完整字段：
 
 - `Clear {argb,rectangle?}`；
-  `DrawSprite {name,destination,color_matrix?}`；
+  `DrawSprite {name,destination,color_matrix?,resource_revision}`；
   `SetPixel {point,argb}`；
   `FillRectangle {rectangle,brush_argb}`；
 - `SetBrush {argb}`；
@@ -881,7 +992,7 @@ Canvas 命令的完整字段：
 - `DrawLine {start,end}`；
   `DrawText {text,point}`；
 - `DrawCanvas {source_canvas_id,source_revision,source,destination,color_matrix?,
-  mask_canvas_id?,rotation_millidegrees,rotation_center?}`；
+  mask_canvas_id?,rotation_millidegrees,rotation_center?,mask_revision?}`；
 - `LoadEncodedImage {content_digest,encoded}`。
 
 HTML semantic 的完整字段：
@@ -1038,7 +1149,7 @@ try:
         capabilities = {
             0: [0], 1: True, 2: True, 3: False, 4: False, 5: False,
             6: False, 7: True, 8: True, 9: [], 10: [],
-            11: {0: False, 1: False, 2: False, 3: False},
+            11: {0: False, 1: False, 2: False, 3: False}, 12: [],
         }
         client.send(0, {
             0: version_range(*RUNTIME_VERSION), 1: "minimal-python",
@@ -1104,3 +1215,11 @@ ShutdownRequest}` 的 `.envelope(...)` 和 `encode_envelope` 生成同样消息�
 - 错误和恢复：第 10 节
 - 源码不一致：第 11 节
 - Python/Rust 端到端用法：第 12 节
+
+### 兼容诊断的发布作用域（Runtime 37.1）
+
+`CompatibilityDiagnosticContext` 的 CBOR 可选字段 4–7 依次为 artifact（32 字节摘要）、
+project_load_id、runtime_epoch、generation。缺席表示该阶段尚未绑定或无法证明相应身份；
+冷加载报告的 generation 为空。旧代存活 frame 发出的警告保留真实 generation，不借用新
+artifact 摘要。前端不得用显示文本替代 code、源码位置及这些身份字段进行诊断比较。
+这些字段不改变现有 C 结构布局，C ABI 保持 3.9。

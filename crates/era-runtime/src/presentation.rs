@@ -1,9 +1,10 @@
 #[cfg(test)]
 use era_runtime_protocol::PresentationHistoryOperation;
 use era_runtime_protocol::{
-    CellAlignment, DisplayLine, DisplayRun, InteractionToken, LineAlignment, LogicalLength,
-    MediaPlacement, PresentationLength, ProtocolValue, RationalOpacity, SeparatorRole, Shape,
-    SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle,
+    CellAlignment, CellWidthIntent, Color, DisplayLine, DisplayRun, InteractionToken,
+    LineAlignment, LogicalLength, MediaPlacement, PresentationLength, ProtocolValue,
+    RationalOpacity, SeparatorRole, Shape, SystemTextArgument, SystemTextKey, SystemTextRef,
+    TextStyle,
 };
 use erabasic_vm::{CharacterWidthMode, VmValue};
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,6 +22,19 @@ impl Default for PresentationModel {
 }
 
 impl PresentationModel {
+    pub(crate) fn html_query_style(&self) -> era_runtime_protocol::HtmlQueryStyleV2 {
+        let mut base = self.default_style.clone();
+        base.bold = false;
+        base.italic = false;
+        base.underline = false;
+        base.strikeout = false;
+        era_runtime_protocol::HtmlQueryStyleV2 {
+            current: self.current_style.clone(),
+            base,
+            settings: self.settings.clone(),
+        }
+    }
+
     pub(crate) fn set_character_width_mode(&mut self, mode: CharacterWidthMode) {
         if self.character_width_mode != mode {
             self.character_width_mode = mode;
@@ -62,6 +76,20 @@ impl PresentationModel {
                         .iter()
                         .rev()
                         .find_map(|run| enabled_button_value(run, token, self.button_generation))
+                })
+            })
+            .or_else(|| {
+                self.scene.layers.iter().rev().find_map(|layer| {
+                    let interaction = layer.interaction.as_ref()?;
+                    if !interaction.enabled || interaction.token != token {
+                        return None;
+                    }
+                    Some(match &interaction.value {
+                        ProtocolValue::Integer(value) => VmValue::Integer(*value),
+                        ProtocolValue::String(value) => VmValue::String(value.clone()),
+                        ProtocolValue::Boolean(value) => VmValue::Integer(i64::from(*value)),
+                        ProtocolValue::Bytes(_) => VmValue::String(String::new()),
+                    })
                 })
             })
     }
@@ -163,6 +191,7 @@ impl PresentationModel {
             rebind_runs(&mut Arc::make_mut(line).runs, tokens);
         }
         rebind_runs(&mut self.pending_runs, tokens);
+        self.rebind_scene_interactions(tokens);
         self.delivery.dirty.force_snapshot = true;
         self.bump();
     }
@@ -215,10 +244,12 @@ impl PresentationModel {
     /// Delete canonical logical lines, including an uncommitted current line first.
     /// This models the small console-editing subset used by reference system flows.
     pub(crate) fn delete_last_lines(&mut self, mut count: usize) {
+        let mut removed_line_ids = Vec::new();
         let mut delivered_pending_deletion = 0;
         if count != 0 && !self.pending_runs.is_empty() {
             delivered_pending_deletion =
                 usize::from(self.delivery.pending_line_id == Some(self.next_line));
+            removed_line_ids.push(self.next_line);
             self.pending_runs.clear();
             self.pending_temporary = false;
             count -= 1;
@@ -227,10 +258,12 @@ impl PresentationModel {
         self.logical_line_count = self.logical_line_count.wrapping_sub(logical_deletions);
         self.line_count_dirty = true;
         let keep = self.lines.len().saturating_sub(count);
+        removed_line_ids.extend(self.lines.iter().skip(keep).map(|line| line.line_id));
         self.lines.truncate(keep);
         let physical_count =
             u32::try_from(count.saturating_add(delivered_pending_deletion)).unwrap_or(u32::MAX);
         self.record_history_delete(physical_count);
+        self.clear_anchored_scene_lines(&removed_line_ids);
         self.bump();
     }
 
@@ -244,9 +277,12 @@ impl PresentationModel {
             self.pending_runs.clear();
             false
         } else if self.lines.back().is_some_and(|line| line.temporary) {
-            self.lines.pop_back();
+            let line_id = self.lines.pop_back().map(|line| line.line_id);
             self.logical_line_count = self.logical_line_count.wrapping_sub(1);
             self.line_count_dirty = true;
+            if let Some(line_id) = line_id {
+                self.clear_anchored_scene_lines(&[line_id]);
+            }
             true
         } else {
             false
@@ -325,7 +361,29 @@ impl PresentationModel {
             content,
             alignment,
             // The configured PrintCLength is layout intent, not padding.
-            preferred_columns: self.print_c_length,
+            width: CellWidthIntent::ProjectColumns(self.print_c_length),
+        });
+        self.bump();
+    }
+
+    pub(crate) fn append_html_column_cell(
+        &mut self,
+        document: erabasic_html::HtmlDocument,
+        alignment: CellAlignment,
+        requested_pixels: i64,
+    ) {
+        let default_pixels = u64::from(self.print_c_length)
+            .saturating_mul(u64::from(self.default_style.font_millipixels))
+            / 2_000;
+        let pixels = if requested_pixels > 0 {
+            u32::try_from(requested_pixels).unwrap_or(u32::MAX)
+        } else {
+            u32::try_from(default_pixels).unwrap_or(u32::MAX)
+        };
+        self.pending_runs.push(DisplayRun::ColumnCell {
+            content: vec![DisplayRun::HtmlDocument { document }],
+            alignment,
+            width: CellWidthIntent::LogicalPixels(pixels),
         });
         self.bump();
     }
@@ -627,6 +685,12 @@ impl PresentationModel {
         self.bump();
     }
 
+    pub(crate) fn set_text_line_background(&mut self, color: Option<Color>) {
+        self.settings.text_line_background = color;
+        self.delivery.dirty.settings = true;
+        self.bump();
+    }
+
     pub(crate) fn set_bold(&mut self, enabled: bool) {
         self.current_style.bold = enabled;
         self.bump();
@@ -695,13 +759,15 @@ impl PresentationModel {
 
     fn commit_line(&mut self) {
         self.last_committed_plain_runs = std::mem::take(&mut self.pending_plain_runs);
+        let runs = std::mem::take(&mut self.pending_runs);
         let line = Arc::new(DisplayLine {
             line_id: self.next_line,
             temporary: self.pending_temporary,
             logical_line_start: true,
             line_end: true,
             alignment: self.current_alignment,
-            runs: std::mem::take(&mut self.pending_runs),
+            text_background_eligible: line_has_text_background(&runs),
+            runs,
         });
         self.pending_temporary = false;
         self.next_line = self.next_line.saturating_add(1);
@@ -711,6 +777,7 @@ impl PresentationModel {
         } else {
             self.logical_line_count + 1
         };
+        self.advance_canonical_document_cursor();
         self.line_count_dirty = true;
         if self.replace_next_temporary {
             self.history_edits
@@ -788,7 +855,7 @@ impl PresentationModel {
             self.pending_runs.push(DisplayRun::ColumnCell {
                 content: vec![button],
                 alignment,
-                preferred_columns: self.print_c_length,
+                width: CellWidthIntent::ProjectColumns(self.print_c_length),
             });
         } else {
             self.pending_runs.push(button);
@@ -802,18 +869,20 @@ impl PresentationModel {
         token: InteractionToken,
         system_text: Option<SystemTextRef>,
     ) {
+        let runs = vec![self.button_run(
+            text,
+            ProtocolValue::String(String::new()),
+            token,
+            system_text,
+        )];
         let line = Arc::new(DisplayLine {
             line_id: self.next_line,
             temporary: false,
             logical_line_start: true,
             line_end: true,
             alignment: self.current_alignment,
-            runs: vec![self.button_run(
-                text,
-                ProtocolValue::String(String::new()),
-                token,
-                system_text,
-            )],
+            text_background_eligible: line_has_text_background(&runs),
+            runs,
         });
         self.next_line = self.next_line.saturating_add(1);
         self.lines.push_back(Arc::clone(&line));
@@ -822,6 +891,7 @@ impl PresentationModel {
         } else {
             self.logical_line_count + 1
         };
+        self.advance_canonical_document_cursor();
         self.line_count_dirty = true;
         self.history_edits
             .push(PresentationHistoryEdit::Append { line });
@@ -835,7 +905,14 @@ impl PresentationModel {
         if excess == 0 {
             return;
         }
+        let removed_line_ids = self
+            .lines
+            .iter()
+            .take(excess)
+            .map(|line| line.line_id)
+            .collect::<Vec<_>>();
         self.lines.drain(..excess);
+        self.clear_anchored_scene_lines(&removed_line_ids);
         let count = u32::try_from(excess).unwrap_or(u32::MAX);
         if let Some(PresentationHistoryEdit::TrimPhysical { count: previous }) =
             self.history_edits.last_mut()
@@ -845,6 +922,13 @@ impl PresentationModel {
             self.history_edits
                 .push(PresentationHistoryEdit::TrimPhysical { count });
         }
+    }
+
+    fn advance_canonical_document_cursor(&mut self) {
+        self.canonical_document_cursor_y.0 = self
+            .canonical_document_cursor_y
+            .0
+            .saturating_add(self.settings.line_height.0.max(0));
     }
 
     fn button_run(
@@ -926,10 +1010,35 @@ fn replace_matching_style_defaults(
     changed
 }
 
+pub(super) fn line_has_text_background(runs: &[DisplayRun]) -> bool {
+    runs.iter().any(run_has_text_background)
+}
+
+fn run_has_text_background(run: &DisplayRun) -> bool {
+    match run {
+        DisplayRun::Text { text, .. } | DisplayRun::TextLayout { text, .. } => {
+            !text.trim().is_empty()
+        }
+        DisplayRun::Button { runs, .. } => line_has_text_background(runs),
+        DisplayRun::ColumnCell { content, .. } => line_has_text_background(content),
+        DisplayRun::HtmlDocument { document } => html_nodes_have_text(&document.nodes),
+        DisplayRun::Separator { pattern, .. } => !pattern.trim().is_empty(),
+        DisplayRun::Image { .. } | DisplayRun::Shape { .. } | DisplayRun::Space { .. } => false,
+    }
+}
+
+fn html_nodes_have_text(nodes: &[erabasic_html::HtmlNode]) -> bool {
+    nodes.iter().any(|node| match node {
+        erabasic_html::HtmlNode::Text { text, .. } => !text.trim().is_empty(),
+        erabasic_html::HtmlNode::Element { children, .. } => html_nodes_have_text(children),
+    })
+}
+
 mod defaults;
 mod delivery;
 mod media;
 mod projection;
+mod scene;
 #[cfg(test)]
 mod tests;
 

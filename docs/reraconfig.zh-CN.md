@@ -8,10 +8,10 @@
 
 - 文件使用 TOML，设置按用途放入浅层表中，例如 `text.font_size` 和
   `save.auto_save`。设置名称使用小写、完整且直观的英语单词。
-- `[meta]` 只保存格式元数据。`schema_version` 当前为整数 `3`；
+- `[meta]` 只保存格式元数据。`schema_version` 当前为整数 `5`；
   `locked_settings` 是不可由客户端设置面板修改的规范路径数组，用来承接旧
   `_fixed.config` 的语义。
-- 版本 1、2 文件及未写版本号的旧文件会在读取时升级为版本 3。版本 1 升级会移除退役字段；
+- 版本 1、2、3、4 文件及未写版本号的旧文件会在读取时升级为版本 5。版本 1 升级会移除退役字段；
   `compatibility.drawline_starts_new_line = true` 会转移为仍受支持的
   `compatibility.legacy_nonbutton_wrapping = true`，对应锁定状态也一并转移。
 - 版本 2 的 `interface.menu_visible` 布尔项会升级为 `interface.menu_mode`：`true` 转为
@@ -29,6 +29,43 @@
 `cargo run -p era-config --example generate_reraconfig_artifacts` 从代码目录确定性生成。
 
 ## 新增的通用设置
+
+### 版本 4 兼容 profile 与版本 5 故障钩子配置
+
+`[compatibility] profile` 缺省为 `"emuera.em"`，也可显式声明
+`"emuera.skia.snake"`。未知 profile 或不支持的格式版本会阻止加载，不静默回退。
+该字段是项目执行身份，不属于客户端偏好，也不允许通过热重载或设置事务切换；修改后必须完整重开项目。
+
+snake profile 仍为实验状态。当前身份选择逐操作蛇版整数策略、可保存重放的 SFMT19937
+和 Unicode 逻辑列宽布局；不保证蛇版 `UseNewRandom` 双状态路径的同 seed 结果，也不表示
+按键、像素布局或完整游戏已兼容。
+缓存、字节码、snapshot 和 snake 自身存档携带完整身份，不能跨 profile 复用；
+原版 profile 保留现有裸 1808 存档读写。三个客户端先调用 core 解析配置，再绑定对应存储，
+不各自解释该字段。
+
+```toml
+[meta]
+schema_version = 5
+
+[compatibility]
+profile = "emuera.skia.snake"
+```
+
+### 用户函数多余实参诊断
+
+`diagnostics.strict_user_call_arguments`（设置 ID `128`）默认 `false`，仅影响 snake
+非 variadic 用户函数：默认告警并且不求值多余实参；设为 `true` 时提升为错误。内置函数
+始终按原有 arity 校验，原版 profile 始终拒绝用户函数多余实参。修改此项需要重新加载项目，
+会改变编译身份并使不兼容缓存失效。Schema、锁定路径和客户端设置目录同步包含该可选字段。
+
+### 蛇版最终故障钩子
+
+`runtime.disable_before_error_throw`（设置 ID `129`）映射蛇版
+`DisableBeforeErrorThrow`，默认 `false`。仅 snake profile 会在最终脚本故障前运行
+`BEFORE_ERROR`，显式 `THROW` 则只运行 `BEFORE_THROW`。设置为 `true` 后两个 hook 均禁用；
+原版 profile 始终不触发。该设置参与编译身份，修改后需要重新加载项目。
+
+### 展示设置
 
 - `audio.volume`：整数 `0..=100`，默认 `100`，表示游戏主音量百分比；支持热应用。
 - `text.replace_full_width_spaces`：布尔值，默认 `false`。启用后仅由前端把游戏输出中的

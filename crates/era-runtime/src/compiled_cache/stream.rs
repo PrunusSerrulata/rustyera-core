@@ -1,9 +1,10 @@
 use super::{
-    DecodedProjectFile, EncodedSectionRef, FIXED_SECTION_COUNT, LEGACY_PROJECT_VERSION,
-    MANIFEST_SECTION_INDEX, MAXIMUM_DECODED_PAYLOAD_BYTES, PREVIOUS_PROJECT_VERSION, PROJECT_MAGIC,
-    ProjectFileError, ProjectIdentity, ProtocolBytes, StreamingConfigurationJournal,
-    TARGET_PARALLEL_SECTIONS, VERSION, apply_journal, decode_manifest_section, project_identity,
-    read_u32, read_u64,
+    ARITHMETIC_PROJECT_VERSION, CALL_PROJECT_VERSION, DATA_PROJECT_VERSION, DecodedProjectFile,
+    EncodedSectionRef, FIXED_SECTION_COUNT, LEGACY_PROJECT_VERSION, MANIFEST_SECTION_INDEX,
+    MAXIMUM_DECODED_PAYLOAD_BYTES, PREVIOUS_PROJECT_VERSION, PROFILED_PROJECT_VERSION,
+    PROFILELESS_PROJECT_VERSION, PROJECT_MAGIC, ProjectFileError, ProjectSourceIdentity,
+    ProtocolBytes, StreamingConfigurationJournal, TARGET_PARALLEL_SECTIONS, VERSION, apply_journal,
+    decode_manifest_section, project_identity, read_u32, read_u64,
 };
 
 pub(super) const HEADER_BYTES: usize = PROJECT_MAGIC.len() + 1 + 8 + 32 + 32 + 4 + 4;
@@ -41,13 +42,14 @@ pub struct ProjectFileStreamDecoder {
     container_bytes: usize,
     phase: StreamPhase,
     header: Vec<u8>,
-    identity: Option<ProjectIdentity>,
+    identity: Option<ProjectSourceIdentity>,
     section_header: [u8; SECTION_HEADER_BYTES],
     section_header_len: usize,
     section_index: usize,
     section_count: usize,
     section_remaining: usize,
     decoded_bytes: u64,
+    maximum_decoded_bytes: u64,
     manifest_decoded_len: Option<u64>,
     manifest_compressed: Vec<u8>,
     digest: [u8; CONTAINER_DIGEST_BYTES],
@@ -63,6 +65,24 @@ impl ProjectFileStreamDecoder {
     /// Returns an error when the declared length exceeds the negotiated transfer limit or cannot
     /// contain the mandatory project-file framing.
     pub fn new(expected_len: usize, maximum_len: usize) -> Result<Self, ProjectFileError> {
+        Self::new_with_decoded_limit(expected_len, maximum_len, MAXIMUM_DECODED_PAYLOAD_BYTES)
+    }
+
+    /// Create a streaming decoder with an additional bound on all decoded sections.
+    ///
+    /// The caller may lower, but cannot raise, the format's existing 2 GiB hard limit.
+    /// Section lengths are checked before retaining compressed manifest bytes or decompressing.
+    /// Compiled sections that are skipped still count towards the decoded-section budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same framing/transfer errors as [`Self::new`]. A section exceeding the
+    /// effective decoded budget is rejected by [`Self::append`] before allocation.
+    pub fn new_with_decoded_limit(
+        expected_len: usize,
+        maximum_len: usize,
+        maximum_decoded_bytes: u64,
+    ) -> Result<Self, ProjectFileError> {
         let minimum_len = HEADER_BYTES
             .saturating_add(FIXED_SECTION_COUNT.saturating_mul(SECTION_HEADER_BYTES))
             .saturating_add(CONTAINER_DIGEST_BYTES);
@@ -87,6 +107,7 @@ impl ProjectFileStreamDecoder {
             section_count: 0,
             section_remaining: 0,
             decoded_bytes: 0,
+            maximum_decoded_bytes: maximum_decoded_bytes.min(MAXIMUM_DECODED_PAYLOAD_BYTES),
             manifest_decoded_len: None,
             manifest_compressed: Vec::new(),
             digest: [0; CONTAINER_DIGEST_BYTES],
@@ -153,9 +174,13 @@ impl ProjectFileStreamDecoder {
         let identity = self
             .identity
             .ok_or_else(|| error("project file identity is missing"))?;
-        let mut manifest = decode_manifest_section(&section, identity.project_revision)
-            .map_err(ProjectFileError::from)?;
-        if project_identity(&manifest) != identity {
+        let mut manifest = decode_manifest_section(
+            &section,
+            identity.project_revision,
+            self.header[PROJECT_MAGIC.len()],
+        )
+        .map_err(ProjectFileError::from)?;
+        if !identity.matches(&manifest) {
             return Err(error(
                 "project file identity does not match its embedded manifest",
             ));
@@ -198,7 +223,14 @@ impl ProjectFileStreamDecoder {
         let version = self.header[PROJECT_MAGIC.len()];
         if !matches!(
             version,
-            LEGACY_PROJECT_VERSION | PREVIOUS_PROJECT_VERSION | VERSION
+            LEGACY_PROJECT_VERSION
+                | PREVIOUS_PROJECT_VERSION
+                | PROFILELESS_PROJECT_VERSION
+                | PROFILED_PROJECT_VERSION
+                | ARITHMETIC_PROJECT_VERSION
+                | CALL_PROJECT_VERSION
+                | DATA_PROJECT_VERSION
+                | VERSION
         ) {
             return Err(error(&format!(
                 "unsupported project file version {version:02x}"
@@ -227,7 +259,7 @@ impl ProjectFileStreamDecoder {
             .checked_add(function_sections)
             .and_then(|count| count.checked_add(source_sections))
             .ok_or_else(|| error("compiled project cache section count overflows"))?;
-        self.identity = Some(ProjectIdentity {
+        self.identity = Some(ProjectSourceIdentity {
             project_revision,
             source_digest: ProtocolBytes::new(source_digest),
         });
@@ -265,7 +297,7 @@ impl ProjectFileStreamDecoder {
             .decoded_bytes
             .checked_add(decoded_length)
             .ok_or_else(|| error("compiled cache decoded length overflow"))?;
-        if self.decoded_bytes > MAXIMUM_DECODED_PAYLOAD_BYTES {
+        if self.decoded_bytes > self.maximum_decoded_bytes {
             return Err(error("compiled cache decoded sections exceed their limit"));
         }
         let remaining_section_headers = self

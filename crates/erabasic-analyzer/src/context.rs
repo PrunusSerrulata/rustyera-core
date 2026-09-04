@@ -11,6 +11,7 @@ use crate::{catalog::Catalog, identifiers::identifier_key, options::AnalyzerOpti
 
 #[derive(Clone)]
 pub(crate) struct AnalysisParserContext {
+    compatibility: erabasic_compat::CompatibilityIdentity,
     lexer: LexerConfig,
     macros: Arc<MacroTable>,
     instructions: Arc<BTreeMap<String, InstructionSpec>>,
@@ -53,6 +54,7 @@ impl AnalysisParserContext {
                 });
         }
         Self {
+            compatibility: options.compatibility.clone(),
             lexer: LexerConfig {
                 allow_full_width_space: options.allow_full_width_space,
                 debug_semicolon: options.debug_semicolon,
@@ -81,6 +83,10 @@ impl AnalysisParserContext {
 }
 
 impl ParserContext for AnalysisParserContext {
+    fn compatibility(&self) -> erabasic_compat::CompatibilityIdentity {
+        self.compatibility.clone()
+    }
+
     fn lexer_config(&self) -> &LexerConfig {
         &self.lexer
     }

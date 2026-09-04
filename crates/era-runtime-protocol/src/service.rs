@@ -221,12 +221,17 @@ pub enum ServiceKind {
     /// Queries of physical lines and HTML as realized by the authoritative frontend.
     #[n(10)]
     PresentationQuery,
+    /// Safe project-scoped `SQLite` service. The only v1 operation is `rustyera.sql`.
+    #[n(11)]
+    Sql,
 }
 
 pub const LOCAL_DATE_TIME_OPERATION: &str = "local_date_time";
 pub const LOCAL_DATE_TIME_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const RANDOM_SEED_OPERATION: &str = "random_seed";
 pub const RANDOM_SEED_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const AUDIO_OBSERVATION_OPERATION: &str = "audio_observation";
+pub const AUDIO_OBSERVATION_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const IMAGE_METADATA_OPERATION: &str = "image_metadata";
 pub const IMAGE_METADATA_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const IMAGE_PIXEL_OPERATION: &str = "image_pixel";
@@ -242,11 +247,11 @@ pub const GET_DISPLAY_LINE_OPERATION_VERSION: ProtocolVersion = ProtocolVersion:
 pub const HTML_GET_PRINTED_STR_OPERATION: &str = "html_get_printed_str";
 pub const HTML_GET_PRINTED_STR_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const HTML_STRING_LEN_OPERATION: &str = "html_string_len";
-pub const HTML_STRING_LEN_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const HTML_STRING_LEN_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(2, 0);
 pub const HTML_SUBSTRING_OPERATION: &str = "html_substring";
-pub const HTML_SUBSTRING_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const HTML_SUBSTRING_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(2, 0);
 pub const HTML_STRING_LINES_OPERATION: &str = "html_string_lines";
-pub const HTML_STRING_LINES_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
+pub const HTML_STRING_LINES_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(2, 0);
 pub const GGET_TEXT_SIZE_OPERATION: &str = "gget_text_size";
 pub const GGET_TEXT_SIZE_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
 pub const SAMPLE_CANVAS_PIXEL_OPERATION: &str = "sample_canvas_pixel";
@@ -258,6 +263,8 @@ pub const ENCODE_CANVAS_PNG_OPERATION_VERSION: ProtocolVersion = ProtocolVersion
 pub const SERIALIZE_PHYSICAL_HISTORY_OPERATION: &str = "serialize_physical_history";
 pub const SERIALIZE_PHYSICAL_HISTORY_OPERATION_VERSION: ProtocolVersion =
     ProtocolVersion::new(1, 0);
+pub const GET_LINE_GEOMETRY_OPERATION: &str = "get_line_geometry_v1";
+pub const GET_LINE_GEOMETRY_OPERATION_VERSION: ProtocolVersion = ProtocolVersion::new(1, 0);
 
 /// Causal identity shared by every query of realized frontend presentation.
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -287,6 +294,32 @@ pub struct ProjectionStringResponse {
     pub context: ProjectionQueryContext,
     #[n(1)]
     pub value: String,
+}
+
+/// Resolve one runtime-owned line identity in the current realized projection.
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct GetLineGeometryV1Request {
+    #[n(0)]
+    pub context: ProjectionQueryContext,
+    #[n(1)]
+    pub line_id: u64,
+}
+
+/// Geometry needed to reproduce snake `GETLINEY` without exposing a frontend index.
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct GetLineGeometryV1Response {
+    #[n(0)]
+    pub context: ProjectionQueryContext,
+    #[n(1)]
+    pub line_id: u64,
+    #[n(2)]
+    pub top: ProjectionLength,
+    #[n(3)]
+    pub height: ProjectionLength,
+    #[n(4)]
+    pub viewport_height: ProjectionLength,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

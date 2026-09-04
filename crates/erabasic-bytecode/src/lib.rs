@@ -9,6 +9,7 @@ mod codec;
 mod host;
 mod ids;
 mod isa;
+mod method_call;
 mod patch;
 mod source_map;
 mod version;
@@ -28,6 +29,10 @@ pub use host::{
 };
 pub use ids::{Digest, SymbolKey};
 pub use isa::{BytecodeType, EncodedInstruction, InstructionPayload, Opcode, opcode};
+pub use method_call::{
+    CallTextMode, CallTextSpec, MethodResult, UserArgumentAdvance, UserArgumentSpec, UserCallMode,
+    UserCallSpec,
+};
 pub use patch::{BytecodePatch, PatchError, apply_patch, create_patch};
 pub use source_map::{ResolvedSourceLocation, SourceMap, SourceMapEntry, SourceRecord};
 pub use version::{
@@ -37,3 +42,46 @@ pub use version::{
 
 /// Eight-byte marker at the beginning of every `.erbc` file.
 pub const BYTECODE_MAGIC: [u8; 8] = *b"RERABC\0\0";
+
+mod reference_terms;
+pub use reference_terms::*;
+
+mod runtime_symbols;
+pub use runtime_symbols::{
+    CharacterArrayDisposal, MatchNameRejectionKind, RuntimeArgumentConstraint,
+    RuntimeBuiltinSymbol, RuntimeCallableShape, RuntimeExpressionShape, RuntimeReferenceSemantics,
+    RuntimeVariableSymbol,
+};
+
+mod native_authorization;
+mod native_contracts;
+pub use native_authorization::{BoundRuntimeNative, RuntimeNativeAuthorization};
+pub use native_contracts::canonical_native_contract;
+
+mod native_source_shapes;
+mod source_binding;
+pub use native_source_shapes::{canonical_native_source_shapes, native_source_relations};
+pub use source_binding::{RuntimeSourceBinding, bind_runtime_source_arguments};
+
+mod host_authorization;
+mod host_source_shapes;
+pub use host_authorization::{
+    BoundRuntimeHost, RuntimeHostAuthorization, RuntimeHostLowering, RuntimeHostStage,
+    runtime_host_import,
+};
+pub use host_source_shapes::{canonical_host_source_shapes, host_source_place_ranks};
+
+mod staged_authorization;
+pub use staged_authorization::{RuntimeStagedAuthorization, RuntimeStagedKind};
+
+mod bit_call;
+
+pub use bit_call::{BitCallSpec, BitOperation};
+
+mod match_call;
+
+pub use match_call::{MatchCallSpec, MatchInput};
+
+mod map_call;
+
+pub use map_call::MapCallKind;

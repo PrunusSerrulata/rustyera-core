@@ -121,17 +121,27 @@ impl Vm {
                             VmFaultCode::InvalidInstruction,
                             error.to_string(),
                         );
-                        fiber.clear_runtime_forms();
-                        fiber.state = FiberState::Faulted(fault.clone());
-                        report.events.push(VmEvent::FiberFaulted {
-                            fiber: fiber.id,
-                            fault,
-                        });
+                        match self.transition_fault(&mut fiber, fault) {
+                            fault_hooks::FaultTransition::HookStarted => continue,
+                            fault_hooks::FaultTransition::Published(fault) => {
+                                report.events.push(VmEvent::FiberFaulted {
+                                    fiber: fiber.id,
+                                    fault: *fault,
+                                });
+                            }
+                        }
                         break;
                     }
                 };
-                if continuation_origin.is_none()
+                if (continuation_origin.is_none()
                     && position.encoded.opcode == Opcode::CallHost as u16
+                    || fiber
+                        .frames
+                        .last()
+                        .and_then(|frame| frame.runtime_form.as_ref())
+                        .is_some_and(
+                            super::dynamic_form::RuntimeFormContinuation::next_is_host_call,
+                        ))
                     && report.host_calls >= budget.maximum_host_calls
                 {
                     budget_exhausted = true;
@@ -151,8 +161,18 @@ impl Vm {
                 };
                 let outcome = if continuation_origin.is_some() {
                     self.invalidate_path_memo(fiber.id);
-                    resume_runtime_form(self, &mut fiber, natives).and_then(|step| match step {
+                    resume_runtime_form(
+                        self,
+                        &mut fiber,
+                        natives,
+                        &position,
+                        host,
+                        &mut report.host_calls,
+                    )
+                    .and_then(|step| match step {
+                        RuntimeFormStep::Blocked => Ok(StepOutcome::Blocked),
                         RuntimeFormStep::Pending => Ok(StepOutcome::DeferredNative),
+                        RuntimeFormStep::CompleteCall => Ok(StepOutcome::Continue),
                         RuntimeFormStep::Complete(value) => {
                             let frame = fiber.frames.last_mut().ok_or_else(|| {
                                 StepError::new(
@@ -160,7 +180,7 @@ impl Vm {
                                     "STRFORM owner frame disappeared before completion",
                                 )
                             })?;
-                            frame.stack.push(VmValue::String(value));
+                            frame.stack.push(value);
                             Ok(StepOutcome::Continue)
                         }
                     })
@@ -179,8 +199,13 @@ impl Vm {
                         policy,
                     )
                 };
+                self.drain_compatibility_diagnostics(fiber.id, &position, &mut report.events);
                 let additional_instructions = match &outcome {
                     Ok(StepOutcome::BulkProgress(instructions)) => *instructions,
+                    Ok(StepOutcome::BulkFailure {
+                        additional_instructions,
+                        ..
+                    }) => *additional_instructions,
                     _ => 0,
                 };
                 self.observe_path_memo_instruction(
@@ -199,6 +224,13 @@ impl Vm {
                 }
                 match outcome {
                     Ok(StepOutcome::Continue | StepOutcome::BulkProgress(_)) => {
+                        if let Some(fault) = Self::finish_fault_hook_success(&mut fiber) {
+                            report.events.push(VmEvent::FiberFaulted {
+                                fiber: fiber.id,
+                                fault,
+                            });
+                            break;
+                        }
                         if debug_checks_active
                             && let Some(stop) = self.debug_stop_after(&fiber, false, false)
                         {
@@ -259,6 +291,14 @@ impl Vm {
                         break;
                     }
                     Ok(StepOutcome::Completed(value)) => {
+                        if fiber.fault_hook.is_some() {
+                            let fault = Self::finish_fault_hook_terminal(&mut fiber);
+                            report.events.push(VmEvent::FiberFaulted {
+                                fiber: fiber.id,
+                                fault,
+                            });
+                            break;
+                        }
                         report.events.push(VmEvent::FiberCompleted {
                             fiber: fiber.id,
                             value,
@@ -270,16 +310,34 @@ impl Vm {
                         }
                         break;
                     }
-                    Err(error) => {
-                        self.abort_path_memo(fiber.id);
-                        fiber.clear_runtime_forms();
-                        let fault = self.make_fault(fiber.id, &position, error.code, error.message);
-                        fiber.state = FiberState::Faulted(fault.clone());
-                        report.events.push(VmEvent::FiberFaulted {
-                            fiber: fiber.id,
-                            fault,
-                        });
-                        break;
+                    Err(error) | Ok(StepOutcome::BulkFailure { error, .. }) => {
+                        match self.recover_runtime_form_failure(&mut fiber, &error) {
+                            Ok(true) => {
+                                if debug_checks_active
+                                    && let Some(stop) = self.debug_stop_after(&fiber, false, false)
+                                {
+                                    report.events.push(VmEvent::DebugStopped(stop));
+                                    break;
+                                }
+                            }
+                            outcome => {
+                                let error = match outcome {
+                                    Err(internal) => internal,
+                                    Ok(_) => error,
+                                };
+                                let fault = self.make_classified_fault(fiber.id, &position, error);
+                                match self.transition_fault(&mut fiber, fault) {
+                                    fault_hooks::FaultTransition::HookStarted => continue,
+                                    fault_hooks::FaultTransition::Published(fault) => {
+                                        report.events.push(VmEvent::FiberFaulted {
+                                            fiber: fiber.id,
+                                            fault: *fault,
+                                        });
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 if fiber.backward_branches_without_progress
@@ -291,12 +349,15 @@ impl Vm {
                         VmFaultCode::RunawayExecution,
                         "backward-branch watchdog detected execution without host progress",
                     );
-                    fiber.clear_runtime_forms();
-                    fiber.state = FiberState::Faulted(fault.clone());
-                    report.events.push(VmEvent::FiberFaulted {
-                        fiber: fiber.id,
-                        fault,
-                    });
+                    match self.transition_fault(&mut fiber, fault) {
+                        fault_hooks::FaultTransition::HookStarted => {}
+                        fault_hooks::FaultTransition::Published(fault) => {
+                            report.events.push(VmEvent::FiberFaulted {
+                                fiber: fiber.id,
+                                fault: *fault,
+                            });
+                        }
+                    }
                     break;
                 }
             }
@@ -331,16 +392,39 @@ impl Vm {
                             VmFaultCode::RunawayExecution,
                             "instruction-budget watchdog detected persistent execution without progress",
                         );
-                        fiber.clear_runtime_forms();
-                        fiber.state = FiberState::Faulted(fault.clone());
-                        report.events.push(VmEvent::FiberFaulted {
-                            fiber: fiber.id,
-                            fault,
-                        });
+                        if let fault_hooks::FaultTransition::Published(fault) =
+                            self.transition_fault(&mut fiber, fault)
+                        {
+                            report.events.push(VmEvent::FiberFaulted {
+                                fiber: fiber.id,
+                                fault: *fault,
+                            });
+                        }
                     }
                 }
                 if matches!(fiber.state, FiberState::Runnable) {
                     self.runnable.push_back(fiber_id);
+                }
+            }
+            if let Err(error) = natives.retain_map_leases(&super::map_calls::live_map_leases(
+                self.fibers.values().chain(std::iter::once(&fiber)),
+            )) {
+                let frame = fiber.frames.last();
+                let position = InstructionPosition {
+                    generation: frame.map_or(self.current_generation, |frame| frame.generation),
+                    function: frame.map_or(SymbolKey::default(), |frame| frame.function),
+                    instruction: frame.map_or(0, |frame| frame.instruction),
+                    variable: None,
+                    encoded: DispatchInstruction::trap(),
+                };
+                let fault = self.make_classified_fault(fiber.id, &position, error);
+                if let fault_hooks::FaultTransition::Published(fault) =
+                    self.transition_fault(&mut fiber, fault)
+                {
+                    report.events.push(VmEvent::FiberFaulted {
+                        fiber: fiber.id,
+                        fault: *fault,
+                    });
                 }
             }
             if matches!(fiber.state, FiberState::Faulted(_) | FiberState::Cancelled) {
@@ -350,6 +434,7 @@ impl Vm {
                 }
             }
             self.fibers.insert(fiber_id, fiber);
+            self.prune_bit_leases();
             if budget_exhausted || self.debug_is_paused() {
                 break;
             }

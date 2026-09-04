@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use erabasic_ast::{BinaryOp, Directive, Expr, ExprKind, FormPart, FormattedString, UnaryOp};
 use erabasic_data::{
@@ -19,7 +19,46 @@ use registrations::add_registrations;
 
 mod constants;
 
+pub(crate) use constants::ConstantWarnings;
 use constants::{ConstantEvaluation, parse_constant};
+
+pub(crate) trait DeclarationLookup<T> {
+    fn get(&self, key: &str) -> Option<&T>;
+
+    fn contains_key(&self, key: &str) -> bool {
+        self.get(key).is_some()
+    }
+}
+
+impl<T> DeclarationLookup<T> for BTreeMap<String, T> {
+    fn get(&self, key: &str) -> Option<&T> {
+        BTreeMap::get(self, key)
+    }
+}
+
+pub(crate) struct LayeredDeclarationLookup<T> {
+    base: Arc<BTreeMap<String, T>>,
+    local: BTreeMap<String, T>,
+}
+
+impl<T> LayeredDeclarationLookup<T> {
+    pub(crate) fn new(base: Arc<BTreeMap<String, T>>) -> Self {
+        Self {
+            base,
+            local: BTreeMap::new(),
+        }
+    }
+
+    pub(crate) fn insert(&mut self, key: String, value: T) {
+        self.local.insert(key, value);
+    }
+}
+
+impl<T> DeclarationLookup<T> for LayeredDeclarationLookup<T> {
+    fn get(&self, key: &str) -> Option<&T> {
+        self.local.get(key).or_else(|| self.base.get(key))
+    }
+}
 
 pub(crate) struct DeclarationInput<'a> {
     pub source: SourceId,
@@ -35,6 +74,15 @@ pub(crate) struct DeclaredVariable {
     pub location: SourceLocation,
     pub reference: bool,
     pub static_lifetime: bool,
+    pub runtime_initializer: Option<RuntimeInitializer>,
+    pub arithmetic_diagnostics: Vec<AnalyzerDiagnostic>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RuntimeInitializer {
+    pub source: String,
+    pub location: SourceLocation,
+    pub value_count: usize,
 }
 
 pub(crate) struct ScopedDeclaration {
@@ -55,6 +103,7 @@ pub(crate) fn analyze_global_declarations(
     context: &dyn ParserContext,
     options: &AnalyzerOptions,
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
+    progress: Option<&dyn crate::project::AnalysisProgressCallback>,
 ) -> DeclarationOutput {
     let mut output = DeclarationOutput::default();
     let mut constants = BTreeMap::new();
@@ -75,13 +124,18 @@ pub(crate) fn analyze_global_declarations(
         .filter(|input| matches!(input.directive.name.as_str(), "DIM" | "DIMS"))
         .collect();
 
+    let progress = crate::project::ProgressCounter::new(
+        crate::project::AnalysisProgressStage::DeclaringGlobals,
+        pending.len(),
+        progress,
+    );
     // Emuera queues every header DIM and retries the queue while another declaration
     // was resolved. This permits dimensions to refer to constants declared later.
     while !pending.is_empty() {
         let before = pending.len();
         let mut deferred = Vec::new();
         for input in pending {
-            match parse_dim(
+            let parsed = parse_dim(
                 input,
                 false,
                 context,
@@ -89,8 +143,14 @@ pub(crate) fn analyze_global_declarations(
                 &variable_dimensions,
                 &index_resolver,
                 options,
-            ) {
+            );
+            // Count declarations only once they resolve or produce a final error.
+            if !matches!(&parsed, Err(DimError::UnknownConstant(_))) {
+                progress.advance();
+            }
+            match parsed {
                 Ok(variable) => {
+                    diagnostics.extend(variable.arithmetic_diagnostics.iter().cloned());
                     let key = normalize(variable.schema.id.name(), options.ignore_case);
                     if is_reserved(variable.schema.id.name()) {
                         diagnostics.push(at_input(
@@ -128,6 +188,7 @@ pub(crate) fn analyze_global_declarations(
         }
         if deferred.len() == before {
             for input in deferred {
+                progress.advance();
                 diagnostics.push(at_input(
                     input,
                     AnalyzerDiagnosticCode::UnknownIdentifier,
@@ -144,8 +205,8 @@ pub(crate) fn analyze_global_declarations(
 pub(crate) fn parse_private_declaration(
     input: &DeclarationInput<'_>,
     context: &dyn ParserContext,
-    constants: &BTreeMap<String, ConstantValue>,
-    variable_dimensions: &BTreeMap<String, Vec<usize>>,
+    constants: &dyn DeclarationLookup<ConstantValue>,
+    variable_dimensions: &dyn DeclarationLookup<Vec<usize>>,
     index_resolver: &IndexResolver,
     options: &AnalyzerOptions,
 ) -> Result<DeclaredVariable, String> {
@@ -164,23 +225,24 @@ pub(crate) fn parse_private_declaration(
 pub(crate) fn parse_integer_constant(
     source: &str,
     context: &dyn ParserContext,
-    constants: &BTreeMap<String, ConstantValue>,
-    variable_dimensions: &BTreeMap<String, Vec<usize>>,
+    constants: &dyn DeclarationLookup<ConstantValue>,
+    variable_dimensions: &dyn DeclarationLookup<Vec<usize>>,
     index_resolver: &IndexResolver,
     options: &AnalyzerOptions,
-) -> Result<i64, String> {
+) -> Result<(i64, ConstantWarnings), String> {
     let evaluation = ConstantEvaluation {
         constants,
         variable_dimensions,
         index_resolver,
         options,
+        warnings: std::cell::RefCell::default(),
     };
     let value = parse_constant(strip_declaration_comment(source), context, &evaluation)
         .map_err(|error| error.to_string())?;
     let ConstantValue::Integer(value) = value else {
         return Err("an integer constant expression is required".into());
     };
-    Ok(value)
+    Ok((value, evaluation.warnings.into_inner()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -192,8 +254,8 @@ pub(crate) fn parse_scoped_declaration(
     raw_arguments: &str,
     span: erabasic_ast::Span,
     context: &dyn ParserContext,
-    constants: &BTreeMap<String, ConstantValue>,
-    variable_dimensions: &BTreeMap<String, Vec<usize>>,
+    constants: &dyn DeclarationLookup<ConstantValue>,
+    variable_dimensions: &dyn DeclarationLookup<Vec<usize>>,
     index_resolver: &IndexResolver,
     options: &AnalyzerOptions,
 ) -> Result<ScopedDeclaration, String> {
@@ -269,8 +331,8 @@ fn parse_dim(
     input: &DeclarationInput<'_>,
     private: bool,
     context: &dyn ParserContext,
-    constants: &BTreeMap<String, ConstantValue>,
-    variable_dimensions: &BTreeMap<String, Vec<usize>>,
+    constants: &dyn DeclarationLookup<ConstantValue>,
+    variable_dimensions: &dyn DeclarationLookup<Vec<usize>>,
     index_resolver: &IndexResolver,
     options: &AnalyzerOptions,
 ) -> Result<DeclaredVariable, DimError> {
@@ -279,6 +341,7 @@ fn parse_dim(
         variable_dimensions,
         index_resolver,
         options,
+        warnings: std::cell::RefCell::default(),
     };
     let is_string = input.directive.name == "DIMS";
     // Directive arguments are kept raw by the syntax parser. Emuera's declaration
@@ -386,12 +449,14 @@ fn parse_dim(
     }
 
     let mut initial_values = Vec::new();
+    let mut runtime_initializer = None;
     if let Some(initializer) = initializer_text {
         if reference || character || dimensions.len() >= 2 {
             return Err(DimError::InvalidInitializer(
                 "this declaration cannot have an initializer".into(),
             ));
         }
+        let trimmed_initializer = initializer.trim();
         let mut segments = split_top_level(initializer, ',');
         if segments
             .last()
@@ -399,11 +464,50 @@ fn parse_dim(
         {
             segments.pop();
         }
-        for segment in segments {
-            if segment.trim().is_empty() {
+        if segments.iter().any(|segment| segment.trim().is_empty()) {
+            return Err(DimError::InvalidInitializer(
+                "array initializers cannot be omitted".into(),
+            ));
+        }
+        let runtime_values = private && !is_static && dimensions.len() <= 1;
+        if runtime_values {
+            if trimmed_initializer.is_empty() {
                 return Err(DimError::InvalidInitializer(
-                    "array initializers cannot be omitted".into(),
+                    "dynamic private initializer cannot be empty".into(),
                 ));
+            }
+            if dimensions.is_empty() {
+                dimensions.push(segments.len());
+            }
+            if segments.len() > dimensions[0] {
+                return Err(DimError::InvalidInitializer(
+                    "initializer count does not match the declared size".into(),
+                ));
+            }
+            let directive_text = &input.text[input.directive.span.start..input.directive.span.end];
+            let relative = directive_text
+                .find('=')
+                .and_then(|equals| {
+                    directive_text[equals + 1..]
+                        .find(trimmed_initializer)
+                        .map(|offset| equals + 1 + offset)
+                })
+                .unwrap_or_default();
+            runtime_initializer = Some(RuntimeInitializer {
+                source: trimmed_initializer.to_owned(),
+                location: SourceLocation::new(
+                    input.source,
+                    erabasic_ast::Span::new(
+                        input.directive.span.start + relative,
+                        input.directive.span.start + relative + trimmed_initializer.len(),
+                    ),
+                ),
+                value_count: segments.len(),
+            });
+        }
+        for segment in segments {
+            if runtime_values {
+                break;
             }
             let value = parse_constant(segment, context, &constant_evaluation)?;
             if matches!(value, ConstantValue::String(_)) != is_string {
@@ -491,7 +595,46 @@ fn parse_dim(
         location: SourceLocation::new(input.source, input.directive.span),
         reference,
         static_lifetime: is_static,
+        runtime_initializer,
+        arithmetic_diagnostics: constant_warnings(
+            constant_evaluation.warnings.into_inner(),
+            input.source,
+            input.path,
+            input.text,
+            input.directive.span,
+        ),
     })
+}
+
+pub(crate) fn constant_warnings(
+    warnings: ConstantWarnings,
+    source: SourceId,
+    path: &str,
+    text: &str,
+    span: erabasic_ast::Span,
+) -> Vec<AnalyzerDiagnostic> {
+    warnings
+        .into_iter()
+        .map(|(warning, message)| {
+            AnalyzerDiagnostic::at(
+                match warning {
+                    erabasic_compat::IntegerArithmeticWarning::Overflow => {
+                        AnalyzerDiagnosticCode::IntegerOverflow
+                    }
+                    erabasic_compat::IntegerArithmeticWarning::DivideByZero => {
+                        AnalyzerDiagnosticCode::IntegerDivideByZero
+                    }
+                },
+                AnalyzerDiagnosticSeverity::Warning,
+                1,
+                source,
+                path,
+                text,
+                span,
+                message,
+            )
+        })
+        .collect()
 }
 
 fn take_word(source: &str) -> Option<(&str, &str)> {

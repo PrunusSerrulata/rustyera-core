@@ -22,11 +22,13 @@ use crate::{
     StorageRequest, StorageResponse, VersionRejected, WaitChange,
 };
 
-pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(35, 0);
+pub const RUNTIME_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(46, 0);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct RuntimeResynchronized {
+    #[n(9)]
+    pub compatibility: Option<crate::CompatibilityIdentity>,
     #[n(0)]
     pub epoch: u64,
     #[n(1)]
@@ -158,6 +160,10 @@ pub enum RuntimeMessage {
     FullProjectManifest(#[n(0)] FullProjectManifest),
     #[n(71)]
     StateExportCancel(#[n(0)] StateExportCancel),
+    #[n(72)]
+    ResolveProjectCompatibility(#[n(0)] crate::ResolveProjectCompatibility),
+    #[n(73)]
+    ProjectCompatibilityResolved(#[n(0)] crate::ProjectCompatibilityResolved),
     #[n(90)]
     ShutdownRequest(#[n(0)] ShutdownRequest),
     #[n(91)]
@@ -235,6 +241,8 @@ impl RuntimeMessage {
             Self::StateTransferCancel(_) => 69,
             Self::FullProjectManifest(_) => 70,
             Self::StateExportCancel(_) => 71,
+            Self::ResolveProjectCompatibility(_) => 72,
+            Self::ProjectCompatibilityResolved(_) => 73,
             Self::ShutdownRequest(_) => 90,
             Self::ShutdownReady(_) => 91,
             Self::Fault(_) => 92,

@@ -3,9 +3,14 @@
 //! This development protocol intentionally has no backward-compatibility promise until
 //! a frontend exists. Filesystem, clock, rendering and device work remain outside it.
 
+mod audio;
+mod compatibility;
 mod configuration;
 mod effect;
+mod environment;
+pub use environment::*;
 mod extension;
+mod html_query;
 mod input;
 mod key_macro;
 mod lifecycle;
@@ -14,8 +19,18 @@ mod message;
 mod presentation;
 mod project;
 mod service;
+mod sql;
+pub mod storage_pattern;
 mod value;
 
+pub use audio::{
+    AUDIO_SOUND_CHANNEL_COUNT, AudioChannelV1, AudioObservationRequestV1,
+    AudioObservationResponseV1, AudioPlaybackStateV1,
+};
+pub use compatibility::{
+    CompatibilityDiagnosticContext, ProjectCompatibilityResolved, RequiredCapability,
+    ResolveProjectCompatibility,
+};
 pub use configuration::{
     CONFIG_BROWSER, CONFIG_RUNTIME, CONFIG_TAURI, CONFIG_TUI, ClientPreferenceLayers,
     ClientPreferencesApplied, ConfigurationApplication, ConfigurationChange,
@@ -28,14 +43,24 @@ pub use effect::{
     EffectOutcome, EffectOutcomeStatus, VideoEffect,
 };
 pub use era_protocol::ProtocolBytes;
+pub use erabasic_compat::{
+    AUDIO_SERVICE_CONTRACT_NAME, AUDIO_SERVICE_CONTRACT_VERSION, CompatibilityIdentity,
+    CompatibilityProfileId, CompatibilityServiceContract, SNAKE_INTEROP_SAVE_CODEC,
+};
 pub use erabasic_html::{
-    HtmlAlignment, HtmlAttribute, HtmlBoxModel, HtmlDocument, HtmlElementKind, HtmlElementSemantic,
-    HtmlInteraction, HtmlLength, HtmlNode, parse_document,
+    HtmlAlignment, HtmlAttribute, HtmlBoxModel, HtmlColorMatrix, HtmlDisplayMode, HtmlDocument,
+    HtmlElementKind, HtmlElementSemantic, HtmlFontEdging, HtmlFontHinting, HtmlInteraction,
+    HtmlLength, HtmlNode, HtmlTextRenderIntent, HtmlTextRenderer, HtmlVerticalAlignment,
+    parse_document,
 };
 pub use extension::{
     ExtensionArgument, ExtensionArgumentStyle, ExtensionCallableKind, ExtensionDeclaration,
     ExtensionInvocation, ExtensionRegistrySubmit, ExtensionResult, ExtensionValueType,
     ExtensionWrite,
+};
+pub use html_query::{
+    HtmlCutAdvanceV2, HtmlMeasureProbeV2, HtmlMeasureRequestV2, HtmlMeasureResponseV2,
+    HtmlProbeCutV2, HtmlProbeModeV2, HtmlProbeResponseV2, HtmlProbeResultV2, HtmlQueryStyleV2,
 };
 pub use input::{
     AdvanceTime, DeviceStateChanged, FrontendInput, InputDeviceKind, InputIntent, InputUndoRequest,
@@ -50,9 +75,10 @@ pub use lifecycle::{
     ExecutionOrigin, ExitReason, ExitRequested, FaultCode, FullProjectManifest, InputModality,
     ProjectionLength, ProjectionObservation, ProjectionSize, ProjectionState, ProjectionTransform,
     ResynchronizeRequest, ReturnToTitleRequest, RuntimeFault, RuntimeFeature, RuntimeLimits,
-    RuntimePhase, RuntimeStateChanged, SequenceAcknowledgement, ServerHello, ServiceCapability,
-    ShutdownReady, ShutdownRequest, SnapshotExportPurpose, SnapshotIneligibleReason, StartMode,
-    StartRequest, StateExportCancel, StateExportChunk, StateExportChunkRequest, StateExportKind,
+    RuntimePhase, RuntimeStateChanged, RuntimeVmFault, RuntimeVmFaultCategory, RuntimeVmFaultCode,
+    RuntimeVmFaultDetail, SequenceAcknowledgement, ServerHello, ServiceCapability, ShutdownReady,
+    ShutdownRequest, SnapshotExportPurpose, SnapshotIneligibleReason, StartMode, StartRequest,
+    StateExportCancel, StateExportChunk, StateExportChunkRequest, StateExportKind,
     StateExportReady, StateExportRequest, StateExportResult, StateImportAccepted, StateImportBegin,
     StateImportChunk, StateImportCommit, StateImportReady, StateTransferCancel,
     StateTransferDescriptor, TextBoxLayout, VersionRejected,
@@ -61,12 +87,14 @@ pub use log::{DiagnosticNotification, RuntimeLog, RuntimeLogLevel};
 pub use message::{RUNTIME_PROTOCOL_VERSION, RuntimeMessage, RuntimeResynchronized};
 pub use presentation::{
     AudioState, CanvasPoint, CanvasRect, CanvasReplay, CanvasReplayCommand, CanvasSize,
-    CellAlignment, Color, DisplayLine, DisplayRun, LineAlignment, LogicalLength, LogicalRect,
-    MediaPlacement, PresentationDelta, PresentationHistory, PresentationHistoryOperation,
-    PresentationLength, PresentationOperation, PresentationSettings, PresentationSnapshot,
-    RationalOpacity, RedrawState, ResourceReplay, SeparatorRole, Shape, SpriteFrameReplay,
-    SpriteReplay, SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle, TooltipFormat,
-    TooltipFormatFlag, TooltipSettings,
+    CellAlignment, CellWidthIntent, Color, DisplayLine, DisplayRun, LineAlignment, LogicalLength,
+    LogicalRect, MediaPlacement, PresentationDelta, PresentationHistory,
+    PresentationHistoryOperation, PresentationLength, PresentationOperation, PresentationSettings,
+    PresentationSnapshot, RationalOpacity, RedrawState, ResourceReplay, SceneAnchorV1,
+    SceneDeltaV1, SceneInteractionV1, SceneLayerV1, SceneOffsetV1, SceneOperationV1,
+    SceneReplayError, SceneScrollPolicyV1, SceneSizeV1, SceneSourceV1, SceneStateV1, SeparatorRole,
+    Shape, SpriteFrameReplay, SpriteReplay, SystemTextArgument, SystemTextKey, SystemTextRef,
+    TextStyle, TooltipFormat, TooltipFormatFlag, TooltipSettings,
 };
 pub use project::{
     ExternalResource, FileCategory, FileChange, FilePayload, FrontendIoError, FrontendIoErrorKind,
@@ -75,14 +103,17 @@ pub use project::{
     SourceLocation, SubmittedFile, validate_relative_path,
 };
 pub use service::{
-    CancelExternalRequest, CanvasPixelRequest, CanvasPixelResponse, DECODE_CANVAS_IMAGE_OPERATION,
+    AUDIO_OBSERVATION_OPERATION, AUDIO_OBSERVATION_OPERATION_VERSION, CancelExternalRequest,
+    CanvasPixelRequest, CanvasPixelResponse, DECODE_CANVAS_IMAGE_OPERATION,
     DECODE_CANVAS_IMAGE_OPERATION_VERSION, DecodeCanvasImageRequest, DecodeCanvasImageResponse,
     ENCODE_CANVAS_PNG_OPERATION, ENCODE_CANVAS_PNG_OPERATION_VERSION, EncodeCanvasPngRequest,
     EncodeCanvasPngResponse, ExternalRequestKind, GET_DISPLAY_LINE_OPERATION,
     GET_DISPLAY_LINE_OPERATION_VERSION, GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION,
-    GGET_TEXT_SIZE_OPERATION, GGET_TEXT_SIZE_OPERATION_VERSION, GetKeyStateRequest,
-    GetKeyStateResponse, HTML_GET_PRINTED_STR_OPERATION, HTML_GET_PRINTED_STR_OPERATION_VERSION,
-    HTML_STRING_LEN_OPERATION, HTML_STRING_LEN_OPERATION_VERSION, HTML_STRING_LINES_OPERATION,
+    GET_LINE_GEOMETRY_OPERATION, GET_LINE_GEOMETRY_OPERATION_VERSION, GGET_TEXT_SIZE_OPERATION,
+    GGET_TEXT_SIZE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse,
+    GetLineGeometryV1Request, GetLineGeometryV1Response, HTML_GET_PRINTED_STR_OPERATION,
+    HTML_GET_PRINTED_STR_OPERATION_VERSION, HTML_STRING_LEN_OPERATION,
+    HTML_STRING_LEN_OPERATION_VERSION, HTML_STRING_LINES_OPERATION,
     HTML_STRING_LINES_OPERATION_VERSION, HTML_SUBSTRING_OPERATION,
     HTML_SUBSTRING_OPERATION_VERSION, HtmlMeasureRequest, HtmlSubstringResponse,
     IMAGE_METADATA_OPERATION, IMAGE_METADATA_OPERATION_VERSION, IMAGE_PIXEL_OPERATION,
@@ -101,4 +132,5 @@ pub use service::{
     StorageResponse, StorageResult, TextExtentRequest, TextExtentResponse, UPDATE_CHECK_OPERATION,
     UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest, UpdateCheckResponse,
 };
+pub use sql::*;
 pub use value::ProtocolValue;

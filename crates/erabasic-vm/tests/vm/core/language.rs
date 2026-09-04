@@ -1,4 +1,337 @@
 use super::*;
+
+type IntegerMutationBoundary = (i64, i64, i64, i64, i64);
+
+fn integer_mutation_boundary_cases() -> [(&'static str, [IntegerMutationBoundary; 3]); 4] {
+    // Each row contains input, original return/storage, then snake return/storage.
+    [
+        (
+            "++FLAG:0",
+            [
+                (42, 43, 43, 43, 43),
+                (
+                    i64::MIN,
+                    i64::MIN + 1,
+                    i64::MIN + 1,
+                    i64::MIN + 1,
+                    i64::MIN + 1,
+                ),
+                (i64::MAX, i64::MIN, i64::MIN, i64::MAX, i64::MAX),
+            ],
+        ),
+        (
+            "--FLAG:0",
+            [
+                (42, 41, 41, 41, 41),
+                (i64::MIN, i64::MAX, i64::MAX, i64::MIN, i64::MIN),
+                (
+                    i64::MAX,
+                    i64::MAX - 1,
+                    i64::MAX - 1,
+                    i64::MAX - 1,
+                    i64::MAX - 1,
+                ),
+            ],
+        ),
+        (
+            "FLAG:0++",
+            [
+                (42, 42, 43, 42, 43),
+                (i64::MIN, i64::MIN, i64::MIN + 1, i64::MIN, i64::MIN + 1),
+                (i64::MAX, i64::MAX, i64::MIN, i64::MAX - 1, i64::MAX),
+            ],
+        ),
+        (
+            "FLAG:0--",
+            [
+                (42, 42, 41, 42, 41),
+                (i64::MIN, i64::MIN, i64::MAX, i64::MIN + 1, i64::MIN),
+                (i64::MAX, i64::MAX, i64::MAX - 1, i64::MAX, i64::MAX - 1),
+            ],
+        ),
+    ]
+}
+
+#[test]
+fn prefix_and_postfix_preserve_profile_specific_return_and_storage_at_integer_boundaries() {
+    for profile in [
+        erabasic_compat::CompatibilityProfileId::EmueraEm,
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    ] {
+        let snake = profile == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake;
+        for (expression, cases) in integer_mutation_boundary_cases() {
+            let artifact = compile_source_with_options(
+                &format!("@SYSTEM_TITLE\nRESULT = {expression}\nRETURN RESULT\n"),
+                &AnalyzerOptions {
+                    compatibility: erabasic_compat::CompatibilityIdentity::for_profile(profile),
+                    ..AnalyzerOptions::default()
+                },
+            );
+            let flag = artifact
+                .globals
+                .iter()
+                .find(|global| global.name == "FLAG")
+                .unwrap()
+                .key;
+            let result = artifact
+                .globals
+                .iter()
+                .find(|global| global.name == "RESULT")
+                .unwrap()
+                .key;
+            for (initial, original_return, original_store, snake_return, snake_store) in cases {
+                let (returned, stored) = if snake {
+                    (snake_return, snake_store)
+                } else {
+                    (original_return, original_store)
+                };
+                let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+                let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+                vm.write_variable(flag, &[0], None, VmValue::Integer(initial))
+                    .unwrap();
+                let fiber = vm
+                    .spawn_entry(artifact.functions[0].key, Vec::new())
+                    .unwrap();
+                let report = vm.run_slice(
+                    &mut ReadyHost::default(),
+                    &mut natives,
+                    RunBudget::default(),
+                );
+                assert!(
+                    matches!(vm.fiber_status(fiber), Some(FiberStatus::Completed(_))),
+                    "{profile}: {expression}, input {initial}: {report:?}"
+                );
+                assert_eq!(
+                    vm.read_variable(result, &[0], None),
+                    Ok(VmValue::Integer(returned)),
+                    "{profile}: {expression}, input {initial}: return"
+                );
+                assert_eq!(
+                    vm.read_variable(flag, &[0], None),
+                    Ok(VmValue::Integer(stored)),
+                    "{profile}: {expression}, input {initial}: storage"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn snake_unchecked_calls_and_toint_use_the_compiled_native_policy() {
+    let artifact = compile_source_with_options(
+        r#"@SYSTEM_TITLE
+#DIM HIGH
+#DIM LOW
+#DIMS NUMBER
+HIGH = 9223372036854775807
+LOW = -9223372036854775807 - 1
+RESULT:0 = UNCHECKED_ADD(HIGH, 1)
+RESULT:1 = UNCHECKED_SUB(LOW, 1)
+RESULT:2 = UNCHECKED_MUL(HIGH, 2)
+RESULT:3 = UNCHECKED_NEG(LOW)
+NUMBER '= "9223372036854775808"
+RESULT:4 = TOINT(NUMBER)
+RESULT:5 = TOINT("0b102")
+RESULT:6 = TOINT("12.99")
+RETURN RESULT:0
+"#,
+        &AnalyzerOptions {
+            compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+            ..AnalyzerOptions::default()
+        },
+    );
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let fiber = vm
+        .spawn_entry(artifact.functions[0].key, Vec::new())
+        .unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        matches!(vm.fiber_status(fiber), Some(FiberStatus::Completed(_))),
+        "{report:?}"
+    );
+    for (index, expected) in [i64::MIN, i64::MAX, -2, i64::MIN, 0, 0, 12]
+        .into_iter()
+        .enumerate()
+    {
+        assert_eq!(
+            vm.read_variable(result, &[index as u64], None),
+            Ok(VmValue::Integer(expected))
+        );
+    }
+}
+
+#[test]
+fn snake_toint_does_not_catch_errors_evaluating_its_argument() {
+    let artifact = compile_source_with_options(
+        r"@SYSTEM_TITLE
+#DIMS VALUES, 1
+#DIM INDEX
+INDEX = 99
+RESULT = 73
+RESULT = TOINT(VALUES:INDEX)
+RETURN
+",
+        &AnalyzerOptions {
+            compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+            ..AnalyzerOptions::default()
+        },
+    );
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(artifact.functions[0].key, Vec::new())
+        .unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert_eq!(
+        vm.read_variable(result, &[0], None),
+        Ok(VmValue::Integer(73))
+    );
+    assert!(
+        report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. }))
+    );
+}
+
+#[test]
+fn inclusive_string_comparisons_preserve_equal_and_ordered_values_in_both_profiles() {
+    for profile in [
+        erabasic_compat::CompatibilityProfileId::EmueraEm,
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    ] {
+        let artifact = compile_source_with_options(
+            r#"@SYSTEM_TITLE
+#DIMS L_TEXT
+#DIMS R_TEXT
+L_TEXT '= "alpha"
+R_TEXT '= "alpha"
+RESULT = (L_TEXT >= R_TEXT) + (L_TEXT <= R_TEXT)
+R_TEXT '= "beta"
+RESULT += (L_TEXT <= R_TEXT) * 4
+RESULT += (L_TEXT >= R_TEXT) * 8
+RESULT += (R_TEXT >= L_TEXT) * 16
+RESULT += (R_TEXT <= L_TEXT) * 32
+RETURN RESULT
+"#,
+            &AnalyzerOptions {
+                compatibility: erabasic_compat::CompatibilityIdentity::for_profile(profile),
+                ..AnalyzerOptions::default()
+            },
+        );
+        assert_eq!(
+            run_compiled_result(&artifact),
+            VmValue::Integer(22),
+            "{profile}"
+        );
+    }
+}
+
+#[test]
+fn dynamic_method_depth_failure_preserves_the_targets_persistent_argument() {
+    let artifact = compile_source(
+        r#"@DEPTH_ENTRY
+RESULT = GETMETH("PERSISTENT_TARGET", , 37)
+RETURN
+@PERSISTENT_TARGET, ARG
+#FUNCTION
+FLAG:1 += 1
+RETURNF ARG
+"#,
+    );
+    let target = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "PERSISTENT_TARGET")
+        .unwrap();
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "DEPTH_ENTRY")
+        .unwrap()
+        .key;
+    let argument = target.parameters[0].key;
+    assert_eq!(
+        artifact
+            .globals
+            .iter()
+            .find(|global| global.key == argument)
+            .unwrap()
+            .storage,
+        BytecodeStorage::FunctionPersistent
+    );
+    let flag = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "FLAG")
+        .unwrap()
+        .key;
+    let mut vm = Vm::new(
+        validated(&artifact),
+        VmConfig {
+            maximum_call_depth: 1,
+            ..VmConfig::default()
+        },
+    );
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    // Prime the real persistent parameter through a legal root call, rather than
+    // asserting that a DYNAMIC local which never existed remained unchanged.
+    let primed = vm
+        .spawn_entry(target.key, vec![VmValue::Integer(999)])
+        .unwrap();
+    vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert_eq!(
+        vm.fiber_status(primed),
+        Some(FiberStatus::Completed(Some(VmValue::Integer(999))))
+    );
+    assert_eq!(
+        vm.read_variable(argument, &[0], None),
+        Ok(VmValue::Integer(999))
+    );
+    vm.write_variable(flag, &[1], None, VmValue::Integer(0))
+        .unwrap();
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(report.events.iter().any(|event| matches!(event, VmEvent::FiberFaulted { fault, .. } if fault.code == VmFaultCode::ResourceLimit)), "{report:?}");
+    assert_eq!(
+        vm.read_variable(argument, &[0], None),
+        Ok(VmValue::Integer(999))
+    );
+    assert_eq!(vm.read_variable(flag, &[1], None), Ok(VmValue::Integer(0)));
+}
+
 #[test]
 fn power_statement_writes_the_destination_instead_of_passing_its_place_as_an_operand() {
     let artifact = compile_source("@SYSTEM_TITLE\nPOWER RESULT, 2, 3\nRETURN RESULT\n");

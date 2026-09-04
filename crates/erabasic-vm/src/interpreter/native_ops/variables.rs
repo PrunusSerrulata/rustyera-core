@@ -17,7 +17,8 @@ pub(in super::super) fn execute_swap_transaction(
     let left_value = vm.read_place(fiber, left)?;
     let right_value = vm.read_place(fiber, right)?;
     if left_value.value_type() != right_value.value_type() {
-        return Err(VmError::InvalidArguments(
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
             "SWAP places have different value types".into(),
         ));
     }
@@ -47,14 +48,29 @@ pub(in super::super) fn execute_integer_mutation(
             "integer mutation target has a different type".into(),
         ));
     };
-    let updated = if mode % 2 == 0 {
-        previous.wrapping_add(1)
+    let generation = fiber
+        .frames
+        .last()
+        .ok_or_else(|| VmError::InvalidState("integer mutation frame is missing".into()))?
+        .generation;
+    let increment = mode % 2 == 0;
+    let operation = if increment {
+        erabasic_compat::IntegerOperation::Add
     } else {
-        previous.wrapping_sub(1)
+        erabasic_compat::IntegerOperation::Subtract
     };
+    let updated = vm
+        .integer_arithmetic(generation, operation, previous, Some(1))
+        .map_err(VmError::ScriptFailure)?;
     vm.write_place(fiber, place, VmValue::Integer(updated))?;
     Ok(VmValue::Integer(if *mode >= 2 {
-        previous
+        // Postfix reverses one step after the policy-selected update. This also
+        // preserves the pinned snake result at a saturated endpoint.
+        if increment {
+            updated.wrapping_sub(1)
+        } else {
+            updated.wrapping_add(1)
+        }
     } else {
         updated
     }))
@@ -106,9 +122,9 @@ pub(in super::super) fn native_place_view(
     argument_index: usize,
     target: &PlaceDescriptor,
 ) -> Result<NativePlaceView, VmError> {
-    let values = if target.indices.is_empty() {
-        array_snapshot_any_rank(vm, fiber, target)
-            .or_else(|_| vm.read_place(fiber, target).map(|value| vec![value]))?
+    let (_, definition) = vm.place_definition(fiber, target)?;
+    let values = if target.indices.is_empty() && !definition.dimensions.is_empty() {
+        array_snapshot_any_rank(vm, fiber, target)?
     } else {
         vec![vm.read_place(fiber, target)?]
     };
@@ -131,6 +147,11 @@ pub(in super::super) fn validate_native_ready(
         ));
     }
     for write in &ready.writes {
+        if write.target.backing.is_some() {
+            return Err(VmError::InvalidState(
+                "Native cannot inject an array backing identity".into(),
+            ));
+        }
         if write.target.fiber.is_some_and(|owner| owner != fiber.id) {
             return Err(VmError::InvalidState(
                 "native write belongs to another fiber".into(),
@@ -191,11 +212,14 @@ pub(in super::super) fn execute_bit_mutation(
         .enumerate()
         .map(|(index, argument)| match argument {
             VmValue::Integer(bit @ 0..=63) => Ok(u32::try_from(*bit).unwrap_or(63)),
-            VmValue::Integer(bit) => Err(VmError::InvalidArguments(format!(
-                "{} bit argument {} ({bit}) is outside 0..63",
-                operation.to_ascii_uppercase(),
-                index + 2
-            ))),
+            VmValue::Integer(bit) => Err(script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                format!(
+                    "{} bit argument {} ({bit}) is outside 0..63",
+                    operation.to_ascii_uppercase(),
+                    index + 2
+                ),
+            )),
             _ => Err(VmError::InvalidArguments(format!(
                 "{} bit argument {} is not an integer",
                 operation.to_ascii_uppercase(),
@@ -288,7 +312,7 @@ pub(in super::super) fn execute_getnum(
     let Ok(data_dimension) = usize::try_from(data_dimension) else {
         return Ok(VmValue::Integer(-1));
     };
-    let value = resolve_named_index_value(program, &variable, &key, data_dimension);
+    let value = resolve_builtin_index_value(program, &variable, &key, data_dimension);
     Ok(VmValue::Integer(value.unwrap_or(-1)))
 }
 
@@ -307,9 +331,9 @@ pub(in super::super) fn execute_erdname(
             "ERDNAME argument 2 is not an integer".into(),
         ));
     };
-    let Ok(index) = usize::try_from(*index) else {
+    if *index < 0 {
         return Ok(VmValue::String(String::new()));
-    };
+    }
     let selector = match arguments.get(2) {
         None | Some(VmValue::Integer(i64::MIN)) => None,
         Some(VmValue::Integer(value)) => Some(*value),
@@ -347,10 +371,19 @@ pub(in super::super) fn execute_erdname(
                 .map(|(_, table)| table)
         })
         .and_then(|table| {
-            table
-                .entries
-                .iter()
-                .find_map(|(name, value)| (*value == index).then(|| name.clone()))
+            if program
+                .artifact
+                .manifest
+                .compatibility
+                .uses_snake_alias_rules()
+            {
+                table.canonical_names.get(index).cloned()
+            } else {
+                table
+                    .entries
+                    .iter()
+                    .find_map(|(name, value)| (value == index).then(|| name.clone()))
+            }
         })
         .unwrap_or_default();
     Ok(VmValue::String(value))
@@ -367,9 +400,10 @@ pub(in super::super) fn execute_index_by_name(
         resolve_named_index_value(program, &variable, &key, data_dimension)
     });
     let value = value.ok_or_else(|| {
-        VmError::InvalidArguments(format!(
-            "{variable} has no named index {key:?} in dimension {dimension}"
-        ))
+        script_native_error(
+            crate::ScriptFaultKind::Resolve,
+            format!("{variable} has no named index {key:?} in dimension {dimension}"),
+        )
     })?;
     Ok(VmValue::Integer(value))
 }
@@ -391,14 +425,218 @@ pub(in super::super) fn execute_set_var(
     let (target, value_type, variable_name) =
         resolve_dynamic_variable_target(vm, fiber, reference, true)?;
     if value.value_type() != value_type {
-        return Err(VmError::InvalidArguments(format!(
-            "SETVAR value type differs from {variable_name}"
-        )));
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
+            format!("SETVAR value type differs from {variable_name}"),
+        ));
     }
     // Resolve and type-check the complete destination before the mutation.
     let _ = vm.read_place(fiber, &target)?;
     vm.write_place(fiber, &target, value)?;
     Ok(VmValue::Integer(1))
+}
+
+pub(in super::super) fn execute_var_set_ex(
+    vm: &mut Vm,
+    fiber: &mut Fiber,
+    arguments: &[VmValue],
+    omitted_arguments: &[usize],
+) -> Result<VmValue, VmError> {
+    let Some(VmValue::String(reference)) = arguments.first() else {
+        return Err(VmError::InvalidArguments(
+            "VARSETEX variable name must be a string".into(),
+        ));
+    };
+    let value = arguments
+        .get(1)
+        .cloned()
+        .ok_or_else(|| VmError::InvalidArguments("VARSETEX value is missing".into()))?;
+    if matches!(value, VmValue::IntegerPlace(_) | VmValue::StringPlace(_)) {
+        return Err(VmError::InvalidArguments(
+            "VARSETEX value must be a scalar".into(),
+        ));
+    }
+    let (target, value_type, variable_name) =
+        resolve_dynamic_variable_target(vm, fiber, reference, true)?;
+    if value.value_type() != value_type {
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
+            format!("VARSETEX value type differs from {variable_name}"),
+        ));
+    }
+    let dimensions = vm.place_dimensions(fiber, &target)?;
+    if dimensions.is_empty() {
+        // The pinned implementation accepts a scalar target but performs no write.
+        return Ok(VmValue::Integer(1));
+    }
+    if dimensions.len() > 3 {
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
+            "VARSETEX supports arrays of rank one through three".into(),
+        ));
+    }
+    let (set_all_dimensions, last_length, indexed_start, end) =
+        var_set_ex_selection(arguments, omitted_arguments, &target, &dimensions)?;
+    if indexed_start >= end {
+        return Ok(VmValue::Integer(1));
+    }
+
+    let mut array = target.clone();
+    array.indices.clear();
+    let length = vm.place_array_len(fiber, &array)?;
+    // The pinned String implementation always preserves the selected prefix;
+    // its all-dimensions branch only exists for numeric arrays.
+    if set_all_dimensions && value_type == BytecodeType::Integer {
+        let prefix_count = var_set_ex_prefix_count(&dimensions)?;
+        for prefix in 0..prefix_count {
+            let row = prefix.checked_mul(last_length).ok_or_else(|| {
+                script_native_error(
+                    crate::ScriptFaultKind::Bounds,
+                    "VARSETEX offset exceeds this platform".into(),
+                )
+            })?;
+            vm.fill_place_array_range(
+                fiber,
+                &array,
+                row + indexed_start,
+                row + end,
+                value.clone(),
+            )?;
+        }
+    } else {
+        let row = var_set_ex_selected_row(&target, &dimensions, last_length, length, end)?;
+        vm.fill_place_array_range(fiber, &array, row + indexed_start, row + end, value)?;
+    }
+    Ok(VmValue::Integer(1))
+}
+
+fn var_set_ex_selection(
+    arguments: &[VmValue],
+    omitted_arguments: &[usize],
+    target: &PlaceDescriptor,
+    dimensions: &[u64],
+) -> Result<(bool, usize, usize, usize), VmError> {
+    let argument = |index| {
+        (!omitted_arguments.contains(&index))
+            .then(|| arguments.get(index))
+            .flatten()
+    };
+    let integer_argument = |index, default, label| match argument(index) {
+        None => Ok(default),
+        Some(VmValue::Integer(value)) => usize::try_from(*value).map_err(|_| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                format!("VARSETEX {label} is negative"),
+            )
+        }),
+        Some(_) => Err(VmError::InvalidArguments(format!(
+            "VARSETEX {label} must be an integer"
+        ))),
+    };
+    let set_all_dimensions = match argument(2) {
+        None => true,
+        Some(VmValue::Integer(value)) => *value != 0,
+        Some(_) => {
+            return Err(VmError::InvalidArguments(
+                "VARSETEX dimension mode must be an integer".into(),
+            ));
+        }
+    };
+    let last_length = usize::try_from(*dimensions.last().unwrap_or(&0)).map_err(|_| {
+        script_native_error(
+            crate::ScriptFaultKind::Bounds,
+            "VARSETEX final dimension exceeds this platform".into(),
+        )
+    })?;
+    let start = integer_argument(3, 0, "start")?;
+    let end = integer_argument(4, last_length, "end")?;
+    if end > last_length {
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Bounds,
+            "VARSETEX range exceeds the final dimension".into(),
+        ));
+    }
+    let indexed_start = if dimensions.len() == 1 {
+        start
+    } else {
+        start.max(
+            target
+                .indices
+                .get(dimensions.len() - 1)
+                .copied()
+                .and_then(|index| usize::try_from(index).ok())
+                .unwrap_or(0),
+        )
+    };
+    Ok((set_all_dimensions, last_length, indexed_start, end))
+}
+
+fn var_set_ex_prefix_count(dimensions: &[u64]) -> Result<usize, VmError> {
+    dimensions[..dimensions.len() - 1]
+        .iter()
+        .try_fold(1usize, |count, dimension| {
+            usize::try_from(*dimension)
+                .ok()
+                .and_then(|dimension| count.checked_mul(dimension))
+        })
+        .ok_or_else(|| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                "VARSETEX dimensions exceed this platform".into(),
+            )
+        })
+}
+
+fn var_set_ex_selected_row(
+    target: &PlaceDescriptor,
+    dimensions: &[u64],
+    last_length: usize,
+    array_length: usize,
+    end: usize,
+) -> Result<usize, VmError> {
+    let mut prefix = 0usize;
+    for (dimension, length) in dimensions[..dimensions.len() - 1].iter().enumerate() {
+        let length = usize::try_from(*length).map_err(|_| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                "VARSETEX dimension exceeds this platform".into(),
+            )
+        })?;
+        let index = target
+            .indices
+            .get(dimension)
+            .copied()
+            .and_then(|index| usize::try_from(index).ok())
+            .unwrap_or(0);
+        if index >= length {
+            return Err(script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                "VARSETEX prefix index is out of range".into(),
+            ));
+        }
+        prefix = prefix
+            .checked_mul(length)
+            .and_then(|prefix| prefix.checked_add(index))
+            .ok_or_else(|| {
+                script_native_error(
+                    crate::ScriptFaultKind::Bounds,
+                    "VARSETEX prefix exceeds this platform".into(),
+                )
+            })?;
+    }
+    let row = prefix.checked_mul(last_length).ok_or_else(|| {
+        script_native_error(
+            crate::ScriptFaultKind::Bounds,
+            "VARSETEX offset exceeds this platform".into(),
+        )
+    })?;
+    if row.checked_add(end).is_none_or(|end| end > array_length) {
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Bounds,
+            "VARSETEX range exceeds the variable".into(),
+        ));
+    }
+    Ok(row)
 }
 
 pub(in super::super) fn execute_get_var(
@@ -420,10 +658,13 @@ pub(in super::super) fn execute_get_var(
         BytecodeType::Integer
     };
     if value_type != expected {
-        return Err(VmError::InvalidArguments(format!(
-            "{} target {variable_name} has the wrong value type",
-            if string_result { "GETVARS" } else { "GETVAR" }
-        )));
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
+            format!(
+                "{} target {variable_name} has the wrong value type",
+                if string_result { "GETVARS" } else { "GETVAR" }
+            ),
+        ));
     }
     vm.read_place(fiber, &target)
 }
@@ -442,7 +683,8 @@ fn resolve_dynamic_variable_target(
     let mut components = reference.split(':');
     let variable_name = components.next().unwrap_or_default().trim();
     if variable_name.is_empty() {
-        return Err(VmError::InvalidArguments(
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Parse,
             "SETVAR variable name is empty".into(),
         ));
     }
@@ -466,14 +708,16 @@ fn resolve_dynamic_variable_target(
             })
             .cloned()
             .ok_or_else(|| {
-                VmError::InvalidArguments(format!(
-                    "SETVAR target {variable_name:?} is not a variable"
-                ))
+                script_native_error(
+                    crate::ScriptFaultKind::Resolve,
+                    format!("SETVAR target {variable_name:?} is not a variable"),
+                )
             })?;
         if require_mutable && !definition.mutable {
-            return Err(VmError::InvalidArguments(format!(
-                "SETVAR target {variable_name:?} is read-only"
-            )));
+            return Err(script_native_error(
+                crate::ScriptFaultKind::Argument,
+                format!("SETVAR target {variable_name:?} is read-only"),
+            ));
         }
         let components = components.collect::<Vec<_>>();
         let explicit_character = definition.storage == BytecodeStorage::Character
@@ -499,7 +743,9 @@ fn resolve_dynamic_variable_target(
                             .get(&kind)
                     })
                 };
-                set_var_index(table, &definition.name, component)
+                set_var_index(table, &definition.name, component, || {
+                    dynamic_variable_index(vm, fiber, program, component)
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
         (definition, indices)
@@ -514,6 +760,7 @@ fn resolve_dynamic_variable_target(
         None
     };
     let target = PlaceDescriptor {
+        backing: None,
         variable: definition.key,
         indices,
         character,
@@ -523,23 +770,71 @@ fn resolve_dynamic_variable_target(
     Ok((target, definition.value_type, definition.name))
 }
 
+fn dynamic_variable_index(
+    vm: &Vm,
+    fiber: &Fiber,
+    program: &crate::ProgramGeneration,
+    component: &str,
+) -> Result<Option<i64>, VmError> {
+    let frame = fiber.frames.last().expect("frame exists");
+    let name = component.trim();
+    let definition = program
+        .artifact
+        .globals
+        .iter()
+        .find(|candidate| {
+            candidate.owner == Some(frame.function) && candidate.name.eq_ignore_ascii_case(name)
+        })
+        .or_else(|| {
+            program.artifact.globals.iter().find(|candidate| {
+                candidate.owner.is_none() && candidate.name.eq_ignore_ascii_case(name)
+            })
+        });
+    let Some(definition) = definition else {
+        return Ok(None);
+    };
+    if definition.value_type != BytecodeType::Integer {
+        return Ok(None);
+    }
+    let character = (definition.storage == BytecodeStorage::Character).then(|| {
+        u64::try_from(vm.target_character_for_generation(frame.generation)).unwrap_or(u64::MAX)
+    });
+    let place = PlaceDescriptor {
+        backing: None,
+        variable: definition.key,
+        indices: vec![0; definition.dimensions.len()],
+        character,
+        fiber: Some(fiber.id),
+        frame: (definition.storage == BytecodeStorage::FunctionLocal).then_some(frame.id),
+    };
+    match vm.read_place(fiber, &place)? {
+        VmValue::Integer(value) => Ok(Some(value)),
+        _ => Ok(None),
+    }
+}
+
 fn set_var_index(
     table: Option<&erabasic_data::NameTable>,
     variable_name: &str,
     component: &str,
+    dynamic_index: impl FnOnce() -> Result<Option<i64>, VmError>,
 ) -> Result<u64, VmError> {
     let component = component.trim();
     if component.is_empty() {
-        return Err(VmError::InvalidArguments(
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Parse,
             "SETVAR contains an empty variable index".into(),
         ));
     }
     if let Ok(index) = component.parse::<i64>() {
         return u64::try_from(index).map_err(|_| {
-            VmError::InvalidArguments(format!("SETVAR variable index {component:?} is negative"))
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                format!("SETVAR variable index {component:?} is negative"),
+            )
         });
     }
-    let index = table
+    let named_index = table
         .and_then(|table| {
             table.lookup.get(component).or_else(|| {
                 table
@@ -549,17 +844,27 @@ fn set_var_index(
                     .map(|(_, index)| index)
             })
         })
-        .copied()
-        .ok_or_else(|| {
-            VmError::InvalidArguments(format!(
-                "SETVAR variable {variable_name} has no named index {component:?}"
-            ))
-        })?;
-    u64::try_from(index).map_err(|_| {
-        VmError::InvalidArguments(format!(
-            "SETVAR variable {variable_name} has a negative named index {component:?}"
-        ))
-    })
+        .copied();
+    if let Some(index) = named_index {
+        return u64::try_from(index).map_err(|_| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                format!("SETVAR variable {variable_name} has a negative named index {component:?}"),
+            )
+        });
+    }
+    if let Some(index) = dynamic_index()? {
+        return u64::try_from(index).map_err(|_| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                format!("SETVAR variable index expression {component:?} is negative"),
+            )
+        });
+    }
+    Err(script_native_error(
+        crate::ScriptFaultKind::Resolve,
+        format!("SETVAR variable {variable_name} has no named index {component:?}"),
+    ))
 }
 
 pub(in super::super) fn execute_encode_to_uni_result(
@@ -576,22 +881,27 @@ pub(in super::super) fn execute_encode_to_uni_result(
     let capacity = vm.place_array_len(fiber, &result)?;
     let utf16 = value.encode_utf16().collect::<Vec<_>>();
     if utf16.len() >= capacity {
-        return Err(VmError::InvalidArguments(format!(
-            "ENCODETOUNI input has {} UTF-16 units but RESULT can hold only {}",
-            utf16.len(),
-            capacity.saturating_sub(1)
-        )));
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Bounds,
+            format!(
+                "ENCODETOUNI input has {} UTF-16 units but RESULT can hold only {}",
+                utf16.len(),
+                capacity.saturating_sub(1)
+            ),
+        ));
     }
     let mut encoded = Vec::with_capacity(utf16.len());
     for (index, unit) in utf16.iter().copied().enumerate() {
         let code_point = if (0xd800..=0xdbff).contains(&unit) {
             let Some(low) = utf16.get(index + 1).copied() else {
-                return Err(VmError::InvalidArguments(
+                return Err(script_native_error(
+                    crate::ScriptFaultKind::Operation,
                     "ENCODETOUNI input ends with an unpaired UTF-16 surrogate".into(),
                 ));
             };
             if !(0xdc00..=0xdfff).contains(&low) {
-                return Err(VmError::InvalidArguments(
+                return Err(script_native_error(
+                    crate::ScriptFaultKind::Operation,
                     "ENCODETOUNI input contains an unpaired UTF-16 surrogate".into(),
                 ));
             }
@@ -599,7 +909,8 @@ pub(in super::super) fn execute_encode_to_uni_result(
         } else if (0xdc00..=0xdfff).contains(&unit) {
             // The pinned reference advances one UTF-16 position after converting
             // a surrogate pair, then rejects the low surrogate on the next pass.
-            return Err(VmError::InvalidArguments(
+            return Err(script_native_error(
+                crate::ScriptFaultKind::Operation,
                 "ENCODETOUNI input contains an isolated low UTF-16 surrogate".into(),
             ));
         } else {
@@ -672,6 +983,37 @@ fn lookup_named_index_target<'a>(
 }
 
 pub(in super::super) fn resolve_named_index_value(
+    program: &crate::state::ProgramGeneration,
+    variable: &str,
+    key: &str,
+    dimension: usize,
+) -> Option<i64> {
+    if program
+        .artifact
+        .manifest
+        .compatibility
+        .uses_snake_alias_rules()
+    {
+        let tables = &program
+            .artifact
+            .project_data
+            .static_data
+            .deferred_indices
+            .resolved;
+        let dimension_key = format!("{variable}@{}", dimension.checked_add(1)?);
+        let table = tables.iter().find_map(|(name, table)| {
+            (name.eq_ignore_ascii_case(&dimension_key)
+                || (dimension == 0 && name.eq_ignore_ascii_case(variable)))
+            .then_some(table)
+        });
+        if let Some(table) = table {
+            return table.entries.get(key).copied();
+        }
+    }
+    resolve_builtin_index_value(program, variable, key, dimension)
+}
+
+fn resolve_builtin_index_value(
     program: &crate::state::ProgramGeneration,
     variable: &str,
     key: &str,

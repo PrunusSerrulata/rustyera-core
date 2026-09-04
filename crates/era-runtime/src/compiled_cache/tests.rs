@@ -8,6 +8,7 @@ use super::*;
 
 fn manifest(source: &str, revision: u64) -> ProjectManifest {
     ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: revision,
         files: vec![SubmittedFile {
             relative_path: "main.erb".into(),
@@ -27,6 +28,7 @@ fn project_identity_matches_the_cross_host_fixed_vector() {
         content_hash: Some(ProtocolBytes::new(digest)),
     };
     let left = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             file("ERB/a.erb", FileCategory::Erb, vec![1; 32]),
@@ -36,6 +38,7 @@ fn project_identity_matches_the_cross_host_fixed_vector() {
         ],
     };
     let right = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             file("resources/icon.png", FileCategory::Resource, vec![255; 32]),
@@ -69,6 +72,7 @@ fn cooperative_planning_bounds_manifest_and_function_traversal() {
         })
         .collect();
     let resource_manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 7,
         files,
     };
@@ -106,6 +110,13 @@ fn cooperative_planning_bounds_manifest_and_function_traversal() {
         panic!("incremental cache-key planner changed variant");
     };
     assert_eq!(keys.len(), COOPERATIVE_ITEM_QUANTUM);
+    let plan = loop {
+        if let Some(plan) = planner.step(&project, &artifact).unwrap() {
+            break plan;
+        }
+    };
+    assert!(plan.function_ranges.len() > 32);
+    assert!(plan.function_ranges.len() <= TARGET_PARALLEL_SECTIONS);
 }
 
 #[test]
@@ -117,6 +128,18 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
         payload: FilePayload::Utf8("[meta]\nschema_version = 3\n\n[text]\nfont_size = 21\n".into()),
         content_hash: None,
     });
+    for (path, category, text) in [
+        ("ERB/indices.erh", FileCategory::Erh, "#DIM CACHEINDEX,32\n"),
+        ("ERB/CACHEINDEX.erd", FileCategory::Erd, "10,main\n"),
+        ("ERB/CACHEINDEX.als", FileCategory::Als, "10,alias\n"),
+    ] {
+        project.files.push(SubmittedFile {
+            relative_path: path.into(),
+            category,
+            payload: FilePayload::Utf8(text.into()),
+            content_hash: None,
+        });
+    }
     let mut build = crate::project::build_project(&project, None);
     assert!(build.report.success, "{:?}", build.report.diagnostics);
     build.incremental.compact();
@@ -133,7 +156,7 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
     let decoded_file = decode_project_file(&bytes, 64 * 1024 * 1024).unwrap();
 
     assert_eq!(&bytes[..8], b"RERAPROJ");
-    assert_eq!(bytes[8], 8);
+    assert_eq!(bytes[8], VERSION);
     assert_eq!(decoded.key, project_key(&project_identity(&project), &[]));
     assert_eq!(decoded_file.identity, project_identity(&project));
     assert_eq!(decoded_file.manifest, project);
@@ -178,6 +201,24 @@ fn compiled_project_cache_round_trips_and_keys_source_content() {
         project_key(&project_identity(&project), &[]),
         project_key(&project_identity(&changed), &[])
     );
+    for category in [FileCategory::Als, FileCategory::Erd] {
+        let mut changed = project.clone();
+        changed
+            .files
+            .iter_mut()
+            .find(|file| file.category == category)
+            .unwrap()
+            .payload = FilePayload::Utf8("11,changed\n".into());
+        assert_ne!(
+            project_key(&project_identity(&project), &[]),
+            project_key(&project_identity(&changed), &[])
+        );
+        changed.files.retain(|file| file.category != category);
+        assert_ne!(
+            project_key(&project_identity(&project), &[]),
+            project_key(&project_identity(&changed), &[])
+        );
+    }
 }
 
 fn small_compiled_cache() -> Vec<u8> {
@@ -462,7 +503,7 @@ fn streamed_project_file_decode_skips_compiled_sections_and_preserves_journal() 
     let (interrupted_record, _) =
         encode_record(Some(final_digest), "[audio]\nvolume = 80\n").unwrap();
     let sections = parse_cache_sections(&bytes, bytes.len()).unwrap();
-    let embedded_identity = sections.identity.clone();
+    let embedded_source_digest = sections.identity.source_digest.clone();
     let manifest_compressed_bytes = sections.manifest.compressed.len();
     bytes.extend_from_slice(&first_record);
     bytes.extend_from_slice(&final_record);
@@ -484,7 +525,10 @@ fn streamed_project_file_decode_skips_compiled_sections_and_preserves_journal() 
     let retained_bound =
         stream::HEADER_BYTES + manifest_compressed_bytes * 2 + maximum_record_bytes * 2 + 13;
     assert!(maximum_retained <= retained_bound);
-    assert_ne!(streamed.project.identity, embedded_identity);
+    assert_ne!(
+        streamed.project.identity.source_digest,
+        embedded_source_digest
+    );
     assert!(streamed.project.manifest.files.iter().any(|file| {
         file.relative_path == "reraconfig.toml"
             && file.payload == FilePayload::Utf8("[audio]\nvolume = 42\n".into())
@@ -545,6 +589,76 @@ fn streamed_project_file_decode_rejects_corrupt_incomplete_and_oversized_inputs(
     assert!(decoder.append(&oversized_decoded_section).is_err());
 
     assert!(ProjectFileStreamDecoder::new(bytes.len(), bytes.len() - 1).is_err());
+}
+
+#[test]
+fn streamed_project_file_custom_decoded_budget_precedes_manifest_allocation() {
+    let project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    let bytes = encode_full_project_for_test(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+    let mut offset = stream::HEADER_BYTES;
+    let mut decoded_through_manifest = 0_u64;
+    for index in 0..=MANIFEST_SECTION_INDEX {
+        decoded_through_manifest +=
+            u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+        if index != MANIFEST_SECTION_INDEX {
+            offset += 16
+                + usize::try_from(u64::from_le_bytes(
+                    bytes[offset + 8..offset + 16].try_into().unwrap(),
+                ))
+                .unwrap();
+        }
+    }
+    let mut limited = ProjectFileStreamDecoder::new_with_decoded_limit(
+        bytes.len(),
+        bytes.len(),
+        decoded_through_manifest - 1,
+    )
+    .unwrap();
+    let error = limited.append(&bytes[..offset + 16]).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("decoded sections exceed their limit")
+    );
+    assert_eq!(limited.retained_bytes(), stream::HEADER_BYTES);
+
+    let mut normal = ProjectFileStreamDecoder::new_with_decoded_limit(
+        bytes.len(),
+        bytes.len(),
+        128 * 1024 * 1024,
+    )
+    .unwrap();
+    for chunk in bytes.chunks(17) {
+        normal.append(chunk).unwrap();
+    }
+    assert_eq!(
+        normal.finish().unwrap().project,
+        decode_project_file(&bytes, bytes.len()).unwrap()
+    );
+
+    let mut attempted_relaxation = bytes.clone();
+    attempted_relaxation[stream::HEADER_BYTES..stream::HEADER_BYTES + 8]
+        .copy_from_slice(&(MAXIMUM_DECODED_PAYLOAD_BYTES + 1).to_le_bytes());
+    let mut hard_limit =
+        ProjectFileStreamDecoder::new_with_decoded_limit(bytes.len(), bytes.len(), u64::MAX)
+            .unwrap();
+    assert!(hard_limit.append(&attempted_relaxation).is_err());
+    assert_eq!(hard_limit.retained_bytes(), stream::HEADER_BYTES);
+    assert!(
+        ProjectFileStreamDecoder::new_with_decoded_limit(bytes.len(), bytes.len() - 1, u64::MAX)
+            .is_err()
+    );
 }
 
 #[test]
@@ -637,6 +751,48 @@ fn compact_cache_omits_source_and_binary_payloads_but_remains_loadable() {
         build.snapshot.as_ref().unwrap().project_identity
     );
     assert!(decode_project_file(&compact, 64 * 1024 * 1024).is_err());
+    let reexported = encode_compiled_cache_for_test(
+        &decoded.snapshot.manifest,
+        &[],
+        &decoded.artifact,
+        &decoded.incremental,
+        &decoded.snapshot,
+        &decoded.diagnostics,
+    )
+    .unwrap();
+    let reloaded = decode(&reexported, 64 * 1024 * 1024).unwrap();
+    assert_eq!(
+        reloaded.artifact.artifact().source_map,
+        decoded.artifact.artifact().source_map
+    );
+    assert_eq!(
+        reloaded.artifact.artifact().manifest.artifact_id,
+        decoded.artifact.artifact().manifest.artifact_id
+    );
+    let mut forged_manifest = decoded.snapshot.manifest.as_ref().clone();
+    forged_manifest.files[0].content_hash = Some(ProtocolBytes::new(vec![0; 32]));
+    assert!(
+        encode_compiled_cache_for_test(
+            &forged_manifest,
+            &[],
+            &decoded.artifact,
+            &decoded.incremental,
+            &decoded.snapshot,
+            &decoded.diagnostics,
+        )
+        .is_err()
+    );
+    assert!(
+        encode_full_project_for_test(
+            &decoded.snapshot.manifest,
+            &[],
+            &decoded.artifact,
+            &decoded.incremental,
+            &decoded.snapshot,
+            &decoded.diagnostics,
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -705,7 +861,10 @@ fn compact_sections_reject_noncanonical_omission_hashes_and_source_metadata() {
         usize::try_from(encoded.decoded_length).unwrap(),
     )
     .unwrap();
-    let first_tags = COMPACT_MANIFEST_SECTION_MAGIC.len() + 1 + 1 + "main.erb".len();
+    let mut prefix = &decoded[COMPACT_MANIFEST_SECTION_MAGIC.len()..];
+    let _ = read_bytes(&mut prefix, 4096).unwrap();
+    let policy_prefix = decoded.len() - prefix.len();
+    let first_tags = policy_prefix + 1 + 1 + "main.erb".len();
     decoded[first_tags + 2] = 0;
     let compressed = zstd::bulk::compress(&decoded, CACHE_COMPRESSION_LEVEL).unwrap();
     let corrupt = EncodedSectionRef {
@@ -713,7 +872,7 @@ fn compact_sections_reject_noncanonical_omission_hashes_and_source_metadata() {
         compressed: &compressed,
     };
     assert!(
-        decode_manifest_section(&corrupt, 1)
+        decode_manifest_section(&corrupt, 1, VERSION)
             .unwrap_err()
             .contains("omission policy")
     );
@@ -732,7 +891,7 @@ fn compact_sections_reject_noncanonical_omission_hashes_and_source_metadata() {
         compressed: &compressed,
     };
     assert!(
-        decode_manifest_section(&corrupt, 1)
+        decode_manifest_section(&corrupt, 1, VERSION)
             .unwrap_err()
             .contains("payload hash mismatch")
     );

@@ -29,13 +29,13 @@ use crate::resource::ResourceGraph;
 use crate::{ProjectProgress, ProjectProgressReporter, ProjectProgressStage};
 
 use self::configuration::{apply_replace_configuration, parse_configuration};
-use self::extensions::{category_relative_path, is_deferred_index_source, prepare_extensions};
+use self::extensions::{category_relative_path, prepare_extensions};
 pub(crate) use self::frontend::project_diagnostic;
 #[cfg(test)]
 use self::frontend::project_source_location;
 use self::frontend::{
-    analyzer_source, csv_file, indexed_project_source_location, indexed_source_record_location,
-    payload_hash,
+    analyzer_source, csv_file, index_input_error, indexed_project_source_location,
+    indexed_source_record_location, payload_hash,
 };
 use self::model::SemanticConfig;
 pub(crate) use self::model::{
@@ -59,10 +59,8 @@ pub(crate) const fn project_diagnostic_notification(
 
 pub(crate) fn is_root_configuration_file(file: &SubmittedFile) -> bool {
     file.category == FileCategory::Configuration
-        && file
-            .relative_path
-            .replace('\\', "/")
-            .eq_ignore_ascii_case("reraconfig.toml")
+        && validate_relative_path(&file.relative_path)
+            .is_ok_and(|path| path.eq_ignore_ascii_case("reraconfig.toml"))
 }
 
 pub(crate) fn project_configuration_values(files: &[SubmittedFile]) -> era_config::ConfigStore {
@@ -94,7 +92,7 @@ fn release_manifest_payloads(
     release: impl Fn(FileCategory) -> bool,
 ) {
     for file in &mut manifest.files {
-        if !release(file.category) {
+        if !release(file.category) || is_root_configuration_file(file) {
             continue;
         }
         ensure_manifest_hash(file);
@@ -113,7 +111,14 @@ fn release_manifest_payloads(
 pub(crate) fn release_snapshot_manifest_payloads(snapshot: &mut NormalizedProjectSnapshot) {
     let manifest = Arc::get_mut(&mut snapshot.manifest)
         .expect("a newly built project snapshot must uniquely own its manifest");
-    release_manifest_payloads(manifest, |_| true);
+    release_manifest_payloads(manifest, compiled_cache_omits_payload);
+}
+
+fn compiled_cache_omits_payload(category: FileCategory) -> bool {
+    !matches!(
+        category,
+        FileCategory::Configuration | FileCategory::ResourceManifest
+    )
 }
 
 fn ensure_manifest_hash(file: &mut SubmittedFile) {
@@ -294,6 +299,7 @@ pub(crate) fn analyze_submitted_project_with_extensions(
         .collect::<Vec<_>>();
     analyzed_erb_paths.sort();
     ProjectAnalysisReport {
+        compatibility: build.report.compatibility.clone(),
         project_revision: request.manifest.project_revision,
         success: build.report.success,
         diagnostics: build.report.diagnostics,
@@ -336,6 +342,75 @@ fn build_project_inner_with_extensions(
     retain_project_source_payloads: bool,
     progress: Option<&ProjectProgressReporter>,
 ) -> ProjectBuild {
+    let compatibility = manifest.compatibility.clone();
+    let validation = compatibility
+        .validate()
+        .map_err(|error| {
+            crate::compatibility::configuration_error(
+                "runtime.unsupported_compatibility_identity",
+                error.to_string(),
+                None,
+            )
+        })
+        .and_then(|()| {
+            crate::compatibility::resolve_manifest_compatibility(&manifest).and_then(
+                |(resolved, _)| {
+                    if resolved == compatibility {
+                        Ok(())
+                    } else {
+                        Err(crate::compatibility::configuration_error(
+                            "runtime.compatibility_identity_mismatch",
+                            format!(
+                                "manifest profile {} does not match root configuration profile {}",
+                                compatibility.profile, resolved.profile
+                            ),
+                            None,
+                        ))
+                    }
+                },
+            )
+        });
+    let mut build = match validation {
+        Err(diagnostic) => failed(manifest.project_revision, vec![*diagnostic], previous),
+        Ok(()) => build_project_with_resolved_compatibility(
+            manifest,
+            previous,
+            previous_artifact,
+            analysis_selection,
+            analysis_debug_mode,
+            extension_declarations,
+            configuration_profile,
+            retain_project_source_payloads,
+            progress,
+        ),
+    };
+    build.report.compatibility = Some(compatibility.clone());
+    for diagnostic in &mut build.report.diagnostics {
+        crate::compatibility::attach_diagnostic_identity(diagnostic, &compatibility);
+    }
+    if compatibility.is_experimental() && build.report.success {
+        build
+            .report
+            .diagnostics
+            .push(crate::compatibility::experimental_profile_diagnostic(
+                &compatibility,
+            ));
+    }
+    build
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn build_project_with_resolved_compatibility(
+    manifest: ProjectManifest,
+    previous: Option<&IncrementalState>,
+    previous_artifact: Option<&BytecodeArtifact>,
+    analysis_selection: Option<&std::collections::BTreeSet<String>>,
+    analysis_debug_mode: bool,
+    extension_declarations: &[era_runtime_protocol::ExtensionDeclaration],
+    configuration_profile: ConfigurationClientProfile,
+    retain_project_source_payloads: bool,
+    progress: Option<&ProjectProgressReporter>,
+) -> ProjectBuild {
     // Cold loads already own the decoded manifest. Keep that allocation as the authoritative
     // reload snapshot so the end of compilation does not clone every source payload at once.
     let mut normalized_manifest = manifest;
@@ -357,13 +432,15 @@ fn build_project_inner_with_extensions(
             .files
             .iter_mut()
             .map(|file| {
-                let payload = if matches!(
-                    file.category,
-                    FileCategory::Erb
-                        | FileCategory::Erh
-                        | FileCategory::Csv
-                        | FileCategory::Configuration
-                ) {
+                let payload = if !is_root_configuration_file(file)
+                    && matches!(
+                        file.category,
+                        FileCategory::Erb
+                            | FileCategory::Erh
+                            | FileCategory::Csv
+                            | FileCategory::Als
+                            | FileCategory::Erd
+                    ) {
                     take_manifest_payload(file)
                 } else {
                     file.payload.clone()
@@ -395,6 +472,15 @@ fn build_project_inner_with_extensions(
     let mut sources = Vec::new();
     let mut resources = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
+    let erd_alias_paths = files
+        .iter()
+        .filter(|file| file.category == FileCategory::Erd)
+        .filter_map(|file| validate_relative_path(&file.relative_path).ok())
+        .filter_map(|path| {
+            path.rsplit_once('.')
+                .map(|(stem, _)| format!("{}.als", stem.to_ascii_lowercase()))
+        })
+        .collect::<std::collections::BTreeSet<_>>();
     let file_count = files.len();
     for (file_index, mut file) in files.into_iter().enumerate() {
         let path = match validate_relative_path(&file.relative_path) {
@@ -422,6 +508,16 @@ fn build_project_inner_with_extensions(
             }
         };
         file.relative_path.clone_from(&path);
+        if let Some(error) = index_input_error(&file) {
+            diagnostics.push(error);
+            report_fraction(
+                progress,
+                ProjectProgressStage::Normalizing,
+                file_index + 1,
+                file_count,
+            );
+            continue;
+        }
         if !seen.insert((file.category as u8, path.to_ascii_lowercase())) {
             diagnostics.push(project_diagnostic(
                 "runtime.duplicate_path",
@@ -497,19 +593,32 @@ fn build_project_inner_with_extensions(
             continue;
         }
         match file.category {
-            FileCategory::Csv => csv_files
-                .csv
-                .push(csv_file(category_relative_path(&path, "CSV"), file.payload)),
-            FileCategory::Erh | FileCategory::Erb => {
-                // The CSV loader consults the ERB root only for ERD deferred-index files.
-                // Copying every ordinary script here doubled the resident source payload for
-                // large projects before the analyzer had even started.
-                if is_deferred_index_source(&path) {
-                    csv_files.erb.push(csv_file(
-                        category_relative_path(&path, "ERB"),
-                        file.payload.clone(),
-                    ));
+            FileCategory::Csv => csv_files.csv.push(csv_file(
+                category_relative_path(&path, "CSV"),
+                path,
+                file.payload,
+            )),
+            FileCategory::Erd => csv_files.erb.push(csv_file(
+                category_relative_path(&path, "ERB"),
+                path,
+                file.payload,
+            )),
+            FileCategory::Als => {
+                // Alias identity includes its data root, not only its file stem.
+                let erb_root = path
+                    .split('/')
+                    .next()
+                    .is_some_and(|root| root.eq_ignore_ascii_case("ERB"))
+                    || erd_alias_paths.contains(&path.to_ascii_lowercase());
+                let root = if erb_root { "ERB" } else { "CSV" };
+                let file = csv_file(category_relative_path(&path, root), path, file.payload);
+                if erb_root {
+                    csv_files.erb.push(file);
+                } else {
+                    csv_files.csv.push(file);
                 }
+            }
+            FileCategory::Erh | FileCategory::Erb => {
                 if file.category == FileCategory::Erh
                     || analysis_selection.is_none_or(|selection| {
                         selection.is_empty() || selection.contains(&path.to_ascii_lowercase())
@@ -552,6 +661,7 @@ fn build_project_inner_with_extensions(
             CsvDiagnosticSeverity::Error | CsvDiagnosticSeverity::Fatal => RuntimeLogLevel::Error,
         };
         ProtocolDiagnostic {
+            context: None,
             code: format!("csv.{:?}", diagnostic.code).to_ascii_lowercase(),
             level,
             message: diagnostic.message,
@@ -578,6 +688,7 @@ fn build_project_inner_with_extensions(
     config.money_first = data.static_data.replace.money_first;
     config.maximum_shop_items = u32::try_from(data.static_data.replace.max_shop_item).unwrap_or(0);
     let mut analyzer_options = config.analyzer.clone();
+    analyzer_options.compatibility = normalized_manifest.compatibility.clone();
     if analysis_selection.is_some() {
         analyzer_options.analysis_mode = true;
         analyzer_options.debug_mode = analysis_debug_mode;
@@ -592,7 +703,10 @@ fn build_project_inner_with_extensions(
             progress,
             match event.stage {
                 AnalysisProgressStage::Parsing => ProjectProgressStage::Parsing,
-                AnalysisProgressStage::Analyzing => ProjectProgressStage::Analyzing,
+                AnalysisProgressStage::DeclaringGlobals
+                | AnalysisProgressStage::IndexingFunctions
+                | AnalysisProgressStage::DeclaringLocals
+                | AnalysisProgressStage::Analyzing => ProjectProgressStage::Analyzing,
             },
             event.completed,
             event.total,
@@ -636,8 +750,26 @@ fn build_project_inner_with_extensions(
                 RuntimeLogLevel::Error
             }
         };
+        let excess_arguments =
+            diagnostic.code == erabasic_analyzer::AnalyzerDiagnosticCode::ExcessUserArguments;
         ProtocolDiagnostic {
-            code: format!("analyzer.{:?}", diagnostic.code).to_ascii_lowercase(),
+            context: excess_arguments.then(|| {
+                Box::new(era_runtime_protocol::CompatibilityDiagnosticContext {
+                    artifact: None,
+                    project_load_id: None,
+                    runtime_epoch: None,
+                    generation: None,
+                    identity: Some(analyzer_options.compatibility.clone()),
+                    stage: "compat".into(),
+                    api: Some("user_call".into()),
+                    required_capability: None,
+                })
+            }),
+            code: if excess_arguments {
+                "compat.call.excess_arguments".into()
+            } else {
+                format!("analyzer.{:?}", diagnostic.code).to_ascii_lowercase()
+            },
             level,
             message: diagnostic.message,
             source,
@@ -655,6 +787,7 @@ fn build_project_inner_with_extensions(
             artifact: None,
             incremental: IncrementalState::default(),
             report: ProjectLoadReport {
+                compatibility: None,
                 project_revision: normalized_manifest.project_revision,
                 success,
                 diagnostics,
@@ -733,6 +866,7 @@ fn build_project_inner_with_extensions(
             erabasic_compiler::CompilerDiagnosticSeverity::Error => RuntimeLogLevel::Error,
         };
         ProtocolDiagnostic {
+            context: None,
             code: format!("compiler.{:?}", diagnostic.code).to_ascii_lowercase(),
             level,
             message: diagnostic.message,
@@ -763,12 +897,21 @@ fn build_project_inner_with_extensions(
     if let Some(contents) = &generated_configuration_source {
         let digest =
             era_protocol::ProtocolBytes::new(blake3::hash(contents.as_bytes()).as_bytes().to_vec());
-        normalized_manifest.files.push(SubmittedFile {
+        let generated_file = SubmittedFile {
             relative_path: "reraconfig.toml".into(),
             category: FileCategory::Configuration,
             payload: FilePayload::Utf8(contents.clone()),
             content_hash: Some(digest),
-        });
+        };
+        if let Some(existing) = normalized_manifest
+            .files
+            .iter_mut()
+            .find(|file| is_root_configuration_file(file))
+        {
+            *existing = generated_file;
+        } else {
+            normalized_manifest.files.push(generated_file);
+        }
     }
     if !retain_project_source_payloads {
         release_manifest_payloads(&mut normalized_manifest, |category| {
@@ -777,7 +920,8 @@ fn build_project_inner_with_extensions(
                 FileCategory::Erb
                     | FileCategory::Erh
                     | FileCategory::Csv
-                    | FileCategory::Configuration
+                    | FileCategory::Als
+                    | FileCategory::Erd
             )
         });
     }
@@ -850,13 +994,14 @@ fn build_project_inner_with_extensions(
         preparing_total,
     );
     if !retain_project_source_payloads {
-        release_manifest_payloads(&mut normalized_manifest, |_| true);
+        release_manifest_payloads(&mut normalized_manifest, compiled_cache_omits_payload);
     }
     let game_information = project_game_information(&artifact);
     ProjectBuild {
         artifact: Some(artifact),
         incremental,
         report: ProjectLoadReport {
+            compatibility: None,
             project_revision: normalized_manifest.project_revision,
             success,
             diagnostics,
@@ -972,6 +1117,7 @@ pub(crate) fn apply_project_delta(
         }
     }
     Ok(ProjectManifest {
+        compatibility: current.compatibility.clone(),
         project_revision: reload.target_revision,
         files: files.into_values().collect(),
     })

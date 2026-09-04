@@ -2,7 +2,7 @@ use era_runtime_protocol::{FileCategory, InputIntent, WaitKind};
 use erabasic_vm::VmValue;
 use serde::Serialize;
 
-const INPUT_REPLAY_SCHEMA_VERSION: u32 = 1;
+const INPUT_REPLAY_SCHEMA_VERSION: u32 = 2;
 const MAXIMUM_REPLAY_STEPS: usize = 4096;
 const MAXIMUM_REPLAY_BYTES: u64 = 16 * 1024 * 1024;
 const REPLAY_LIMITATIONS: [&str; 3] = [
@@ -111,6 +111,8 @@ pub(crate) enum ReplayFileCategory {
     Configuration,
     Resource,
     ResourceManifest,
+    Als,
+    Erd,
 }
 
 impl From<FileCategory> for ReplayFileCategory {
@@ -122,6 +124,8 @@ impl From<FileCategory> for ReplayFileCategory {
             FileCategory::Configuration => Self::Configuration,
             FileCategory::Resource => Self::Resource,
             FileCategory::ResourceManifest => Self::ResourceManifest,
+            FileCategory::Als => Self::Als,
+            FileCategory::Erd => Self::Erd,
         }
     }
 }
@@ -189,6 +193,7 @@ pub(crate) enum ReplayAction {
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct ReplayStep {
+    pub(crate) source: Option<crate::input_source::InputSource>,
     pub(crate) record: &'static str,
     pub(crate) sequence: usize,
     pub(crate) action: ReplayAction,
@@ -235,6 +240,7 @@ impl From<WaitKind> for ReplayWaitKind {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ReplayStepDraft {
+    pub(crate) source: Option<crate::input_source::InputSource>,
     pub(crate) action: ReplayAction,
     pub(crate) wait_kind: ReplayWaitKind,
     pub(crate) result: Option<ReplayValue>,
@@ -247,6 +253,7 @@ pub(crate) struct ReplayStepDraft {
 impl ReplayStepDraft {
     pub(crate) fn into_step(self, sequence: usize) -> ReplayStep {
         ReplayStep {
+            source: self.source,
             record: "step",
             sequence,
             action: self.action,
@@ -450,6 +457,7 @@ mod tests {
 
     fn text_step() -> ReplayStepDraft {
         ReplayStepDraft {
+            source: None,
             action: ReplayAction::Text,
             wait_kind: ReplayWaitKind::StringValue,
             result: Some(ReplayValue::String("actual".into())),
@@ -543,11 +551,14 @@ mod tests {
                 before_identity: "05".repeat(32),
                 after_revision: "13".into(),
                 after_identity: "06".repeat(32),
-                changes: vec![ReplayFileChange {
-                    operation: ReplayFileOperation::Upsert,
-                    relative_path: "ERB/reloaded.erb".into(),
-                    category: ReplayFileCategory::Erb,
-                }],
+                changes: [FileCategory::Erb, FileCategory::Als, FileCategory::Erd]
+                    .into_iter()
+                    .map(|category| ReplayFileChange {
+                        operation: ReplayFileOperation::Upsert,
+                        relative_path: format!("ERB/reloaded.{category:?}").to_ascii_lowercase(),
+                        category: category.into(),
+                    })
+                    .collect(),
             },
             ReplayOriginDetails::InputUndo {
                 checkpoint_slot: 0,
@@ -597,6 +608,11 @@ mod tests {
             assert_eq!(jsonl.lines().count(), 1);
             assert!(jsonl.contains(&format!(r#""kind":"{expected_kind}""#)));
             assert!(jsonl.contains(r#""step_count":0"#));
+            if expected_kind == "hot_reload" {
+                for category in ["erb", "als", "erd"] {
+                    assert!(jsonl.contains(&format!(r#""category":"{category}""#)));
+                }
+            }
         }
     }
 

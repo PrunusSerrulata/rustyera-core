@@ -14,7 +14,7 @@ use erabasic_compiler::{CompilerOptions, compile_project, default_host_registry}
 use erabasic_csv::{
     CsvLoadOptions, FilePayload as CsvFilePayload, FrontendFile, ProjectFiles, load_project,
 };
-use erabasic_validator::{ValidatedArtifact, ValidationContext, validate_bytecode};
+use erabasic_validator::{ValidatedArtifact, validate_bytecode};
 use erabasic_vm::{
     EraSaveScope, FiberId, FiberStatus, HostCallRequest, HostCallResult, HostReady,
     HostRebindRequest, HostWaitStability, ImmediateHostCall, ImmediateHostCallResult,
@@ -55,6 +55,26 @@ fn artifact(functions: Vec<BytecodeFunction>, globals: Vec<BytecodeGlobal>) -> B
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
         call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
+        runtime_builtins: Vec::new(),
+        runtime_native_authorizations: Vec::new(),
+        runtime_host_authorizations: Vec::new(),
+        runtime_staged_authorizations: Vec::new(),
+        runtime_variables: globals
+            .iter()
+            .map(|global| erabasic_bytecode::RuntimeVariableSymbol {
+                key: global.key,
+                match_name_rejection: None,
+                character_disposal: erabasic_bytecode::CharacterArrayDisposal::Preserve,
+                reference: functions
+                    .iter()
+                    .flat_map(|function| &function.parameters)
+                    .any(|parameter| parameter.key == global.key && parameter.by_reference),
+                reference_semantics: erabasic_bytecode::RuntimeReferenceSemantics {
+                    is_const: false,
+                    can_restructure: false,
+                },
+            })
+            .collect(),
         project_data: project_data(),
         globals,
         native_imports: Vec::new(),
@@ -63,6 +83,7 @@ fn artifact(functions: Vec<BytecodeFunction>, globals: Vec<BytecodeGlobal>) -> B
         event_groups: Vec::new(),
         source_map: SourceMap::default(),
     };
+    fixture_runtime_variables(&mut artifact);
     artifact.refresh_ids().unwrap();
     artifact
 }
@@ -70,7 +91,7 @@ fn artifact(functions: Vec<BytecodeFunction>, globals: Vec<BytecodeGlobal>) -> B
 fn validated(artifact: &BytecodeArtifact) -> ValidatedArtifact {
     let report = validate_bytecode(
         artifact.clone().into_unvalidated(),
-        &ValidationContext::for_artifact(artifact),
+        &erabasic_compiler::runtime_native_validation_context(artifact, &default_host_registry()),
     );
     assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
     report.value.expect("artifact should validate")
@@ -115,7 +136,8 @@ fn compile_source_with_options(source: &str, options: &AnalyzerOptions) -> Bytec
     );
     assert!(
         compilation.artifact.is_some(),
-        "{:#?}",
+        "analysis: {:#?}; compilation: {:#?}",
+        analysis.diagnostics,
         compilation.diagnostics
     );
     compilation.artifact.unwrap()
@@ -125,6 +147,14 @@ fn compile_source_with_data(
     source: &str,
     project_data: erabasic_data::ProjectData,
 ) -> BytecodeArtifact {
+    compile_source_with_data_and_options(source, project_data, &AnalyzerOptions::analysis_mode())
+}
+
+fn compile_source_with_data_and_options(
+    source: &str,
+    project_data: erabasic_data::ProjectData,
+    options: &AnalyzerOptions,
+) -> BytecodeArtifact {
     let analysis = analyze_project(
         AnalysisInput {
             project_data,
@@ -133,7 +163,7 @@ fn compile_source_with_data(
                 payload: SourcePayload::Utf8(source.into()),
             }],
         },
-        &AnalyzerOptions::analysis_mode(),
+        options,
         &ExtensionRegistry::default(),
     );
     assert!(analysis.project.is_some(), "{:#?}", analysis.diagnostics);
@@ -234,10 +264,13 @@ fn run_compiled_string_result(artifact: &BytecodeArtifact) -> VmValue {
 struct ReadyHost {
     calls: Vec<i64>,
     strings: Vec<String>,
+    omitted_arguments: Vec<Vec<usize>>,
 }
 
 impl VmHost for ReadyHost {
     fn call(&mut self, request: HostCallRequest) -> HostCallResult {
+        self.omitted_arguments
+            .push(request.omitted_arguments.clone());
         if let Some(VmValue::Integer(value)) = request.arguments.first() {
             self.calls.push(*value);
         } else if let Some(VmValue::String(value)) = request.arguments.first() {
@@ -313,8 +346,40 @@ fn host_artifact(stability: HostSnapshotCapability) -> (BytecodeArtifact, Symbol
         snapshot_capability: stability,
         contract,
     });
+    fixture_runtime_variables(&mut artifact);
     artifact.refresh_ids().unwrap();
     (artifact, entry)
+}
+
+#[test]
+fn static_host_calls_preserve_omission_metadata_separately_from_integer_min() {
+    let (mut artifact, entry) = host_artifact(HostSnapshotCapability::StableWait);
+    artifact.functions[0].code = vec![
+        opcode::push_integer(i64::MIN),
+        opcode::host_call(0, 1, None, &[0]),
+        opcode::push_integer(i64::MIN),
+        opcode::call(Opcode::CallHost, 0, 1, None),
+        opcode::return_value(false),
+    ];
+    artifact.refresh_ids().unwrap();
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let mut host = ReadyHost::default();
+    let report = vm.run_slice(
+        &mut host,
+        &mut NativeServiceRegistry::for_artifact(&artifact),
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(host.calls, [i64::MIN, i64::MIN]);
+    assert_eq!(host.omitted_arguments, [vec![0], Vec::new()]);
 }
 
 struct PendingHost {
@@ -350,3 +415,48 @@ mod replace;
 mod runtime;
 #[path = "vm/strform.rs"]
 mod strform;
+
+fn fixture_runtime_variables(artifact: &mut BytecodeArtifact) {
+    let previous = std::mem::take(&mut artifact.runtime_variables);
+    artifact.runtime_variables = artifact
+        .globals
+        .iter()
+        .map(|global| {
+            let reference = artifact
+                .functions
+                .iter()
+                .flat_map(|function| &function.parameters)
+                .any(|formal| formal.key == global.key && formal.by_reference);
+            let sparse = global.owner.is_none()
+                && global.storage == erabasic_bytecode::BytecodeStorage::Character
+                && global.dimensions.len() == 1
+                && artifact
+                    .project_data
+                    .schema
+                    .variable(&global.name)
+                    .is_some_and(|schema| {
+                        matches!(&schema.id, erabasic_data::VariableId::Builtin(_))
+                    });
+            erabasic_bytecode::RuntimeVariableSymbol {
+                reference_semantics: previous
+                    .iter()
+                    .find(|symbol| symbol.key == global.key)
+                    .map_or(
+                        erabasic_bytecode::RuntimeReferenceSemantics {
+                            is_const: false,
+                            can_restructure: false,
+                        },
+                        |symbol| symbol.reference_semantics,
+                    ),
+                key: global.key,
+                reference,
+                match_name_rejection: None,
+                character_disposal: if sparse {
+                    erabasic_bytecode::CharacterArrayDisposal::ClearSparse
+                } else {
+                    erabasic_bytecode::CharacterArrayDisposal::Preserve
+                },
+            }
+        })
+        .collect();
+}

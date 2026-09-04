@@ -112,6 +112,7 @@ pub(super) fn vm_variable_reference(
         .map_err(|_| "variable symbol key must contain 16 bytes")?;
     Ok(VmDebugVariableRef {
         target: PlaceDescriptor {
+            backing: None,
             variable: SymbolKey(bytes),
             indices: value.indices.clone(),
             character: value.character,

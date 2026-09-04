@@ -1,10 +1,10 @@
 use std::mem::{align_of, offset_of, size_of};
 
 use era_runtime_ffi::{
-    ERA_RUNTIME_ABI_VERSION, ERA_RUNTIME_GET_API_SYMBOL, EraAbiVersion, EraByteSlice,
-    EraCallHeader, EraCreateOptions, EraDriveOptions, EraDriveResult, EraDriveState,
-    EraOwnedBuffer, EraProjectProgress, EraProjectProgressStage, EraRuntimeApi, EraSessionHandle,
-    EraStatus,
+    ERA_RUNTIME_ABI_VERSION, ERA_RUNTIME_GET_API_SYMBOL, ERA_RUNTIME_PROTOCOL_MAJOR,
+    ERA_RUNTIME_PROTOCOL_MINOR, EraAbiVersion, EraByteSlice, EraCallHeader, EraCreateOptions,
+    EraDriveOptions, EraDriveResult, EraDriveState, EraOwnedBuffer, EraProjectProgress,
+    EraProjectProgressStage, EraRuntimeApi, EraSessionHandle, EraStatus,
 };
 
 #[test]
@@ -129,10 +129,21 @@ fn checked_header_matches_version_function_table_and_reserved_slots() {
     let header = include_str!("../include/era_runtime.h");
     assert!(header.contains("#define ERA_RUNTIME_ABI_MAJOR 3u"));
     assert!(header.contains("#define ERA_RUNTIME_ABI_MINOR 9u"));
+    assert!(header.contains("#define ERA_RUNTIME_PROTOCOL_MAJOR 46u"));
+    assert!(header.contains("#define ERA_RUNTIME_PROTOCOL_MINOR 0u"));
     assert!(header.contains(ERA_RUNTIME_GET_API_SYMBOL));
     assert_eq!(
         ERA_RUNTIME_ABI_VERSION,
         EraAbiVersion { major: 3, minor: 9 }
+    );
+    assert_eq!(ERA_RUNTIME_PROTOCOL_MAJOR, 46);
+    assert_eq!(ERA_RUNTIME_PROTOCOL_MINOR, 0);
+    assert_eq!(
+        (ERA_RUNTIME_PROTOCOL_MAJOR, ERA_RUNTIME_PROTOCOL_MINOR,),
+        (
+            era_runtime_protocol::RUNTIME_PROTOCOL_VERSION.major,
+            era_runtime_protocol::RUNTIME_PROTOCOL_VERSION.minor,
+        )
     );
 
     for field in [

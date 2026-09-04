@@ -44,11 +44,17 @@ impl RuntimeSession {
                 None,
             )?;
         }
+        self.discard_sql_snapshot_candidates()?;
+        // Disconnects are emitted after cancelling older work so shutdown never cancels its own
+        // provider cleanup. The frontend session teardown is the final acknowledgement boundary.
+        self.emit_sql_cleanup_requests()?;
         self.operations.clear();
+        self.sql.reset_for_project_boundary();
         self.effect_journal.clear();
         self.inbound_transfer = None;
         self.outbound_transfer = None;
         self.vm = None;
+        self.project_diagnostic_publication = None;
         self.retained_title_program = None;
         self.set_phase(RuntimePhase::Stopped)?;
         self.emit(
@@ -61,12 +67,28 @@ impl RuntimeSession {
     }
 
     pub(in super::super) fn resynchronize(&mut self, message_id: u64) -> Result<(), RuntimeError> {
+        // One-shot sound channels are frontend-owned transient state. A reconnect starts a new
+        // observation baseline: never replay stale sound effects or retain their revisions.
+        self.effect_journal.retain(|_, event| {
+            !matches!(
+                &event.kind,
+                EffectKind::Audio(AudioEffect {
+                    channel: AudioChannelV1::Sound(_),
+                    ..
+                })
+            )
+        });
+        self.audio.reset_transient();
         self.materialize_resource_replay();
         let input_undo = self.input_undo_state();
         let presentation = self.presentation.snapshot_for_delivery();
         self.pending_presentation_update = false;
         self.emit(
             RuntimeMessage::RuntimeResynchronized(Box::new(RuntimeResynchronized {
+                compatibility: self
+                    .project_snapshot
+                    .as_ref()
+                    .map(|project| project.manifest.compatibility.clone()),
                 epoch: self.epoch.0,
                 phase: self.phase,
                 runtime_revision: self.revision,
@@ -114,24 +136,30 @@ impl RuntimeSession {
         if self.phase == RuntimePhase::Running && self.message_skip {
             return Ok(());
         }
-        self.publish_pending_presentation()
-    }
-
-    pub(in super::super) fn flush_presentation_at_drive_boundary(
-        &mut self,
-    ) -> Result<(), RuntimeError> {
-        if self.phase == RuntimePhase::Running
-            && !self.presentation.redraw_enabled()
+        // Storage and other non-visual services may suspend a REDRAW 0 script between rows.
+        // Those protocol boundaries must not expose an unfinished frame. Explicit observation
+        // barriers still publish canonical state through flush_presentation_for_observation.
+        if matches!(
+            self.phase,
+            RuntimePhase::Running | RuntimePhase::WaitingExternal
+        ) && !self.presentation.redraw_enabled()
             && !self.presentation.has_open_wait()
         {
             return Ok(());
         }
-        self.flush_presentation()
+        self.publish_pending_presentation()
     }
 
     pub(in super::super) fn flush_presentation_for_observation(
         &mut self,
     ) -> Result<(), RuntimeError> {
+        // Observation barriers need the current replay even when REDRAW 0 or message skip
+        // defers ordinary frames. Do not make a freshly drawn, unmounted canvas invisible
+        // to a service querying that same revision.
+        if self.presentation.resource_replay_stale() {
+            self.materialize_resource_replay();
+            self.pending_presentation_update = true;
+        }
         self.publish_pending_presentation()
     }
 
@@ -179,20 +207,23 @@ impl RuntimeSession {
         if !self.presentation.resource_replay_is_ready_to_publish() {
             return false;
         }
-        self.materialize_resource_replay();
-        true
+        self.materialize_resource_replay()
     }
 
-    fn materialize_resource_replay(&mut self) {
+    fn materialize_resource_replay(&mut self) -> bool {
         if !self.presentation.resource_replay_stale() {
-            return;
+            return false;
         }
-        let replay = self
-            .project_snapshot
-            .as_ref()
-            .map(|project| project.resource_graph.replay())
-            .unwrap_or_default();
+        let roots = self.presentation.resource_roots();
+        let replay = match self.project_snapshot.as_mut() {
+            Some(project) => match project.resource_graph.replay_for_roots(&roots) {
+                Ok(replay) => replay,
+                Err(_) => return false,
+            },
+            None => era_runtime_protocol::ResourceReplay::default(),
+        };
         self.presentation.set_resource_replay(replay);
+        true
     }
 
     pub(in super::super) fn complete_graphics_result(
@@ -239,6 +270,7 @@ impl RuntimeSession {
     ) -> Result<(), RuntimeError> {
         self.emit(
             RuntimeMessage::CommandRejected(CommandRejected {
+                context: None,
                 code,
                 message: message.into(),
                 recoverable: true,
@@ -263,15 +295,61 @@ impl RuntimeSession {
         message: &str,
         origin: Option<erabasic_vm::VmExecutionOrigin>,
     ) -> Result<(), RuntimeError> {
+        self.fault_with_context(code, message, origin, None)
+    }
+
+    pub(in super::super) fn fault_with_context(
+        &mut self,
+        code: FaultCode,
+        message: &str,
+        origin: Option<erabasic_vm::VmExecutionOrigin>,
+        context: Option<Box<era_runtime_protocol::CompatibilityDiagnosticContext>>,
+    ) -> Result<(), RuntimeError> {
+        self.operations.html_lines.clear();
         self.emit_log(
             RuntimeLogLevel::Error,
             format!("runtime fault [{code:?}]: {message}"),
         )?;
         self.emit(
             RuntimeMessage::Fault(RuntimeFault {
+                context,
                 code,
                 message: message.into(),
                 origin: origin.map(protocol_execution_origin),
+                vm: None,
+            }),
+            None,
+        )?;
+        self.set_phase(RuntimePhase::Faulted)
+    }
+
+    pub(in super::super) fn fault_from_vm(
+        &mut self,
+        fault: &erabasic_vm::VmFault,
+    ) -> Result<(), RuntimeError> {
+        self.operations.html_lines.clear();
+        let secondary = fault
+            .secondary
+            .as_deref()
+            .map(protocol_vm_fault_detail)
+            .map(Box::new);
+        self.emit_log(
+            RuntimeLogLevel::Error,
+            format!(
+                "runtime VM fault [{}]: {}",
+                fault.correlation_id, fault.message
+            ),
+        )?;
+        self.emit(
+            RuntimeMessage::Fault(RuntimeFault {
+                context: None,
+                code: FaultCode::VmFault,
+                message: fault.message.clone(),
+                origin: Some(protocol_execution_origin(fault.origin())),
+                vm: Some(Box::new(era_runtime_protocol::RuntimeVmFault {
+                    primary: protocol_vm_fault_detail(fault),
+                    secondary,
+                })),
             }),
             None,
         )?;
@@ -313,9 +391,10 @@ impl RuntimeSession {
     )]
     fn emit_immediate(
         &mut self,
-        message: RuntimeMessage,
+        mut message: RuntimeMessage,
         correlation_id: Option<u64>,
     ) -> Result<(), RuntimeError> {
+        self.attach_compatibility_context(&mut message);
         let envelope = message.envelope(
             Some(self.options.session_id),
             Some(self.epoch),
@@ -343,6 +422,65 @@ impl RuntimeSession {
         Ok(())
     }
 
+    fn attach_compatibility_context(&self, message: &mut RuntimeMessage) {
+        let identity = self
+            .project_snapshot
+            .as_ref()
+            .map(|project| &project.manifest.compatibility);
+        match message {
+            RuntimeMessage::Diagnostic(diagnostic) => {
+                if let Some(identity) = identity {
+                    crate::compatibility::attach_diagnostic_identity(diagnostic, identity);
+                }
+            }
+            RuntimeMessage::Fault(fault) => {
+                let context = fault.context.get_or_insert_with(|| {
+                    Box::new(era_runtime_protocol::CompatibilityDiagnosticContext {
+                        artifact: None,
+                        project_load_id: None,
+                        runtime_epoch: None,
+                        generation: None,
+                        identity: None,
+                        stage: "runtime".into(),
+                        api: fault.origin.as_ref().map(|origin| origin.command.clone()),
+                        required_capability: None,
+                    })
+                });
+                if context.identity.is_none() {
+                    context.identity = identity.cloned();
+                }
+            }
+            RuntimeMessage::CommandRejected(rejection) => {
+                let context = rejection.context.get_or_insert_with(|| {
+                    Box::new(era_runtime_protocol::CompatibilityDiagnosticContext {
+                        artifact: None,
+                        project_load_id: None,
+                        runtime_epoch: None,
+                        generation: None,
+                        identity: None,
+                        stage: "protocol".into(),
+                        api: None,
+                        required_capability: None,
+                    })
+                });
+                if context.identity.is_none() {
+                    context.identity = identity.cloned();
+                }
+            }
+            RuntimeMessage::ProjectLoadReport(report) => {
+                if report.compatibility.is_none() {
+                    report.compatibility = identity.cloned();
+                }
+                if let Some(identity) = &report.compatibility {
+                    for diagnostic in &mut report.diagnostics {
+                        crate::compatibility::attach_diagnostic_identity(diagnostic, identity);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(in super::super) fn allocate_request(&mut self) -> Result<u64, RuntimeError> {
         if self.operations.total_count() >= self.options.limits.maximum_pending_requests as usize {
             return Err(RuntimeError::ResourceLimit(
@@ -367,26 +505,48 @@ impl RuntimeSession {
     }
 
     pub(in super::super) fn emit_effect(&mut self, kind: EffectKind) -> Result<(), RuntimeError> {
-        if self.effect_journal.len() >= self.options.limits.maximum_journal_entries as usize {
+        self.emit_effects(vec![kind])
+    }
+
+    /// Atomically queues one protocol batch and only then commits its replay journal entries.
+    /// This prevents multi-channel audio operations from becoming partially observable.
+    pub(in super::super) fn emit_effects(
+        &mut self,
+        kinds: Vec<EffectKind>,
+    ) -> Result<(), RuntimeError> {
+        if self.effect_journal.len().saturating_add(kinds.len())
+            > self.options.limits.maximum_journal_entries as usize
+        {
             return Err(RuntimeError::ResourceLimit("effect journal is full"));
         }
-        let event = EffectEvent {
-            effect_id: self.next_effect_id,
-            kind,
-        };
-        self.next_effect_id = self.next_effect_id.saturating_add(1);
-        self.effect_journal.insert(event.effect_id, event.clone());
+        let events = kinds
+            .into_iter()
+            .enumerate()
+            .map(|(offset, kind)| EffectEvent {
+                effect_id: self
+                    .next_effect_id
+                    .saturating_add(u64::try_from(offset).unwrap_or(u64::MAX)),
+                kind,
+            })
+            .collect::<Vec<_>>();
         self.emit(
             RuntimeMessage::EffectBatch(EffectBatch {
-                effects: vec![event],
+                effects: events.clone(),
             }),
             None,
-        )
+        )?;
+        self.next_effect_id = self
+            .next_effect_id
+            .saturating_add(u64::try_from(events.len()).unwrap_or(u64::MAX));
+        self.effect_journal
+            .extend(events.into_iter().map(|event| (event.effect_id, event)));
+        Ok(())
     }
 
     pub(in super::super) fn emit_audio_unavailable(&mut self) -> Result<(), RuntimeError> {
         self.emit(
             RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                context: None,
                 code: "runtime.audio_device_unavailable".into(),
                 level: RuntimeLogLevel::Warning,
                 message: "audio intent was retained but no frontend audio device is available"
@@ -420,6 +580,7 @@ impl RuntimeSession {
             if outcome.status != EffectOutcomeStatus::Completed {
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        context: None,
                         code: "runtime.device_effect_failed".into(),
                         level: RuntimeLogLevel::Warning,
                         message: outcome.message.unwrap_or_else(|| {
@@ -459,10 +620,69 @@ impl RuntimeSession {
     pub(in super::super) fn advance_epoch(&mut self) {
         self.epoch.0 = self.epoch.0.saturating_add(1);
         self.operations.bind_epoch(self.epoch.0);
+        self.device_input = crate::device_input::DeviceInput::default();
+        self.input_notice_sites.clear();
         self.command_intents.clear();
         self.reusable_system_intents.clear();
         self.next_interaction_id = 1;
         self.accepted_message_ids.clear();
         self.accepted_debug_message_ids.clear();
+    }
+}
+
+fn protocol_vm_fault_detail(
+    fault: &erabasic_vm::VmFault,
+) -> era_runtime_protocol::RuntimeVmFaultDetail {
+    era_runtime_protocol::RuntimeVmFaultDetail {
+        correlation_id: fault.correlation_id,
+        parent_correlation_id: fault.parent_correlation_id,
+        category: protocol_vm_fault_category(fault.category),
+        code: protocol_vm_fault_code(fault.code),
+        message: fault.message.clone(),
+        origin: Some(protocol_execution_origin(fault.origin())),
+    }
+}
+
+const fn protocol_vm_fault_category(
+    category: erabasic_vm::FaultCategory,
+) -> era_runtime_protocol::RuntimeVmFaultCategory {
+    use era_runtime_protocol::RuntimeVmFaultCategory as Protocol;
+    match category {
+        erabasic_vm::FaultCategory::Script(kind) => match kind {
+            erabasic_vm::ScriptFaultKind::Parse => Protocol::ScriptParse,
+            erabasic_vm::ScriptFaultKind::Resolve => Protocol::ScriptResolve,
+            erabasic_vm::ScriptFaultKind::Argument => Protocol::ScriptArgument,
+            erabasic_vm::ScriptFaultKind::Bounds => Protocol::ScriptBounds,
+            erabasic_vm::ScriptFaultKind::Arithmetic => Protocol::ScriptArithmetic,
+            erabasic_vm::ScriptFaultKind::Assertion => Protocol::ScriptAssertion,
+            erabasic_vm::ScriptFaultKind::ExplicitThrow => Protocol::ScriptExplicitThrow,
+            erabasic_vm::ScriptFaultKind::Operation => Protocol::ScriptOperation,
+        },
+        erabasic_vm::FaultCategory::ResourceLimit => Protocol::ResourceLimit,
+        erabasic_vm::FaultCategory::Cancellation => Protocol::Cancellation,
+        erabasic_vm::FaultCategory::InternalInvariant => Protocol::InternalInvariant,
+        erabasic_vm::FaultCategory::HostContract => Protocol::HostContract,
+        erabasic_vm::FaultCategory::Protocol => Protocol::Protocol,
+        erabasic_vm::FaultCategory::Permission => Protocol::Permission,
+        erabasic_vm::FaultCategory::Infrastructure => Protocol::Infrastructure,
+    }
+}
+
+const fn protocol_vm_fault_code(
+    code: erabasic_vm::VmFaultCode,
+) -> era_runtime_protocol::RuntimeVmFaultCode {
+    use era_runtime_protocol::RuntimeVmFaultCode as Protocol;
+    match code {
+        erabasic_vm::VmFaultCode::InvalidInstruction => Protocol::InvalidInstruction,
+        erabasic_vm::VmFaultCode::StackUnderflow => Protocol::StackUnderflow,
+        erabasic_vm::VmFaultCode::TypeMismatch => Protocol::TypeMismatch,
+        erabasic_vm::VmFaultCode::Bounds => Protocol::Bounds,
+        erabasic_vm::VmFaultCode::DivideByZero => Protocol::DivideByZero,
+        erabasic_vm::VmFaultCode::MissingSymbol => Protocol::MissingSymbol,
+        erabasic_vm::VmFaultCode::Host => Protocol::Host,
+        erabasic_vm::VmFaultCode::Native => Protocol::Native,
+        erabasic_vm::VmFaultCode::Trap => Protocol::Trap,
+        erabasic_vm::VmFaultCode::ResourceLimit => Protocol::ResourceLimit,
+        erabasic_vm::VmFaultCode::RunawayExecution => Protocol::RunawayExecution,
     }
 }

@@ -93,6 +93,11 @@ impl VmHost for ImmediateRuntimeHost<'_> {
         {
             return ImmediateHostCallResult::Ready(ready);
         }
+        if matches!(name, "HTML_PRINTC" | "HTML_PRINTLC")
+            && let Some(ready) = self.immediate_html_column_print(name, request.arguments)
+        {
+            return ImmediateHostCallResult::Ready(ready);
+        }
         let commits_line = is_immediate_committed_text_print(name);
         if !is_immediate_text_print(name) && !commits_line {
             return ImmediateHostCallResult::Unsupported;
@@ -206,6 +211,12 @@ impl RuntimeSession {
             query_state: RuntimeQueryState {
                 skip_print: self.skip_print,
                 message_skip: self.message_skip,
+                snake_display_state: self.project_snapshot.as_ref().is_some_and(|project| {
+                    project
+                        .manifest
+                        .compatibility
+                        .supports_snake_display_state()
+                }),
             },
             user_defined_skip: self.user_defined_skip,
             force_kana_mode: self.force_kana_mode,
@@ -464,7 +475,11 @@ impl ImmediateRuntimeHost<'_> {
         let Ok(mut prepared) = PreparedHtmlPrint::prepare(arguments) else {
             return None;
         };
-        if !prepared.warnings.is_empty() {
+        if (!self.query_state.snake_display_state
+            && erabasic_html::snake_extension_range(&prepared.document).is_some())
+            || !prepared.warnings.is_empty()
+            || document_has_unresolved_color_matrix(&prepared.document)
+        {
             return None;
         }
         let mut bindings = HtmlInteractionBindings {
@@ -476,6 +491,34 @@ impl ImmediateRuntimeHost<'_> {
         bind_html_document(&mut bindings, &mut prepared.document);
         prepared.apply(self.presentation);
         *self.pending_presentation_update = true;
+        Some(self.complete_line_count())
+    }
+
+    fn immediate_html_column_print(
+        &mut self,
+        name: &str,
+        arguments: &[VmValue],
+    ) -> Option<HostReady> {
+        if !self.query_state.snake_display_state {
+            return None;
+        }
+        let Ok(mut prepared) = PreparedHtmlColumnPrint::prepare(name, arguments) else {
+            return None;
+        };
+        if !prepared.warnings.is_empty() || document_has_unresolved_color_matrix(&prepared.document)
+        {
+            return None;
+        }
+        let mut bindings = HtmlInteractionBindings {
+            epoch: self.epoch,
+            next_interaction_id: self.next_interaction_id,
+            button_generation: self.button_generation,
+            command_intents: self.command_intents,
+        };
+        bind_html_document(&mut bindings, &mut prepared.document);
+        if prepared.apply(self.presentation) {
+            *self.pending_presentation_update = true;
+        }
         Some(self.complete_line_count())
     }
 
@@ -551,8 +594,14 @@ impl RuntimeSession {
             name.as_str(),
             "PRINT_ABL" | "PRINT_TALENT" | "PRINT_MARK" | "PRINT_EXP"
         ) {
-            let target = u64::try_from(integer_argument_value(&request.arguments, 0)?)
-                .map_err(|_| RuntimeError::Internal("character index is negative".into()))?;
+            let Ok(target) = u64::try_from(integer_argument_value(request, 0)?) else {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    "character index is negative",
+                );
+            };
             let (variable, table, format) = match name.as_str() {
                 "PRINT_ABL" => ("ABL", erabasic_data::NameTableKind::Abl, 0),
                 "PRINT_TALENT" => ("TALENT", erabasic_data::NameTableKind::Talent, 1),
@@ -572,8 +621,14 @@ impl RuntimeSession {
             return self.emit_presentation();
         }
         if name == "PRINT_PALAM" {
-            let target = u64::try_from(integer_argument_value(&request.arguments, 0)?)
-                .map_err(|_| RuntimeError::Internal("character index is negative".into()))?;
+            let Ok(target) = u64::try_from(integer_argument_value(request, 0)?) else {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    "character index is negative",
+                );
+            };
             let per_line = self
                 .project_snapshot
                 .as_ref()
@@ -691,6 +746,7 @@ impl RuntimeSession {
                     timeout_message: None,
                     submission_token: self.allocate_interaction(),
                     countdown_remaining_ms: None,
+                    viewport_policy: era_runtime_protocol::InputViewportPolicy::FollowOutput,
                 };
                 let pending = PendingInput {
                     host_request: Some(request.id),
@@ -732,15 +788,40 @@ impl RuntimeSession {
                 },
             );
         }
-        if matches!(name.as_str(), "MOUSEX" | "MOUSEY" | "MOUSEB") {
+        if name == "GETLINEY" {
+            let index = integer_argument_value(request, 0)?;
+            let Some(line_id) = self.presentation.line_id_at_display_index(index) else {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    "GETLINEY display index does not identify a retained line",
+                );
+            };
+            let context = self.presentation_observation_context()?;
+            self.issue_host_service(
+                vm,
+                request,
+                ExternalCompletion::LineGeometry {
+                    request: request.id,
+                    context,
+                    line_id,
+                },
+                ServiceKind::PresentationQuery,
+                GET_LINE_GEOMETRY_OPERATION,
+                GET_LINE_GEOMETRY_OPERATION_VERSION,
+                &GetLineGeometryV1Request { context, line_id },
+            )
+        } else if matches!(name.as_str(), "MOUSEX" | "MOUSEY" | "MOUSEB") {
             let coordinate = match name.as_str() {
                 "MOUSEX" => PointerCoordinate::X,
                 "MOUSEY" => PointerCoordinate::Y,
                 _ => PointerCoordinate::Button,
             };
-            let presentation_revision = self.presentation.revision();
-            let environment_revision = self.projection_environment_revision;
-            let projection_space_revision = self.projection_space_revision;
+            let context = self.presentation_observation_context()?;
+            let presentation_revision = context.presentation_revision;
+            let environment_revision = context.environment_revision;
+            let projection_space_revision = context.projection_space_revision;
             self.issue_host_service(
                 vm,
                 request,
@@ -761,7 +842,7 @@ impl RuntimeSession {
                 },
             )
         } else if matches!(name.as_str(), "GETKEY" | "GETKEYTRIGGERED") {
-            let key = match request.arguments.first() {
+            let key = match request.argument(0) {
                 Some(VmValue::Integer(value)) => match u8::try_from(*value) {
                     Ok(value) => value,
                     Err(_) => {
@@ -1131,6 +1212,7 @@ mod immediate_tests {
         let state = RuntimeQueryState {
             skip_print: false,
             message_skip: true,
+            snake_display_state: false,
         };
         let cases = [
             (
@@ -1231,6 +1313,7 @@ mod immediate_tests {
                 RuntimeQueryState {
                     skip_print: false,
                     message_skip: false,
+                    snake_display_state: false,
                 },
             )
             .unwrap(),

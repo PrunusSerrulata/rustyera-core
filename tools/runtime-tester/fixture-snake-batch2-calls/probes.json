@@ -1,0 +1,96 @@
+{
+  "status": "must_probe_no_golden",
+  "instructions": "Do not send this file to the comparison driver as cases.json. First execute source/requests after authorized gates, record actual load/runtime stage, category and side effects; then promote verified expectations.",
+  "common": [
+    {
+      "entry": "COMMON_EXTRA",
+      "oracles": [
+        "original",
+        "snake"
+      ],
+      "watch": [
+        "FLAG:0",
+        "FLAG:1",
+        "FLAG:9"
+      ],
+      "sourceFacts": {
+        "snake": "ConvertArg loops only fixed formal count, no excess rejection; subsequent SetTransporter reads converted prefix",
+        "original": "Process.CalledFunction.cs:164 rejects excess count before transport"
+      },
+      "unknown": "Exact load-vs-runtime error phase and normalized diagnostic for original CALLFORM must be captured.",
+      "sourceFile": "probe-sources/common-extra.erb.txt"
+    }
+  ],
+  "snakeTryStages": [
+    {
+      "source": "TAKE(1 +)",
+      "sourceStage": "ReduceArguments",
+      "expectedProtection": "TRY protected",
+      "oracleVerdict": "pending",
+      "entry": "PROBE_TRY_STAGE_0",
+      "sourceFile": "probe-sources/try-stages.erb.txt"
+    },
+    {
+      "source": "TAKE(\"unterminated)",
+      "sourceStage": "LexicalAnalyzer.Analyse",
+      "expectedProtection": "outside TRY",
+      "oracleVerdict": "pending",
+      "entry": "PROBE_TRY_STAGE_1",
+      "sourceFile": "probe-sources/try-stages.erb.txt"
+    },
+    {
+      "source": "MISSING(7)",
+      "sourceStage": "CallFunction null",
+      "expectedProtection": "TRY protected",
+      "oracleVerdict": "pending",
+      "entry": "PROBE_TRY_STAGE_2",
+      "sourceFile": "probe-sources/try-stages.erb.txt"
+    },
+    {
+      "source": "TAKE(UNKNOWN_VARIABLE)",
+      "sourceStage": "Restructure",
+      "expectedProtection": "outside TRY",
+      "oracleVerdict": "pending",
+      "entry": "PROBE_TRY_STAGE_3",
+      "sourceFile": "probe-sources/try-stages.erb.txt"
+    },
+    {
+      "source": "TAKE(\"bad\")",
+      "sourceStage": "ConvertArg",
+      "expectedProtection": "TRY protected",
+      "oracleVerdict": "pending",
+      "entry": "PROBE_TRY_STAGE_4",
+      "sourceFile": "probe-sources/try-stages.erb.txt"
+    },
+    {
+      "source": "METHOD()",
+      "sourceStage": "CallFunction kind",
+      "expectedProtection": "outside TRY",
+      "oracleVerdict": "pending",
+      "entry": "PROBE_TRY_STAGE_5",
+      "sourceFile": "probe-sources/try-stages.erb.txt"
+    },
+    {
+      "source": "TAKE(FLAG:9999999)",
+      "sourceStage": "SetTransporter",
+      "expectedProtection": "outside TRY",
+      "oracleVerdict": "pending",
+      "entry": "PROBE_TRY_STAGE_6",
+      "sourceFile": "probe-sources/try-stages.erb.txt"
+    },
+    {
+      "source": "BROKEN()",
+      "sourceStage": "callee body",
+      "expectedProtection": "outside TRY",
+      "oracleVerdict": "pending",
+      "entry": "PROBE_TRY_STAGE_7",
+      "sourceFile": "probe-sources/try-stages.erb.txt"
+    }
+  ],
+  "integrationOnly": [
+    "Runtime typed Permission/HostContract/ResourceLimit/Cancellation and malformed NativeReady are Rust safety contracts; never invent matching reference engine faults.",
+    "Snapshot child-origin and CallText-root attacks validate Rust snapshot trust boundaries; no C# oracle equivalent.",
+    "Deferred JUMP retaining LOCAL REF through recursive calls needs real oracle confirmation of return observations, while Rust candidate tests implement the approved ownership contract.",
+    "original CALLSTR/STRFORMCHECK rejection at the actually observed load or run stage must use a separate minimal project; never load snake-only definitions into the dual-oracle common fixture."
+  ]
+}

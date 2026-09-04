@@ -25,9 +25,14 @@ use crate::{
 };
 
 mod artifact;
+mod call_dependencies;
 mod incremental;
+mod runtime_symbols;
 
-use artifact::{canonical_digest, event_groups, function_keys, globals, variable_keys};
+use artifact::{
+    binary_digest, canonical_digest, event_groups, function_keys, globals,
+    shared_variable_dependencies, variable_keys,
+};
 use incremental::{
     PreviousArtifactIndex, cached_function, compact_cached_function, create_incremental_patch,
     materialize_cached_function, materialized_function,
@@ -216,6 +221,11 @@ struct IncrementalBase {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct IncrementalMetadata {
     call_compatibility: erabasic_bytecode::BytecodeCallCompatibility,
+    runtime_builtins: Vec<erabasic_bytecode::RuntimeBuiltinSymbol>,
+    runtime_variables: Vec<erabasic_bytecode::RuntimeVariableSymbol>,
+    runtime_native_authorizations: Vec<erabasic_bytecode::RuntimeNativeAuthorization>,
+    runtime_host_authorizations: Vec<erabasic_bytecode::RuntimeHostAuthorization>,
+    runtime_staged_authorizations: Vec<erabasic_bytecode::RuntimeStagedAuthorization>,
     project_data: erabasic_data::ProjectData,
     globals: Vec<BytecodeGlobal>,
     native_imports: Vec<NativeImport>,
@@ -230,6 +240,11 @@ impl IncrementalBase {
             metadata: include_metadata.then(|| {
                 Box::new(IncrementalMetadata {
                     call_compatibility: artifact.call_compatibility,
+                    runtime_builtins: artifact.runtime_builtins.clone(),
+                    runtime_variables: artifact.runtime_variables.clone(),
+                    runtime_native_authorizations: artifact.runtime_native_authorizations.clone(),
+                    runtime_host_authorizations: artifact.runtime_host_authorizations.clone(),
+                    runtime_staged_authorizations: artifact.runtime_staged_authorizations.clone(),
                     project_data: artifact.project_data.clone(),
                     globals: artifact.globals.clone(),
                     native_imports: artifact.native_imports.clone(),
@@ -447,6 +462,58 @@ pub trait CompileProgressCallback: Fn(CompileProgress) {}
 
 #[cfg(target_arch = "wasm32")]
 impl<T> CompileProgressCallback for T where T: Fn(CompileProgress) {}
+
+/// Rebuild dynamic execution grants from a caller-owned registry and the trusted
+/// catalog for this identity. Never copy grants or source signatures from the artifact.
+#[must_use]
+pub fn runtime_native_validation_context(
+    artifact: &BytecodeArtifact,
+    registry: &HostRegistry,
+) -> ValidationContext {
+    let symbols = runtime_symbols::runtime_builtin_symbols(
+        erabasic_analyzer::builtin_function_signatures(&artifact.manifest.compatibility),
+    );
+    let mut context = ValidationContext::for_artifact(artifact);
+    context.runtime_host_authorizations = runtime_symbols::runtime_host_authorizations(
+        &symbols,
+        registry,
+        &artifact.manifest.compatibility,
+    )
+    .into_iter()
+    .map(|family| (family.key, family))
+    .collect();
+    context.host_capabilities.extend(
+        context
+            .runtime_host_authorizations
+            .values()
+            .map(|family| family.prototype.capability),
+    );
+    context.runtime_native_authorizations =
+        runtime_symbols::runtime_native_authorizations(&symbols, registry)
+            .into_iter()
+            .map(|family| (family.key, family))
+            .collect();
+    context.runtime_host_authorizations = runtime_symbols::runtime_host_authorizations(
+        &symbols,
+        registry,
+        &artifact.manifest.compatibility,
+    )
+    .into_iter()
+    .map(|family| (family.key, family))
+    .collect();
+    context.host_capabilities.extend(
+        context
+            .runtime_host_authorizations
+            .values()
+            .map(|family| family.prototype.capability),
+    );
+    context.runtime_staged_authorizations =
+        runtime_symbols::runtime_staged_authorizations(&symbols, registry)
+            .into_iter()
+            .map(|family| (family.key, family))
+            .collect();
+    context
+}
 
 #[cfg(test)]
 mod tests {

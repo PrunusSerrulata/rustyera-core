@@ -1,5 +1,6 @@
 //! Character-array queries, mutations, sorting, and selection operations.
 
+use super::native_ops::{optional_integer_argument, script_native_error};
 use super::{
     BytecodeStorage, Fiber, PlaceDescriptor, Vm, VmError, VmValue, array_place, integer_argument,
     optional_index,
@@ -24,7 +25,8 @@ pub(super) fn character_series(
         })
         .ok_or_else(|| VmError::InvalidState("character array variable is missing".into()))?;
     if definition.storage != BytecodeStorage::Character {
-        return Err(VmError::InvalidArguments(
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
             "character-array query requires a character variable".into(),
         ));
     }
@@ -35,6 +37,35 @@ pub(super) fn character_series(
             vm.read_place(fiber, &element)
         })
         .collect()
+}
+
+/// Query only the caller's artifact data; no current-session template or registry state is consulted.
+pub(super) fn query_character_name(
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+    operation: &str,
+    arguments: &[VmValue],
+) -> Result<Option<VmValue>, VmError> {
+    let names = &artifact.project_data.static_data.character_name_lookup;
+    let lookup = match operation.to_ascii_lowercase().as_str() {
+        "getcsvnobyname" => &names.names,
+        "getcsvnobycallname" => &names.call_names,
+        "getcsvnobynickname" => &names.nick_names,
+        "getcsvnobymastername" => &names.master_names,
+        _ => return Ok(None),
+    };
+    if !artifact.manifest.compatibility.supports_snake_data_apis() {
+        return Err(VmError::InvalidState(
+            "GETCSVNO is unavailable in this compatibility identity".into(),
+        ));
+    }
+    let [VmValue::String(name)] = arguments else {
+        return Err(VmError::InvalidArguments(
+            "GETCSVNO name lookup expects exactly one string".into(),
+        ));
+    };
+    Ok(Some(VmValue::Integer(
+        lookup.get(name).copied().unwrap_or(-1),
+    )))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -50,6 +81,9 @@ pub(super) fn execute_character_query(
         .get(&generation)
         .ok_or_else(|| VmError::InvalidState("character query generation is missing".into()))?
         .artifact;
+    if let Some(value) = query_character_name(artifact, operation, arguments)? {
+        return Ok(value);
+    }
     if operation == "charanum" {
         return Ok(VmValue::Integer(
             i64::try_from(vm.memory.characters.len()).unwrap_or(i64::MAX),
@@ -57,8 +91,8 @@ pub(super) fn execute_character_query(
     }
     if matches!(operation, "getchara" | "getspchara") {
         let number = integer_argument(arguments, 0)?;
-        let requested_sp = operation == "getspchara"
-            || matches!(arguments.get(1), Some(VmValue::Integer(value)) if *value != 0);
+        let requested_sp =
+            operation == "getspchara" || optional_integer_argument(arguments, 1, 0)? != 0;
         let no = character_definition(artifact, "NO")
             .ok_or_else(|| VmError::InvalidState("NO is not defined".into()))?;
         let cflag = character_definition(artifact, "CFLAG");
@@ -89,7 +123,8 @@ pub(super) fn execute_character_query(
         let start = optional_index(arguments, 2, 0, operation)?;
         let end = optional_index(arguments, 3, values.len(), operation)?;
         if start >= values.len() || start > end || end > values.len() {
-            return Err(VmError::InvalidArguments(
+            return Err(script_native_error(
+                crate::ScriptFaultKind::Bounds,
                 "FINDCHARA character range is invalid".into(),
             ));
         }
@@ -120,8 +155,12 @@ pub(super) fn execute_character_query(
             | "csvequip"
             | "csvjuel"
     ) {
-        usize::try_from(integer_argument(arguments, 1)?)
-            .map_err(|_| VmError::InvalidArguments("CSV field index is negative".into()))?
+        usize::try_from(integer_argument(arguments, 1)?).map_err(|_| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                "CSV field index is negative".into(),
+            )
+        })?
     } else {
         0
     };
@@ -142,8 +181,7 @@ pub(super) fn execute_character_query(
     } else {
         1
     };
-    let requested_sp =
-        matches!(arguments.get(sp_argument), Some(VmValue::Integer(value)) if *value != 0);
+    let requested_sp = optional_integer_argument(arguments, sp_argument, 0)? != 0;
     let template = artifact
         .project_data
         .static_data
@@ -154,7 +192,10 @@ pub(super) fn execute_character_query(
         return Ok(VmValue::Integer(i64::from(template.is_some())));
     }
     let template = template.ok_or_else(|| {
-        VmError::InvalidArguments(format!("character CSV number {number} does not exist"))
+        script_native_error(
+            crate::ScriptFaultKind::Resolve,
+            format!("character CSV number {number} does not exist"),
+        )
     })?;
     let value = match operation {
         "csvname" => VmValue::String(template.name.clone()),
@@ -229,9 +270,10 @@ pub(super) fn execute_character_mutation(
                             template.no == *number && template.is_sp_character == requested_sp
                         })
                         .ok_or_else(|| {
-                            VmError::InvalidArguments(format!(
-                                "character template {number} does not exist"
-                            ))
+                            script_native_error(
+                                crate::ScriptFaultKind::Resolve,
+                                format!("character template {number} does not exist"),
+                            )
                         })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -272,7 +314,10 @@ pub(super) fn execute_character_mutation(
                 .iter()
                 .map(|value| match value {
                     VmValue::Integer(value) => usize::try_from(*value).map_err(|_| {
-                        VmError::InvalidArguments("DELCHARA index is negative".into())
+                        script_native_error(
+                            crate::ScriptFaultKind::Bounds,
+                            "DELCHARA index is negative".into(),
+                        )
                     }),
                     _ => Err(VmError::InvalidArguments(
                         "DELCHARA arguments must be integers".into(),
@@ -285,28 +330,55 @@ pub(super) fn execute_character_mutation(
                     .last()
                     .is_some_and(|index| *index >= memory.characters.len())
             {
-                return Err(VmError::InvalidArguments(
+                return Err(script_native_error(
+                    crate::ScriptFaultKind::Bounds,
                     "DELCHARA index is duplicated or out of range".into(),
                 ));
             }
+            let order = (0..memory.characters.len())
+                .filter(|index| indices.binary_search(index).is_err())
+                .collect::<Vec<_>>();
+            memory
+                .array_leases
+                .remap_characters(None, &memory.characters, &order)?;
             for index in indices.into_iter().rev() {
                 memory.characters.remove(index);
             }
         }
-        "delallchara" => memory.characters.clear(),
+        "delallchara" => {
+            memory
+                .array_leases
+                .remap_characters(None, &memory.characters, &[])?;
+            memory.characters.clear();
+        }
         "swapchara" | "copychara" => {
-            let left = usize::try_from(integer_argument(arguments, 0)?)
-                .map_err(|_| VmError::InvalidArguments("character index is negative".into()))?;
-            let right = usize::try_from(integer_argument(arguments, 1)?)
-                .map_err(|_| VmError::InvalidArguments("character index is negative".into()))?;
+            let left = usize::try_from(integer_argument(arguments, 0)?).map_err(|_| {
+                script_native_error(
+                    crate::ScriptFaultKind::Bounds,
+                    "character index is negative".into(),
+                )
+            })?;
+            let right = usize::try_from(integer_argument(arguments, 1)?).map_err(|_| {
+                script_native_error(
+                    crate::ScriptFaultKind::Bounds,
+                    "character index is negative".into(),
+                )
+            })?;
             if left >= memory.characters.len() || right >= memory.characters.len() {
-                return Err(VmError::InvalidArguments(
+                return Err(script_native_error(
+                    crate::ScriptFaultKind::Bounds,
                     "character index is out of range".into(),
                 ));
             }
             if operation == "swapchara" {
+                let mut order = (0..memory.characters.len()).collect::<Vec<_>>();
+                order.swap(left, right);
+                memory
+                    .array_leases
+                    .remap_characters(None, &memory.characters, &order)?;
                 memory.characters.swap(left, right);
             } else {
+                memory.array_leases.character_values_replaced();
                 memory.characters[right] = memory.characters[left].clone();
             }
         }
@@ -320,7 +392,10 @@ pub(super) fn execute_character_mutation(
                     ));
                 };
                 let index = usize::try_from(*index).map_err(|_| {
-                    VmError::InvalidArguments("ADDCOPYCHARA index is negative".into())
+                    script_native_error(
+                        crate::ScriptFaultKind::Bounds,
+                        "ADDCOPYCHARA index is negative".into(),
+                    )
                 })?;
                 let character = if index < original_len {
                     memory.characters.get(index)
@@ -329,17 +404,25 @@ pub(super) fn execute_character_mutation(
                 }
                 .cloned()
                 .ok_or_else(|| {
-                    VmError::InvalidArguments("ADDCOPYCHARA index is out of range".into())
+                    script_native_error(
+                        crate::ScriptFaultKind::Bounds,
+                        "ADDCOPYCHARA index is out of range".into(),
+                    )
                 })?;
                 additions.push(character);
             }
             memory.characters.extend(additions);
         }
         "reset_stain" => {
-            let character = usize::try_from(integer_argument(arguments, 0)?)
-                .map_err(|_| VmError::InvalidArguments("RESET_STAIN index is negative".into()))?;
+            let character = usize::try_from(integer_argument(arguments, 0)?).map_err(|_| {
+                script_native_error(
+                    crate::ScriptFaultKind::Bounds,
+                    "RESET_STAIN index is negative".into(),
+                )
+            })?;
             if character >= memory.characters.len() {
-                return Err(VmError::InvalidArguments(
+                return Err(script_native_error(
+                    crate::ScriptFaultKind::Bounds,
                     "RESET_STAIN character index is out of range".into(),
                 ));
             }
@@ -382,22 +465,11 @@ struct CharacterReorderPlan {
     scalar_updates: Vec<(&'static str, i64)>,
 }
 
-fn plan_sort_characters(
-    generation: crate::GenerationId,
-    artifact: &erabasic_bytecode::BytecodeArtifact,
-    memory: &crate::Memory,
+fn character_sort_key<'a>(
+    artifact: &'a erabasic_bytecode::BytecodeArtifact,
     arguments: &[VmValue],
-) -> Result<CharacterReorderPlan, VmError> {
-    if memory.characters.len() <= 1 {
-        return Ok(CharacterReorderPlan {
-            order: (0..memory.characters.len()).collect(),
-            scalar_updates: vec![(
-                "CHARANUM",
-                i64::try_from(memory.characters.len()).unwrap_or(i64::MAX),
-            )],
-        });
-    }
-    let (definition, indices, descending) = match arguments.first() {
+) -> Result<(&'a erabasic_bytecode::BytecodeGlobal, Vec<u64>, bool), VmError> {
+    let selected = match arguments.first() {
         None => (
             character_definition(artifact, "NO")
                 .ok_or_else(|| VmError::InvalidState("NO variable is missing".into()))?,
@@ -421,12 +493,19 @@ fn plan_sort_characters(
                 .find(|definition| definition.key == place.variable)
                 .ok_or_else(|| VmError::InvalidState("SORTCHARA variable is missing".into()))?;
             if definition.storage != BytecodeStorage::Character {
-                return Err(VmError::InvalidArguments(
+                return Err(script_native_error(
+                    crate::ScriptFaultKind::Argument,
                     "SORTCHARA key must be a character variable".into(),
                 ));
             }
             let descending = matches!(arguments.get(1), Some(VmValue::String(value)) if value.eq_ignore_ascii_case("BACK"));
             (definition, place.indices.clone(), descending)
+        }
+        Some(VmValue::String(_)) => {
+            return Err(script_native_error(
+                crate::ScriptFaultKind::Argument,
+                "SORTCHARA key or order is invalid".into(),
+            ));
         }
         _ => {
             return Err(VmError::InvalidArguments(
@@ -434,6 +513,25 @@ fn plan_sort_characters(
             ));
         }
     };
+    Ok(selected)
+}
+
+fn plan_sort_characters(
+    generation: crate::GenerationId,
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+    memory: &crate::Memory,
+    arguments: &[VmValue],
+) -> Result<CharacterReorderPlan, VmError> {
+    if memory.characters.len() <= 1 {
+        return Ok(CharacterReorderPlan {
+            order: (0..memory.characters.len()).collect(),
+            scalar_updates: vec![(
+                "CHARANUM",
+                i64::try_from(memory.characters.len()).unwrap_or(i64::MAX),
+            )],
+        });
+    }
+    let (definition, indices, descending) = character_sort_key(artifact, arguments)?;
     let master = read_named_integer(artifact, memory, "MASTER").unwrap_or(-1);
     let target = read_named_integer(artifact, memory, "TARGET").unwrap_or(-1);
     let assi = read_named_integer(artifact, memory, "ASSI").unwrap_or(-1);
@@ -448,8 +546,8 @@ fn plan_sort_characters(
                 .ok_or_else(|| {
                     VmError::InvalidState("SORTCHARA key storage is unavailable".into())
                 })?
-                .read(&indices)
-                .map_err(VmError::InvalidState)?;
+                .read_execution(&indices)
+                .map_err(VmError::ScriptFailure)?;
             Ok((index, value))
         })
         .collect::<Result<Vec<_>, VmError>>()?;
@@ -504,7 +602,8 @@ fn plan_pickup_characters(
         }
         let index = usize::try_from(*value).unwrap_or(usize::MAX);
         if index >= memory.characters.len() {
-            return Err(VmError::InvalidArguments(
+            return Err(script_native_error(
+                crate::ScriptFaultKind::Bounds,
                 "PICKUPCHARA index is out of range".into(),
             ));
         }
@@ -553,6 +652,9 @@ fn commit_character_reorder(
             return Err(error);
         }
     }
+    memory
+        .array_leases
+        .remap_characters(None, &memory.characters, &plan.order)?;
     let mut old = std::mem::take(&mut memory.characters)
         .into_iter()
         .map(Some)

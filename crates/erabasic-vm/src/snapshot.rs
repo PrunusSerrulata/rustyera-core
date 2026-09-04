@@ -13,13 +13,15 @@ use crate::{
 };
 
 mod model;
+mod operand_provenance;
+mod runtime_forms;
 
 pub use self::model::{
     SnapshotBlocker, SnapshotContainerInspection, SnapshotEligibility, SnapshotInspection,
 };
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"RERAVMS\0";
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 10;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 20;
 const SNAPSHOT_HEADER_BYTES: usize = 60;
 const SNAPSHOT_COMPRESSION_LEVEL: i32 = 1;
 
@@ -28,6 +30,7 @@ pub struct VmSnapshot {
     format_version: u32,
     program_version: ProgramVersion,
     artifact_id: Digest,
+    compatibility: erabasic_compat::CompatibilityIdentity,
     current_generation: GenerationId,
     memory: Memory,
     fibers: BTreeMap<FiberId, Fiber>,
@@ -39,6 +42,8 @@ pub struct VmSnapshot {
     // A sorted pair list keeps native state deterministic and independent from
     // a serializer's map-key representation.
     native_states: Vec<(erabasic_bytecode::SymbolKey, Vec<u8>)>,
+    compatibility_warning_sites:
+        std::collections::BTreeSet<(GenerationId, erabasic_bytecode::SymbolKey, usize, u8)>,
 }
 
 #[derive(Serialize)]
@@ -46,6 +51,7 @@ struct VmSnapshotRef<'a> {
     format_version: u32,
     program_version: ProgramVersion,
     artifact_id: Digest,
+    compatibility: erabasic_compat::CompatibilityIdentity,
     current_generation: GenerationId,
     memory: &'a Memory,
     fibers: &'a BTreeMap<FiberId, Fiber>,
@@ -55,9 +61,16 @@ struct VmSnapshotRef<'a> {
     next_request: u64,
     next_generation: u64,
     native_states: &'a [(erabasic_bytecode::SymbolKey, Vec<u8>)],
+    compatibility_warning_sites:
+        &'a std::collections::BTreeSet<(GenerationId, erabasic_bytecode::SymbolKey, usize, u8)>,
 }
 
 impl VmSnapshot {
+    #[must_use]
+    pub fn compatibility(&self) -> &erabasic_compat::CompatibilityIdentity {
+        &self.compatibility
+    }
+
     #[must_use]
     pub const fn program_version(&self) -> ProgramVersion {
         self.program_version
@@ -153,6 +166,10 @@ impl VmSnapshot {
                 "snapshot payload version differs from its container".into(),
             ));
         }
+        snapshot
+            .compatibility
+            .validate()
+            .map_err(|error| VmError::Snapshot(error.to_string()))?;
         Ok(snapshot)
     }
 }
@@ -352,6 +369,9 @@ impl Vm {
             blockers.push(SnapshotBlocker::PrimaryFiberNotSnapshotStable);
         }
         for (id, fiber) in &self.fibers {
+            if fiber.fault_hook.is_some() {
+                blockers.push(SnapshotBlocker::FaultHook(*id));
+            }
             match &fiber.state {
                 FiberState::Runnable => blockers.push(SnapshotBlocker::RunnableFiber(*id)),
                 FiberState::WaitingHost(wait) if wait.stability == HostWaitStability::Transient => {
@@ -372,6 +392,16 @@ impl Vm {
         if !self.memory.legacy.is_empty() {
             blockers.push(SnapshotBlocker::LegacyGenerationState);
         }
+        if !natives.protected_map_roots().is_empty() {
+            blockers.push(SnapshotBlocker::NativeService(
+                "isolated candidate MAP roots cannot be serialized".into(),
+            ));
+        }
+        if let Err(error) = natives.retain_map_leases(
+            &crate::interpreter::map_calls::live_map_leases(self.fibers.values()),
+        ) {
+            blockers.push(SnapshotBlocker::NativeService(error.to_string()));
+        }
         if let Err(error) = natives.snapshots() {
             blockers.push(SnapshotBlocker::NativeService(error));
         }
@@ -389,6 +419,17 @@ impl Vm {
     /// Returns an error when any fiber, reload, generation, host wait, or native
     /// service makes the current state unstable.
     pub fn snapshot(&self, natives: &NativeServiceRegistry) -> Result<VmSnapshot, VmError> {
+        if !self.memory.array_leases.protected.is_empty() {
+            return Err(VmError::Snapshot(
+                "isolated candidate array roots cannot be serialized".into(),
+            ));
+        }
+        if !natives.protected_map_roots().is_empty() {
+            return Err(VmError::Snapshot(
+                "isolated candidate MAP roots cannot be serialized".into(),
+            ));
+        }
+        self.validate_bit_leases()?;
         if let SnapshotEligibility::Ineligible(blockers) = self.snapshot_eligibility(natives) {
             return Err(VmError::Snapshot(format!(
                 "VM is not at a stable snapshot point: {blockers:?}"
@@ -398,6 +439,7 @@ impl Vm {
             format_version: SNAPSHOT_FORMAT_VERSION,
             program_version: self.artifact().manifest.program_version,
             artifact_id: self.artifact_id(),
+            compatibility: self.artifact().manifest.compatibility.clone(),
             current_generation: self.current_generation,
             memory: self.memory.clone(),
             fibers: self.fibers.clone(),
@@ -406,6 +448,7 @@ impl Vm {
             next_frame: self.next_frame,
             next_request: self.next_request,
             next_generation: self.next_generation,
+            compatibility_warning_sites: self.compatibility_warning_sites.clone(),
             native_states: natives
                 .snapshots()
                 .map_err(VmError::Snapshot)?
@@ -421,6 +464,17 @@ impl Vm {
     /// Returns an error when the VM is not snapshot-eligible, a native service
     /// cannot be captured, or the payload cannot be serialized.
     pub fn encode_snapshot(&self, natives: &NativeServiceRegistry) -> Result<Vec<u8>, VmError> {
+        if !self.memory.array_leases.protected.is_empty() {
+            return Err(VmError::Snapshot(
+                "isolated candidate array roots cannot be serialized".into(),
+            ));
+        }
+        if !natives.protected_map_roots().is_empty() {
+            return Err(VmError::Snapshot(
+                "isolated candidate MAP roots cannot be serialized".into(),
+            ));
+        }
+        self.validate_bit_leases()?;
         if let SnapshotEligibility::Ineligible(blockers) = self.snapshot_eligibility(natives) {
             return Err(VmError::Snapshot(format!(
                 "VM is not at a stable snapshot point: {blockers:?}"
@@ -450,6 +504,7 @@ impl Vm {
             format_version: SNAPSHOT_FORMAT_VERSION,
             program_version: self.artifact().manifest.program_version,
             artifact_id: self.artifact_id(),
+            compatibility: self.artifact().manifest.compatibility.clone(),
             current_generation: self.current_generation,
             memory: &self.memory,
             fibers: &self.fibers,
@@ -459,6 +514,7 @@ impl Vm {
             next_request: self.next_request,
             next_generation: self.next_generation,
             native_states: &native_states,
+            compatibility_warning_sites: &self.compatibility_warning_sites,
         })
     }
 
@@ -477,6 +533,12 @@ impl Vm {
         natives: &mut NativeServiceRegistry,
     ) -> Result<Self, VmError> {
         let expected = artifact.artifact();
+        if snapshot.compatibility != expected.manifest.compatibility {
+            return Err(VmError::Snapshot(format!(
+                "snapshot compatibility differs: expected {:?}, received {:?}",
+                expected.manifest.compatibility, snapshot.compatibility
+            )));
+        }
         if snapshot.format_version != SNAPSHOT_FORMAT_VERSION
             || snapshot.artifact_id != expected.manifest.artifact_id
             || snapshot.program_version != expected.manifest.program_version
@@ -486,6 +548,20 @@ impl Vm {
             ));
         }
         validate_snapshot(&snapshot, expected, config)?;
+        for fiber in snapshot.fibers.values() {
+            for index in 0..fiber.frames.len() {
+                if !operand_provenance::valid_frame(&artifact, fiber, index) {
+                    return Err(VmError::Snapshot(
+                        "snapshot operand lease provenance is invalid".into(),
+                    ));
+                }
+            }
+        }
+        NativeServiceRegistry::validate_map_snapshot(
+            &snapshot.native_states,
+            &crate::interpreter::map_calls::live_map_leases(snapshot.fibers.values()),
+        )
+        .map_err(VmError::Snapshot)?;
         snapshot
             .memory
             .materialize_snapshot()
@@ -510,15 +586,7 @@ impl Vm {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let previous_native = natives.snapshots().map_err(VmError::Snapshot)?;
         let native_states = snapshot.native_states.iter().cloned().collect();
-        natives
-            .restore_snapshots(&native_states)
-            .map_err(VmError::Snapshot)?;
-        if let Err(error) = host.rebind_snapshot(&rebinds) {
-            let _ = natives.restore_snapshots(&previous_native);
-            return Err(VmError::Snapshot(error));
-        }
 
         let artifact = artifact.into_shared();
         let generation = snapshot.current_generation;
@@ -535,6 +603,8 @@ impl Vm {
             next_request: snapshot.next_request,
             next_generation: snapshot.next_generation,
             pending_reload: None,
+            compatibility_warning_sites: snapshot.compatibility_warning_sites,
+            pending_compatibility_warnings: Vec::new(),
             debug: crate::debug::DebugState::default(),
             regex_cache: crate::regex_compat::RegexCache::default(),
             find_element_cache: HashMap::new(),
@@ -550,9 +620,90 @@ impl Vm {
             #[cfg(test)]
             path_memo_replays: 0,
         };
+        validate_restored_continuations(&vm)?;
+        let previous_native = natives.snapshots().map_err(VmError::Snapshot)?;
+        natives
+            .restore_snapshots(&native_states)
+            .map_err(VmError::Snapshot)?;
+        if let Err(error) = host.rebind_snapshot(&rebinds) {
+            let _ = natives.restore_snapshots(&previous_native);
+            return Err(VmError::Snapshot(error));
+        }
         vm.retire_terminal_fibers();
         Ok(vm)
     }
+}
+
+fn validate_restored_continuations(vm: &Vm) -> Result<(), VmError> {
+    vm.validate_bit_leases()
+        .map_err(|error| VmError::Snapshot(error.to_string()))?;
+    for fiber in vm.fibers.values() {
+        for frame in &fiber.frames {
+            if !vm.valid_frame_match_calls(fiber, frame)
+                || frame
+                    .runtime_form
+                    .as_ref()
+                    .is_some_and(|form| !form.valid_match_tasks(vm, fiber))
+                || !vm.valid_frame_references(fiber, frame)
+                || !vm.valid_frame_user_calls(fiber, frame)
+                || !vm.valid_frame_user_call_origin(fiber, frame)
+            {
+                return Err(VmError::Snapshot(
+                    "snapshot method resolution state is invalid".into(),
+                ));
+            }
+            if matches!(
+                fiber.state,
+                FiberState::Runnable | FiberState::WaitingHost(_) | FiberState::WaitingResume(_)
+            ) && !crate::interpreter::existvar::valid_existvar_state(vm, frame)
+            {
+                return Err(VmError::Snapshot(
+                    "snapshot EXISTVAR probe state is invalid".into(),
+                ));
+            }
+            if !crate::interpreter::map_calls::valid_map_calls(vm, fiber, frame) {
+                return Err(VmError::Snapshot(
+                    "snapshot MAP call state is invalid".into(),
+                ));
+            }
+            if let Some(continuation) = &frame.runtime_form
+                && (!continuation.valid_method_state(vm, fiber)
+                    || !continuation.valid_host_snapshot(vm, fiber))
+            {
+                return Err(VmError::Snapshot(
+                    "snapshot STRFORM method state is invalid".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_compatibility_warning_sites(
+    snapshot: &VmSnapshot,
+    artifact: &erabasic_bytecode::BytecodeArtifact,
+) -> Result<(), VmError> {
+    if snapshot.compatibility_warning_sites.is_empty() {
+        return Ok(());
+    }
+    let code_lengths: HashMap<_, _> = artifact
+        .functions
+        .iter()
+        .map(|function| (function.key, function.code.len()))
+        .collect();
+    for (generation, function, instruction, warning) in &snapshot.compatibility_warning_sites {
+        if *generation != snapshot.current_generation
+            || *warning > 2
+            || code_lengths
+                .get(function)
+                .is_none_or(|length| instruction >= length)
+        {
+            return Err(VmError::Snapshot(
+                "snapshot compatibility diagnostic identity is invalid".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -561,6 +712,25 @@ fn validate_snapshot(
     artifact: &erabasic_bytecode::BytecodeArtifact,
     config: VmConfig,
 ) -> Result<(), VmError> {
+    validate_compatibility_warning_sites(snapshot, artifact)?;
+    let detached_bytes =
+        snapshot
+            .memory
+            .array_leases
+            .detached
+            .values()
+            .try_fold(0_usize, |total, cell| {
+                cell.len()
+                    .checked_mul(std::mem::size_of::<i64>())
+                    .and_then(|bytes| total.checked_add(bytes))
+            });
+    if detached_bytes.is_none_or(|bytes| bytes > config.maximum_snapshot_bytes)
+        || snapshot.memory.array_leases.retained_bytes() > config.maximum_snapshot_bytes
+    {
+        return Err(VmError::Snapshot(
+            "array lease storage exceeds snapshot memory limit".into(),
+        ));
+    }
     if !snapshot.memory.legacy.is_empty() {
         return Err(VmError::Snapshot(
             "stable snapshots cannot contain legacy-generation storage".into(),
@@ -589,6 +759,11 @@ fn validate_snapshot(
     let mut frame_ids = std::collections::BTreeSet::new();
     let mut request_ids = std::collections::BTreeSet::new();
     for (fiber_id, fiber) in &snapshot.fibers {
+        if fiber.fault_hook.is_some() {
+            return Err(VmError::Snapshot(
+                "stable snapshots cannot contain a final-fault hook".into(),
+            ));
+        }
         if fiber.id != *fiber_id || fiber.frames.len() > config.maximum_call_depth {
             return Err(VmError::Snapshot(
                 "snapshot fiber identity or call depth is invalid".into(),
@@ -610,7 +785,8 @@ fn validate_snapshot(
             ));
         }
         if let FiberState::WaitingHost(wait) = &fiber.state {
-            let valid = request_ids.insert(wait.request)
+            let valid = wait.form_scope.is_none()
+                && request_ids.insert(wait.request)
                 && artifact.host_imports.iter().any(|import| {
                     import.import == wait.import && import.import.result == wait.result
                 });
@@ -621,7 +797,11 @@ fn validate_snapshot(
             }
         }
         for frame in &fiber.frames {
-            if !frame_ids.insert(frame.id) || frame.stack.len() > config.maximum_operand_stack {
+            if !frame_ids.insert(frame.id)
+                || frame
+                    .operand_slots()
+                    .is_none_or(|slots| slots > config.maximum_operand_stack)
+            {
                 return Err(VmError::Snapshot(
                     "snapshot frame identity or stack size is invalid".into(),
                 ));
@@ -646,42 +826,8 @@ fn validate_snapshot(
                 ));
             }
             if let Some(continuation) = &frame.runtime_form {
-                let (_, _, origin_instruction) = continuation.origin();
-                let valid_call = frame.instruction == origin_instruction.saturating_add(1)
-                    && function
-                        .code
-                        .get(origin_instruction)
-                        .is_some_and(|instruction| {
-                            if erabasic_bytecode::Opcode::try_from(instruction.opcode)
-                                != Ok(erabasic_bytecode::Opcode::CallNative)
-                            {
-                                return false;
-                            }
-                            let Some(encoded_index) = instruction.payload.get(..4) else {
-                                return false;
-                            };
-                            let mut bytes = [0; 4];
-                            bytes.copy_from_slice(encoded_index);
-                            let Some(import) = function
-                                .imports
-                                .get(u32::from_le_bytes(bytes) as usize)
-                                .filter(|import| {
-                                    import.kind == erabasic_bytecode::ImportKind::Native
-                                })
-                            else {
-                                return false;
-                            };
-                            artifact.native_imports.iter().any(|native| {
-                                native.import.key == import.key
-                                    && native.import.name.eq_ignore_ascii_case("STRFORM")
-                                    && matches!(
-                                        native.import.parameters.as_slice(),
-                                        [erabasic_bytecode::BytecodeType::String]
-                                    )
-                                    && native.import.result
-                                        == Some(erabasic_bytecode::BytecodeType::String)
-                            })
-                        });
+                let valid_call =
+                    runtime_forms::valid_origin(frame, function, artifact, continuation);
                 if !valid_call
                     || !continuation.valid_for_frame(
                         frame.generation,
@@ -691,7 +837,7 @@ fn validate_snapshot(
                     )
                 {
                     return Err(VmError::Snapshot(
-                        "snapshot STRFORM continuation is invalid".into(),
+                        "snapshot runtime-form continuation is invalid".into(),
                     ));
                 }
             }
@@ -705,7 +851,29 @@ fn validate_snapshot(
                         definition.name
                     )));
                 };
-                validate_cell(cell, definition)?;
+                if let Some(parameter) = function
+                    .parameters
+                    .iter()
+                    .find(|parameter| parameter.key == definition.key && parameter.by_reference)
+                {
+                    if cell.value_type != parameter.value_type
+                        || !matches!(
+                            cell.value_type,
+                            erabasic_bytecode::BytecodeType::IntegerPlace
+                                | erabasic_bytecode::BytecodeType::StringPlace
+                        )
+                        || cell.dimensions != [1]
+                        || cell.len() != 1
+                        || !cell.storage_is_valid()
+                    {
+                        return Err(VmError::Snapshot(format!(
+                            "snapshot REF local {} has invalid alias storage",
+                            definition.name
+                        )));
+                    }
+                } else {
+                    validate_cell(cell, definition)?;
+                }
             }
         }
     }

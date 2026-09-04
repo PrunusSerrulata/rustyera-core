@@ -12,8 +12,11 @@ impl RuntimeSession {
     ) -> Result<(), RuntimeError> {
         let request_id = self.allocate_request()?;
         self.operations.insert_storage(request_id, pending);
-        self.set_phase(RuntimePhase::WaitingExternal)?;
-        self.emit(
+        if let Err(error) = self.set_phase(RuntimePhase::WaitingExternal) {
+            self.operations.take_storage(request_id);
+            return Err(error);
+        }
+        let result = self.emit(
             RuntimeMessage::StorageRequest(StorageRequest {
                 request_id,
                 namespace,
@@ -26,7 +29,11 @@ impl RuntimeSession {
                 deadline_ns: None,
             }),
             None,
-        )
+        );
+        if result.is_err() {
+            self.operations.take_storage(request_id);
+        }
+        result
     }
 
     #[allow(clippy::too_many_lines)]
@@ -44,6 +51,17 @@ impl RuntimeSession {
         };
         match (pending, response.result) {
             (
+                pending @ (PendingStorage::SqlSeedRead { .. }
+                | PendingStorage::SqlMapXmlRead { .. }),
+                result,
+            ) => self.complete_sql_storage(message_id, pending, result),
+            (
+                pending @ (PendingStorage::HostResourceText { .. }
+                | PendingStorage::HostResourceStat { .. }
+                | PendingStorage::HostResourceList { .. }),
+                result,
+            ) => self.complete_resource_storage(pending, result),
+            (
                 PendingStorage::KeyMacroWrite { resume_phase }
                 | PendingStorage::SystemOutputLog { resume_phase },
                 StorageResult::Written { .. },
@@ -51,6 +69,7 @@ impl RuntimeSession {
             (PendingStorage::KeyMacroWrite { resume_phase }, StorageResult::Error { error }) => {
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        context: None,
                         code: "runtime.key_macro_persistence_failed".into(),
                         level: RuntimeLogLevel::Warning,
                         message: format!("macro.txt write failed: {error:?}"),
@@ -64,6 +83,7 @@ impl RuntimeSession {
             (PendingStorage::SystemOutputLog { resume_phase }, StorageResult::Error { error }) => {
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        context: None,
                         code: "runtime.system_output_failed".into(),
                         level: RuntimeLogLevel::Warning,
                         message: format!("emuera.log write failed: {error:?}"),
@@ -239,46 +259,13 @@ impl RuntimeSession {
                 let writes = self.result_write(0)?;
                 self.resume_storage_host(request, writes)
             }
-            (PendingStorage::HostCheck { request, .. }, StorageResult::Error { error }) => {
-                let status = if error.kind == FrontendIoErrorKind::NotFound {
-                    1
-                } else {
-                    4
-                };
-                let writes = self.check_data_writes(&error.message)?;
-                self.resume_storage_host_value(request, VmValue::Integer(status), writes)
+            (pending @ PendingStorage::HostCheck { .. }, result) => {
+                self.complete_save_check(message_id, pending, result)
             }
-            (PendingStorage::HostCheck { request, kind }, StorageResult::Read { data, .. }) => {
-                let vm = self.vm.as_ref().ok_or_else(|| {
-                    RuntimeError::Internal("save check completion has no VM".into())
-                })?;
-                let (status, description) =
-                    match decode_scoped_save(data.as_slice(), vm.vm().artifact(), kind) {
-                        Ok(decoded) => {
-                            let game_base = &vm.vm().artifact().project_data.static_data.game_base;
-                            if decoded.state.unique_code != game_base.unique_code {
-                                (2, String::new())
-                            } else if !vm
-                                .vm()
-                                .artifact()
-                                .project_data
-                                .save_load_context()
-                                .compatibility
-                                .accepts(decoded.state.unique_code, decoded.state.version)
-                            {
-                                (3, String::new())
-                            } else {
-                                (0, decoded.description)
-                            }
-                        }
-                        Err(error) => (4, error.to_string()),
-                    };
-                let writes = self.check_data_writes(&description)?;
-                self.resume_storage_host_value(request, VmValue::Integer(status), writes)
-            }
-            (PendingStorage::HostLoadOrdinary { slot }, StorageResult::Read { data, .. }) => {
-                self.complete_ordinary_load(slot, data.as_slice())
-            }
+            (
+                PendingStorage::HostLoadOrdinary { request, slot },
+                StorageResult::Read { data, .. },
+            ) => self.complete_ordinary_load(slot, data.as_slice(), Some(request)),
             (PendingStorage::ListLoadSlots, StorageResult::Listed { entries }) => {
                 self.open_slot_menu(message_id, entries, false)
             }
@@ -505,8 +492,7 @@ impl RuntimeSession {
                     );
                     return self.render_slot_menu(false);
                 }
-                self.system_menu_host_request = None;
-                self.complete_decoded_ordinary_load(slot, data.as_slice(), decoded)
+                self.complete_decoded_ordinary_load(slot, data.as_slice(), decoded, None)
             }
             (pending, StorageResult::Error { error }) => {
                 if matches!(

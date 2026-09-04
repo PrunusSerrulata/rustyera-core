@@ -140,6 +140,8 @@ impl RuntimeSession {
                 )
             })
             .collect();
+        self.environment =
+            crate::environment::Environment::from_selected(&selected_capabilities.environment);
         self.storage_capabilities = selected_capabilities.storage;
         self.available_fonts = selected_capabilities
             .available_fonts
@@ -309,6 +311,7 @@ impl RuntimeSession {
         self.extension_declarations = declarations;
         self.emit(
             RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                context: None,
                 code: "runtime.extension_registry_accepted".into(),
                 level: RuntimeLogLevel::Info,
                 message: format!(
@@ -373,6 +376,7 @@ impl RuntimeSession {
         }
         self.emit(
             RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                context: None,
                 code: "runtime.key_macro_not_persisted".into(),
                 level: RuntimeLogLevel::Info,
                 message: "key macro state changed in memory; frontend storage was not negotiated"

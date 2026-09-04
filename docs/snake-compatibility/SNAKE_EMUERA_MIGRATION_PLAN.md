@@ -2,7 +2,7 @@
 
 > 来源：从[功能分类文档](SNAKE_EMUERA_BASELINE_MIGRATION_CLASSIFICATION.md)原第 7 章独立抽取，保留已核对的批次 0–7 范围与依赖关系。本文是实施计划，不是完成状态或运行通过证明。
 
-本文维护总体架构、批次范围、前置依赖和验收目标；具体实施方案、实际改动、验收结果和未完成项统一写入[分批次实施与验收记录](SNAKE_EMUERA_IMPLEMENTATION_LOG.md)。调整范围或依赖时须同步关联记录，不能仅修改计划就宣称完成。
+本文维护总体架构、批次范围、前置依赖和验收目标；详细方案使用对应批次计划文档，整批最终结束后才将实际改动、验收结果和未完成项统一写入[分批次实施与验收记录](SNAKE_EMUERA_IMPLEMENTATION_LOG.md)。过程证据与恢复信息保留在本任务已忽略的工作目录，不写实施日志或批次总览的中间状态。调整范围或依赖时同步方案，不能仅修改计划就宣称完成。
 
 - 背景与证据：[蛇版兼容性详查](SNAKE_EMUERA_TW_RUSTYERA_COMPATIBILITY_RESEARCH.md)。历史审计不代表当前实现状态。
 - S/D/C/N 编号及第 1–4 类定义：[功能分类与替代契约](SNAKE_EMUERA_BASELINE_MIGRATION_CLASSIFICATION.md)。通用验收原则亦见该文档第 9.2 节。
@@ -24,7 +24,7 @@
 
 ```text
 language = emuera.em | emuera.skia.snake
-arithmetic = reference-wrap-or-current | snake-saturating
+arithmetic = reference-wrap-or-current | snake-operation-specific-safe
 rng = <algorithm-id, state-format-version>
 layout = unicode-column | snake-pixel-intent
 save = <codec-version>
@@ -48,13 +48,39 @@ services = <sql, presentation, audio, extension capability versions>
 - 自动生成“脚本出现 API → analyzer → compiler → VM/service → frontend”覆盖表，区分 unknown、trap、unsupported capability。
 - 为第 2 类建立双期望 fixture；先锁定 `PRINTC`、算术、RNG、REF、extra args、`TOINT`、`GETKEY`。
 
+2026-08-27 细化：三个客户端同时接入项目配置显式选择，缺省原版。批次 0 的 snake profile
+为实验状态，身份记录当前有效策略并明确告警，不将后续语义提前标为兼容。原版裸存档互操作
+保留，snake 自身存档采用独立身份容器及存储目录。用户授权两个 oracle 增加仅 headless 生效
+的真实布局观察和设备原语注入，以补足 PRINTC/GETKEY 的动态证据；不改变正常游戏语义，
+不把布局度量等同于 GUI/GPU 或跨客户端像素等价。详细契约、版本、分项与门禁见本批实施记录。
+
+批次 0 实测进一步记录固定蛇版基准的 RNG dump/restore 状态丢失：`DumpRanddata`
+向临时 `ToArray` 副本写入，随后 `INITRAND` 恢复零。批次 2 已选择统一 SFMT 权威状态，
+正确实现 dump/restore，不复刻缺陷或 `.NET Random` 双状态路径，并升级实际 policy；
+不保证与开启 `UseNewRandom` 的蛇版 TW 同 seed 同结果。算法名称相同不代表状态兼容。原始向量及两引擎逐例结果见
+[实测比较汇总](BATCH_0_ORACLE_RESULTS.md)，不得先改参考实现或以新 golden 隐藏差异。
+
 验收：选择 `emuera.skia.snake` profile 不改变 `emuera.em` profile 的既有 fixture；错误中能显示 profile 和缺失 capability。
 
 <a id="batch-1"></a>
 
 ### 批次 1：完整摄取与参考能力阻塞项
 
+2026-08-28 已完成本批约定范围，详见[验收汇总](BATCH_1_ACCEPTANCE_SUMMARY.md)；
+参考/像素差异、SQL和缺失地图资源仍明确保留，不代表真实蛇版TW可玩。
+
 前置：批次 0 的 profile、identity 与诊断契约。
+
+2026-08-27 用户确认的[详细实施方案](BATCH_1_IMPLEMENTATION_PLAN.md)将本批划为独立的
+1A（S01/S02 与资源清单）、1B（动态方法）、1C（列选项/GLOBAL/安全读取）、
+1D（服务与集成）。1C 依赖 1A，1D 的最终集成等待 1A–1C；各自唯一审查、独立验收，
+功能仍分别提交。用户取消本任务各子批次测试总时限，但未取消单次全量、静态门禁或看门狗。
+2026-08-28 用户追加规则：本组 core 审计工具的明确项目加载阶段改为连续4次5秒完整采样
+相同才退出；数据摄取、解析/分析/编译和符号准备属于加载，报告处理、执行与输入等待仍为
+连续2次相同即退出。真实进展或阶段变化重置计数，不将采样计数视作进度；Browser/Tauri
+看门狗未因此修改。用户单独授权的TW全量重跑次数与结果继续逐次记录，不自动重试。
+Browser/Tauri 完成真实服务，TUI 本批对像素测量/pointer/canvas 明确缺能力，不新增终端投影。
+执行需管理磁盘：20 GiB 以下减少并行，10 GiB 以下暂停新增高写入任务并清理本任务可再生产物。
 
 - 实施 S01/S02：三个客户端都提交 `.als/.erd`，core 建立用户 ERD/ALS。
 - 实施 S03/S12：`GETMETH/GETMETHS/EXISTMETH` 与 `DT_COLUMN_OPTIONS` 从注册到 runtime 全链路可用。
@@ -70,11 +96,30 @@ services = <sql, presentation, audio, extension capability versions>
 
 前置：批次 1 的完整符号/数据摄取、动态方法和已有 service 接线。
 
-- 实施 S05-S11、S13：EXISTVAR storage 重载、CSV/数组、bit、MAP、STRFORMCHECK、BGC、unchecked、动画查询；S12 已在批次 1 完成，S14 明确留到批次 4 的 scene 模型之后，S05 的 Float bit 留到批次 6。
-- 实施 D04、D06-D08、D10-D13、D17 的 profile 分支和输入状态机。先统一 D10 的逻辑计时器再接 S13；先定 D13 的输入顺序再验 D12 的键/鼠标 latch。D04/D06 固定动态调用、实参处理和 call-frame 扩展边界，作为批次 6 新 ABI 的基础。
-- 为 C03 提供 capability-based environment；兼容 `GETPLATFORM` 但发 portability diagnostic。
-- D11 同步定义 RNG algorithm/state-format identity 与当前已支持状态的保存/恢复契约，不能等到批次 5 才补；外部蛇版存档导入后置。
-- 对真实 176 MiB 项目先记录摄取、符号分析和编译缺口/内存基线；用已可编译 fixture 验证 compiled cache 与函数缓存。完整项目缓存收益等批次 4 编译闭环就绪后再验收；优化 N01 的替代路径，不接入 lazy 二进制索引。
+2026-08-29 用户批准的[详细实施方案](BATCH_2_IMPLEMENTATION_PLAN.md)固定六个子批次：
+2A 执行策略/RNG；2B 动态调用/表达式；2C 数据 API；2D 错误钩子；2E 展示/计时器；
+2F 输入/环境及最终汇合。2B/2C/2E 依赖 2A；2D 依赖 2B；2F 依赖 2B/2E，
+最终汇合等待全部子批次。各子批次分别且仅一次重构审查、每套全量一次；用户取消批次 2
+各子批次测试总时限，保留静态门禁、看门狗与证据要求。2026-08-30 产品实施、三端绑定和
+功能行为矩阵已完成，最终结果见[实施记录 / 批次 2](SNAKE_EMUERA_IMPLEMENTATION_LOG.md#batch-2)；
+蛇版 TW 规模采集的峰值 RSS 因 `/usr/bin/time` 沙箱权限未取得，未伪造或为补报告重跑。
+
+- 实施 S05-S11、S13：`EXISTVAR` 非零参数模式执行表达式解析，不读取 storage cell 或额外验证访问越界；`STRFORMCHECK` 实际展开并保留副作用，受捕获的解析/展开错误返回 0，参数求值失败正常传播。S12 已在批次 1 完成，S14 留批次 4，S05 的 Float bit 留批次 6。
+- CSV/数组、bit、MAP 复用既有存储与写回事务。MAP 保留稳定插入顺序与蛇版无转义分隔符格式，FROMSTRING 不清空旧 MAP，只对无分隔符冲突数据承诺 round-trip。BGC 为独立全局整行背景状态，影响符合条件的历史行，不复用 run 背景。
+- 实施 D04、D06-D08、D10-D13、D17。CALLSTR 六变体运行时解析完整调用文本及实参，不是 CALLFORM 名称别名；snake 非 variadic 多余实参不求值，内置 arity 不放宽。集中算术策略覆盖折叠和优化，逐操作保留固定参考边界，不笼统以饱和替代全部算术。错误钩子保留原 fault 且防重入。
+  CALLSTR 的“不求值”指 ConvertArg 后的普通运行时求值：固定参考先按源顺序
+  Restructure 全部外层实参，再转换目标参数；常量越界、常量除零及 REPLACE/STRFORM
+  特有的重构读取仍可能先发生。嵌套用户方法则先转换参数，只重构保留的参数子树。
+  动态 Native/Host 调用须复用实际授权、服务状态及 continuation，不依赖未执行的静态
+  调用制造 import，也不把 parser 目录当作服务权限。
+  MAP prefix/suffix 与 FROMSTRING 的 kvSep 查找固定到参考实际使用的 ICU 数据及
+  UTF16 边界，不用当前宿主 locale 或 Unicode 版本；FROMSTRING 逐条写入，后条错误
+  保留先条结果。Rust UTF8 无法表示孤立 surrogate 的切片须明确拒绝并登记差异。
+- 算术告警使用独立诊断通道，不向脚本文本历史插入本地化诊断行；明确保留与固定蛇版的输出及历史查询差异，逐例保留原始差分，不能将其仅标为 Schema 不可比或过滤后宣称一致。
+- 先统一 D10/S13 的逻辑计时器，再接查询；获准最小 headless 接线修复必须逐文件审计且不改变正常引擎。先定 D13 输入排序，再验 D12 键/鼠 latch 与真实 AWAIT 0 输入泵；TUI 不新增终端按键扩展，撤销无法提供的完整 GETKEY 能力。
+- C03 提供版本化 `ENV_HAS_CAPABILITY(name[, major])`；`GETPLATFORM` 以保持视口的定时输入能力映射 0/5，按位置发 portability diagnostic，不暴露实际 OS。
+- D11 使用统一 SFMT 与既有 625 项 RANDDATA 事务路径，覆盖当前保存/恢复、snapshot 和 replay；状态拒绝原子化。明确有意 RNG 差异并升级实际 identity，旧 snake cache 重建，不兼容 snapshot/身份容器拒绝，不静默迁移。原版 RNG/裸存档保留，外部蛇版存档导入后置。
+- N01 缓存正确性归 2B，跨端缓存和真实项目规模基线归 2F。用可编译 fixture 验证冷/暖缓存及动态目标失效；真实项目仅在最终输入冻结后采集一次分阶段耗时、峰值内存和缺口，区分旧 `binary=false` 配置诊断。完整项目缓存收益等批次 4，不接 lazy 索引，不另拆集成批次重跑全量。
 
 验收：独立 fixture 中环境分支、NF 输入、计时器、动态调用和 RNG 状态可重复；7 个非蛇版项目的关键语义 fixture 仍按 `emuera.em` profile；可编译 fixture 有可量化缓存结果。真实标题在 NF 输入前已调用 SQL 并使用扩展 HTML，因此必须等批次 3/4，不能在本批提前宣布标题可交互。
 
@@ -99,6 +144,8 @@ services = <sql, presentation, audio, extension capability versions>
 
 前置：批次 2 的输入/计时器/RNG 契约，以及批次 3 的 SQL 与数据库保存策略。图形实现可在批次 2 后独立推进，但完整游戏验收必须等批次 3 就绪。
 
+状态（2026-09-01）：已按[批次 4 分批实施方案](SNAKE_EMUERA_BATCH_4_IMPLEMENTATION_PLAN.md)完成；真实蛇版 TW 的静态地图路线已推进到第 1 日，并完成自有存档、关闭重启加载、scene/state 对比及冷暖缓存/源码摘要失效验收。动画地图重绘、外部存档、Float 与完整音频仍按后续批次处理，详见[实施记录](SNAKE_EMUERA_IMPLEMENTATION_LOG.md#批次-4主玩法-presentation图像scene-与自身存档闭环)。
+
 - 实施 D14/D15 和 C04/C05/C08：扩展 canonical HTML AST、SceneLayer、CanvasReplay、line anchor 和资源 service。
 - 上述模型就绪后实施 D09 的 sprite/CBG 新重载和 S14 `EXISTSIMAGELAYER`；保留旧 arity，查询必须读取实际 scene，不能提前返回伪造值。
 - 补蛇版 TW 活动使用的 `HTML_PRINTC/LC`、font/img/div 属性、CBG、sprite、动画和 pointer 坐标；在本批复验 S04 对新增标签和 viewport/scene revision 的测量、命中与像素采样。
@@ -113,13 +160,16 @@ services = <sql, presentation, audio, extension capability versions>
 
 ### 批次 5：蛇版存档互操作与音频
 
-前置：批次 4 的自身存档闭环和批次 3 的 SQL 外部状态契约。
+前置：批次 4 的图形游戏路线与批次 3 的 SQL 外部状态契约。最终实施和验收见[批次 5 记录](SNAKE_EMUERA_IMPLEMENTATION_LOG.md#batch-5)；2026-09-03 已完成用户确认范围。
 
-- 实施 D18 的非 Float 子集：先读 ERAZIP 和蛇版 Integer/String、自定义数组及已支持的 RNG 状态，复用自身存档闭环；明确单向或双向兼容。未知 RNG/codec 与 Float tags 必须显式拒绝，不得丢弃、转成 Integer 或声称已兼容任意蛇版存档。
-- 实施 D16/C07：规范化音频期望状态和 revision-bound 实际查询；缺能力客户端给稳定诊断。
-- 按批次 3 的数据库策略验证外部存档导入/迁移，不把外部数据库假装包含在普通 save 内。
+- D18 非 Float 子集直接读写标准 Emuera 1808 Binary、ERAZIP/GZip、Text；普通 `.sav` 不携带 GLOBAL、SFMT 或 SQL revision。普通加载保持当前 GLOBAL/RNG/SQL，GLOBAL 文件只恢复 global scope；`RANDDATA` 作为变量导入，只有显式 `INITRAND` 改变 RNG。
+- 当前 `UseNewRandom=true` 的蛇版 TW 标准存档不因缺少 `.NET Random` 恢复能力而拒绝。未知 tag、Float、损坏及超限输入明确拒绝并保持原子性；不承诺任意蛇版存档的精确运行状态，精确恢复由 VM snapshot 提供。
+- 所有前端主存档只使用项目 `sav`。未发布的 `RERASAV`/owned-state/legacy namespace 已移除，无迁移、探测或 fallback，不删除用户旧文件。协议 46.0、identity 12、`snake_emuera1808_interop_v1` 保持既定版本。
+- D16/C07 通过版本化服务实现 10 个声道与 BGM 的实际查询和 pause/resume/stop/rate/preserve-pitch；蛇版没有 Seek action。TUI 对实际音频查询明确 unsupported，不伪造 stopped。
+- 集成闭环为真实 TW→RustyEra 新 ERAZIP→蛇版 reference 修改并保存→Chromium/Firefox/Safari/Tauri 对比 ordinary/GLOBAL 及实际存储。用户确认 TUI 真实 TW 标题受 HTML_STRINGLEN v2 像素能力限制，本项记为未验证，像素适配留后续；不改变既有 TUI 不伪造像素能力的范围。
+- 用户允许无焦点、无 computer use 的后台 DOM 验收；真实锁屏 Safari/Tauri 媒体通过，但原生输入、默认 Safari autoplay 不在其覆盖内。项目加载临时允许显式 4×5s 无变化区间，加载性能问题单独保留，不影响已完成的标准 `.sav` 互通判断；大项目整包导出及取消内存问题已于 2026-09-04 完成定向修复与验收，见批次 5 最终记录。
 
-验收：已支持类型/codec/RNG 的真实蛇版存档 fixture 保留变量 shape、RNG、GLOBAL 并落实数据库策略，未支持类型有明确拒绝结果；音频查询不支持时不会悄悄返回误导值。Float 存档互操作在批次 6 补验。
+验收：已支持类型的实际存档形状、变量与作用域边界一致，项目 Save/GlobalSave 请求有实际响应且没有私有路径 fallback；生产源码和新构建的 release 产物禁止能力扫描无命中。Text 的固定参考省略、TUI 图形缺能力等实际差异逐项保留；Float 在批次 6 补验，不自动扩大本批。
 
 <a id="batch-6"></a>
 

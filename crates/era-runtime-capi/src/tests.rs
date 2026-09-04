@@ -218,8 +218,7 @@ fn c_boundary_stages_one_cbor_project_manifest_without_an_envelope() {
         session_create(options.header, &raw const options, &raw mut handle),
         EraStatus::Ok
     );
-    // { 0: project_revision = 1, 1: files = [] }
-    let manifest = [0xa2_u8, 0x00, 0x01, 0x01, 0x80];
+    let manifest = encoded_project_manifest();
     let input = EraByteSlice {
         data: manifest.as_ptr(),
         len: manifest.len(),
@@ -280,15 +279,21 @@ fn project_manifest_staging_rejects_noncanonical_or_malformed_cbor() {
         session_create(options.header, &raw const options, &raw mut handle),
         EraStatus::Ok
     );
+    let canonical = encoded_project_manifest();
+    let mut trailing = canonical.clone();
+    trailing.push(0);
+    let mut nonminimal = canonical.clone();
+    nonminimal.splice(2..3, [0x18, 0x01]);
+    let mut descending = vec![0xa3, 0x01, 0x80, 0x00, 0x01];
+    descending.extend_from_slice(&canonical[5..]);
     let invalid = [
-        // A legal manifest followed by a trailing data item.
-        vec![0xa2, 0x00, 0x01, 0x01, 0x80, 0x00],
-        // project_revision=1 encoded with a non-minimal integer width.
-        vec![0xa2, 0x00, 0x18, 0x01, 0x01, 0x80],
-        // Canonical fields in descending rather than bytewise key order.
-        vec![0xa2, 0x01, 0x80, 0x00, 0x01],
+        trailing,
+        nonminimal,
+        descending,
         // Truncated files array.
-        vec![0xa2, 0x00, 0x01, 0x01, 0x81],
+        vec![0xa3, 0x00, 0x01, 0x01, 0x81],
+        // Protocol 35 manifests without an explicit compatibility identity are not accepted.
+        vec![0xa2, 0x00, 0x01, 0x01, 0x80],
     ];
     for bytes in invalid {
         assert_eq!(
@@ -303,7 +308,7 @@ fn project_manifest_staging_rejects_noncanonical_or_malformed_cbor() {
             EraStatus::InvalidArgument
         );
     }
-    let manifest = [0xa2_u8, 0x00, 0x01, 0x01, 0x80];
+    let manifest = encoded_project_manifest();
     assert_eq!(
         session_stage_project_manifest(
             EraCallHeader::for_type::<EraCallHeader>(),
@@ -654,4 +659,13 @@ fn writable_compiled_cache_cannot_cross_sessions_and_valid_commit_consumes_it() 
         session_destroy(EraCallHeader::for_type::<EraCallHeader>(), second),
         EraStatus::Ok
     );
+}
+
+fn encoded_project_manifest() -> Vec<u8> {
+    minicbor::to_vec(era_runtime_protocol::ProjectManifest {
+        project_revision: 1,
+        files: Vec::new(),
+        compatibility: Default::default(),
+    })
+    .unwrap()
 }

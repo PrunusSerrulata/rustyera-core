@@ -4,7 +4,7 @@ use erabasic_ast::{
     Argument, Expr, ExprKind, Function as AstFunction, Span, Statement, StatementKind, VariableRef,
 };
 use erabasic_hir::{
-    ConstantValue, Function, FunctionId, FunctionKind, HirArgument, HirExpr, HirExprKind,
+    ConstantValue, Function, FunctionId, FunctionKind, HirArgument, HirExpr, HirExprKind, HirPlace,
     HirStatement, HirStatementKind, InstructionTarget, LabelId, LineId, Parameter, SemanticType,
     SourceLocation,
 };
@@ -193,6 +193,21 @@ pub(super) fn analyze_function(
 
     let mut lines = Vec::new();
     let mut next_label = 0u32;
+    for runtime in symbols.runtime_initializers(id) {
+        let line_id = LineId(u32::try_from(lines.len()).expect("too many lines"));
+        lines.extend(analyze_runtime_initializer(
+            line_id,
+            id,
+            source,
+            runtime,
+            symbols,
+            catalog,
+            context,
+            index_resolver,
+            options,
+            diagnostics,
+        ));
+    }
     for statement in &function.body {
         let line_id = LineId(u32::try_from(lines.len()).expect("too many lines"));
         lines.push(analyze_statement(
@@ -229,6 +244,170 @@ pub(super) fn analyze_function(
         labels,
         control_flow,
         location: SourceLocation::new(source.source.id, function.span),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn analyze_runtime_initializer(
+    line_id: LineId,
+    function: FunctionId,
+    source: &ParsedProjectSource,
+    runtime: &crate::symbols::FunctionRuntimeInitializer,
+    symbols: &Symbols,
+    catalog: &Catalog,
+    context: &AnalysisParserContext,
+    index_resolver: &IndexResolver,
+    options: &AnalyzerOptions,
+    diagnostics: &mut Vec<AnalyzerDiagnostic>,
+) -> Vec<HirStatement> {
+    let location = runtime.initializer.location;
+    let Some(variable) = symbols.variables.get(runtime.variable.0 as usize) else {
+        return vec![HirStatement {
+            id: line_id,
+            kind: HirStatementKind::Error,
+            location,
+        }];
+    };
+    let mut parsed = erabasic_parser::parse_expression_list_at(
+        &runtime.initializer.source,
+        location.span.start,
+        context,
+    );
+    for diagnostic in parsed.diagnostics.drain(..) {
+        diagnostics.push(map_parser_diagnostic(
+            source.source.id,
+            &source.source.relative_path,
+            &source.text,
+            &diagnostic,
+        ));
+    }
+    let Some(mut expressions) = parsed.value else {
+        diagnostics.push(AnalyzerDiagnostic::at(
+            AnalyzerDiagnosticCode::InvalidInitializer,
+            AnalyzerDiagnosticSeverity::Error,
+            2,
+            source.source.id,
+            &source.source.relative_path,
+            &source.text,
+            location.span,
+            "dynamic private initializer must contain at least one expression",
+        ));
+        return vec![HirStatement {
+            id: line_id,
+            kind: HirStatementKind::Error,
+            location,
+        }];
+    };
+    expressions.truncate(runtime.initializer.value_count);
+    if expressions.is_empty() {
+        diagnostics.push(AnalyzerDiagnostic::at(
+            AnalyzerDiagnosticCode::InvalidInitializer,
+            AnalyzerDiagnosticSeverity::Error,
+            2,
+            source.source.id,
+            &source.source.relative_path,
+            &source.text,
+            location.span,
+            "dynamic private initializer must contain at least one expression",
+        ));
+        return vec![HirStatement {
+            id: line_id,
+            kind: HirStatementKind::Error,
+            location,
+        }];
+    }
+    let value_count = expressions.len();
+    expressions
+        .iter()
+        .enumerate()
+        .map(|(index, expression)| {
+            analyze_runtime_initializer_value(
+                line_id,
+                index,
+                value_count,
+                function,
+                expression,
+                variable,
+                source,
+                symbols,
+                catalog,
+                index_resolver,
+                options,
+                diagnostics,
+            )
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn analyze_runtime_initializer_value(
+    first_line_id: LineId,
+    index: usize,
+    value_count: usize,
+    function: FunctionId,
+    expression: &Expr,
+    variable: &erabasic_hir::Variable,
+    source: &ParsedProjectSource,
+    symbols: &Symbols,
+    catalog: &Catalog,
+    index_resolver: &IndexResolver,
+    options: &AnalyzerOptions,
+    diagnostics: &mut Vec<AnalyzerDiagnostic>,
+) -> HirStatement {
+    let location = SourceLocation::new(source.source.id, expression.span);
+    let value = ExpressionAnalyzer {
+        symbols,
+        catalog,
+        options,
+        function,
+        source: source.source.id,
+        path: &source.source.relative_path,
+        text: &source.text,
+        diagnostics,
+        index_resolver,
+    }
+    .analyze(expression);
+    if variable.value_type != value.value_type && value.value_type != SemanticType::Error {
+        diagnostics.push(AnalyzerDiagnostic::at(
+            AnalyzerDiagnosticCode::TypeMismatch,
+            AnalyzerDiagnosticSeverity::Error,
+            2,
+            source.source.id,
+            &source.source.relative_path,
+            &source.text,
+            expression.span,
+            "dynamic private initializer type does not match its declaration",
+        ));
+    }
+    let index_value = i64::try_from(index).expect("initializer index fits in i64");
+    let indices = (value_count > 1)
+        .then_some(HirExpr {
+            kind: HirExprKind::Integer { value: index_value },
+            value_type: SemanticType::Integer,
+            constant: Some(ConstantValue::Integer(index_value)),
+            location,
+        })
+        .into_iter()
+        .collect();
+    HirStatement {
+        id: LineId(
+            first_line_id
+                .0
+                .checked_add(u32::try_from(index).expect("too many initializer values"))
+                .expect("too many lines"),
+        ),
+        kind: HirStatementKind::Assignment {
+            target: HirPlace {
+                variable: variable.id,
+                indices,
+                value_type: variable.value_type,
+                mutable: variable.mutable,
+                location,
+            },
+            op: erabasic_ast::AssignOp::Assign,
+            value,
+        },
+        location,
     }
 }
 
@@ -491,11 +670,18 @@ fn analyze_instruction(
     diagnostics: &mut Vec<AnalyzerDiagnostic>,
 ) -> HirStatementKind {
     let key = key(name, options.ignore_case);
-    let signature = catalog.instructions.get(&key);
+    let signature = catalog.instructions.get(&key).filter(|_| {
+        catalog.extension_instructions.contains(&key)
+            || crate::catalog::builtin_instruction_available(&key, &options.compatibility)
+    });
     let method_signature = signature
         .is_none()
         .then(|| catalog.functions.get(&key))
-        .flatten();
+        .flatten()
+        .filter(|_| {
+            catalog.extension_functions.contains(&key)
+                || crate::catalog::builtin_function_available(&key, &options.compatibility)
+        });
     if matches!(key.as_str(), "VARI" | "VARS") {
         return analyze_scoped_declaration_statement(
             function,
@@ -555,6 +741,22 @@ fn analyze_instruction(
         diagnostics,
         index_resolver,
     };
+    if matches!(key.as_str(), "MATCHALL" | "MATCHALLEX") && method_signature.is_some() {
+        analyzer.check_match_source(
+            &key,
+            &arguments
+                .iter()
+                .map(|arg| match arg {
+                    Argument::Expression(expr)
+                    | Argument::MixedExpression {
+                        expression: expr, ..
+                    } => Some(expr),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            SourceLocation::new(source.source.id, statement.span),
+        );
+    }
     let mut lowered = Vec::new();
     for (index, argument) in arguments.iter().enumerate() {
         if static_target && index == 0 {
@@ -621,11 +823,9 @@ fn analyze_instruction(
                         })
                         .or_else(|| {
                             method_signature.and_then(|signature| {
-                                signature.arguments.get(index).or_else(|| {
-                                    signature
-                                        .variadic
-                                        .then(|| signature.arguments.last())
-                                        .flatten()
+                                let constraints = signature.arguments_for_arity(arguments.len());
+                                constraints.get(index).or_else(|| {
+                                    signature.variadic.then(|| constraints.last()).flatten()
                                 })
                             })
                         });
@@ -670,6 +870,37 @@ fn analyze_instruction(
             Argument::Omitted(_) => HirArgument::Omitted,
         });
     }
+    if key == "DT_COLUMN_OPTIONS" {
+        let expression_arguments = lowered
+            .iter()
+            .enumerate()
+            .filter_map(|(index, argument)| {
+                if index >= 2 && index % 2 == 0 {
+                    return None;
+                }
+                Some(match argument {
+                    HirArgument::Expression(expression) => Some(expression.clone()),
+                    _ => None,
+                })
+            })
+            .collect::<Vec<_>>();
+        analyzer.check_arguments(
+            &expression_arguments,
+            &[
+                crate::ArgumentConstraint::String,
+                crate::ArgumentConstraint::String,
+                crate::ArgumentConstraint::Any,
+            ],
+            3,
+            true,
+            false,
+            SourceLocation::new(source.source.id, statement.span),
+        );
+        return HirStatementKind::Instruction {
+            target: InstructionTarget::Builtin(key),
+            arguments: lowered,
+        };
+    }
     if static_target && lowered.is_empty() && !raw_arguments.trim().is_empty() {
         lowered.push(HirArgument::Raw(resolve_static_target(
             raw_arguments,
@@ -680,6 +911,19 @@ fn analyze_instruction(
         // Emuera treats a final comma after a static CALL/JUMP target as the end
         // of its argument list, not as an extra omitted user-function argument.
         lowered.pop();
+    }
+    if matches!(
+        key.as_str(),
+        "CALL" | "CALLF" | "JUMP" | "BEGIN" | "TRYCALL" | "TRYJUMP"
+    ) && let Some(HirArgument::Raw(target)) = lowered.first()
+        && let Some(callee) = symbols.function(target)
+    {
+        analyzer.diagnose_user_call_arity(
+            target,
+            lowered.len().saturating_sub(1),
+            callee.parameter_count,
+            SourceLocation::new(source.source.id, statement.span),
+        );
     }
     if matches!(key.as_str(), "IF" | "ELSEIF" | "SIF" | "WHILE" | "REPEAT")
         && matches!(lowered.last(), Some(HirArgument::Omitted))
@@ -713,6 +957,11 @@ fn analyze_instruction(
                 HirArgument::Omitted | HirArgument::Raw(_) => None,
             })
             .collect();
+        analyzer.check_graphics_call(
+            &key,
+            &expression_arguments,
+            SourceLocation::new(source.source.id, statement.span),
+        );
         if !matches!(
             signature.argument_style,
             erabasic_parser::ArgumentStyle::Formatted
@@ -761,6 +1010,29 @@ fn analyze_instruction(
                 HirArgument::Omitted | HirArgument::Formatted(_) | HirArgument::Raw(_) => None,
             })
             .collect();
+        if matches!(key.as_str(), "GETMETH" | "GETMETHS")
+            && !catalog.extension_functions.contains(&key)
+        {
+            analyzer.check_dynamic_method_name(
+                &expression_arguments,
+                SourceLocation::new(source.source.id, statement.span),
+            );
+        }
+        analyzer.check_map_output(
+            &key,
+            &expression_arguments,
+            SourceLocation::new(source.source.id, statement.span),
+        );
+        analyzer.check_graphics_call(
+            &key,
+            &expression_arguments,
+            SourceLocation::new(source.source.id, statement.span),
+        );
+        analyzer.check_bit_call(
+            &key,
+            &expression_arguments,
+            SourceLocation::new(source.source.id, statement.span),
+        );
         if key.contains("FORM") && !key.contains("FORMS") {
             if lowered.len() < signature.minimum_arguments {
                 diagnostics.push(AnalyzerDiagnostic::at(
@@ -780,7 +1052,7 @@ fn analyze_instruction(
         } else {
             analyzer.check_arguments(
                 &expression_arguments,
-                &signature.arguments,
+                signature.arguments_for_arity(expression_arguments.len()),
                 signature.minimum_arguments,
                 signature.variadic,
                 signature.allow_omitted,

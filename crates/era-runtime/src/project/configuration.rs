@@ -2,9 +2,7 @@ use era_config::{
     ConfigStore, ConfigValue, LegacyConfigSource, LegacyMigrationDiagnosticKind,
     ReraConfigDocument, migrate_legacy_configuration,
 };
-use era_runtime_protocol::{
-    FileCategory, FilePayload, ProtocolDiagnostic, RuntimeLogLevel, SourceLocation,
-};
+use era_runtime_protocol::{FilePayload, ProtocolDiagnostic, RuntimeLogLevel, SourceLocation};
 use erabasic_analyzer::WarningPolicy;
 use erabasic_data::LegacyEncoding;
 
@@ -20,13 +18,9 @@ pub(super) fn parse_configuration(
     files: &[era_runtime_protocol::SubmittedFile],
     diagnostics: &mut Vec<ProtocolDiagnostic>,
 ) -> ParsedConfiguration {
-    let root = files.iter().find(|file| {
-        file.category == FileCategory::Configuration
-            && file
-                .relative_path
-                .replace('\\', "/")
-                .eq_ignore_ascii_case("reraconfig.toml")
-    });
+    let root = files
+        .iter()
+        .find(|file| super::is_root_configuration_file(file));
     let (document, values, generated_source) = match root {
         Some(file) => parse_reraconfig(file, diagnostics),
         None => migrate_configuration(files, diagnostics),
@@ -44,6 +38,12 @@ pub(super) fn semantic_config(values: ConfigStore) -> SemanticConfig {
         values,
         ..SemanticConfig::default()
     };
+    config.analyzer.compatibility =
+        erabasic_compat::CompatibilityIdentity::for_profile(config.values.compatibility_profile());
+    config
+        .csv
+        .compatibility
+        .clone_from(&config.analyzer.compatibility);
     apply_catalog_semantics(&mut config);
     config
 }
@@ -229,6 +229,12 @@ fn apply_catalog_semantics(config: &mut SemanticConfig) {
         config.csv.allow_full_width_space = value;
         config.analyzer.allow_full_width_space = value;
     }
+    if let Some(value) = boolean("CompatiRAND") {
+        config.analyzer.compatible_rand = value;
+    }
+    if let Some(value) = boolean("SystemNoTarget") {
+        config.analyzer.system_no_target = value;
+    }
     if let Some(value) = boolean("SystemIgnoreTripleSymbol") {
         config.analyzer.ignore_triple_symbols = value;
     }
@@ -254,6 +260,12 @@ fn apply_catalog_semantics(config: &mut SemanticConfig) {
     }
     if let Some(value) = integer("DisplayWarningLevel").and_then(|value| u8::try_from(value).ok()) {
         config.analyzer.display_warning_level = value;
+    }
+    if let Some(value) = boolean("StrictUserCallArguments") {
+        config.analyzer.strict_user_call_arguments = value;
+    }
+    if let Some(value) = boolean("DisableBeforeErrorThrow") {
+        config.analyzer.disable_before_error_throw = value;
     }
     if let Some(value) = boolean("IgnoreUncalledFunction") {
         config.analyzer.ignore_uncalled_functions = value;

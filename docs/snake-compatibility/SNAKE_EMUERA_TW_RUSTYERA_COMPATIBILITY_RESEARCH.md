@@ -320,7 +320,12 @@ RustyEra 的 compiled cache、analysis selection 或 ignore-uncalled 能减少�
 
 游戏已经活动使用 `EXISTVAR(...,1)`（如 `ERB/魔改内容/Misc.ERB:694,721,741`）、`GETDISPLAYLINE(-LOCAL)`（同文件约 `:756`）和命令式 `SETANIMETIMER`，这些不是纯引擎内部差异。
 
-其他活动修正包括：`XML_ADDNODE` 多目标 clone、字符串 `>=/<=`、非法 `TOINT` 返回 0、字体样式跨平台、鼠标键 latch、`SELECTCASE` 跳转表。这些应在行为差分套件中覆盖，但不能仅凭游戏含同名普通操作就全部升级为 P0。
+其他活动修正包括：`XML_ADDNODE` 多目标 clone、字符串 `>=/<=`、`TOINT` 整数读取异常返回 0、字体样式跨平台、鼠标键 latch、`SELECTCASE` 跳转表。这些应在行为差分套件中覆盖，但不能仅凭游戏含同名普通操作就全部升级为 P0。
+
+2026-08-27 批次 0 源码复核：两版本 `Emuera/Runtime/Script/Statements/Function/Creator.Method.cs`
+的 `ToIntMethod.GetIntValue` 都对空串及普通非数字字符串返回 0；蛇版另外捕获
+`LexicalAnalyzer.ReadInt64` 的异常并返回 0，原版直接调用并传播异常。此前笼统的“原版非法
+TOINT 报错”不能作为所有非法输入的期望；蛇版源码该路径也没有 warning。
 
 ### 3.5 Lazyloading
 

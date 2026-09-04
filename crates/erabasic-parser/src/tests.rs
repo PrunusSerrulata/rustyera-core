@@ -92,6 +92,32 @@ fn apostrophe_equals_uses_string_expression_assignment() {
 }
 
 #[test]
+fn trailing_destination_comma_preserves_the_form_comma_after_assignment() {
+    let output = parse_line("VALUE ,= ,", &DefaultParserContext::default());
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let StatementKind::Assignment {
+        target,
+        op,
+        raw_value,
+        value,
+        ..
+    } = output.value.unwrap().kind
+    else {
+        panic!("expected assignment");
+    };
+    assert_eq!(target.name, "VALUE");
+    assert_eq!(op, AssignOp::Assign);
+    assert_eq!(raw_value, ",");
+    let ExprKind::Formatted(formatted) = value.kind else {
+        panic!("expected formatted assignment value");
+    };
+    assert!(matches!(
+        formatted.parts.as_slice(),
+        [erabasic_ast::FormPart::Text(value)] if value == ","
+    ));
+}
+
+#[test]
 fn times_parses_real_literal_as_an_exact_ratio() {
     let output = parse_line("TIMES LOCAL:1, 1.25", &DefaultParserContext::default());
     assert!(!output.has_errors(), "{:#?}", output.diagnostics);
@@ -113,6 +139,48 @@ fn times_parses_real_literal_as_an_exact_ratio() {
             ..
         }))
     ));
+}
+
+#[test]
+fn column_options_parse_keywords_and_preserve_unicode_expression_spans() {
+    let text = "DT_COLUMN_OPTIONS \"表\", \"列\", default, F(1, 2), DEFAULT, \"值\"";
+    let output = parse_line(text, &DefaultParserContext::default());
+    assert!(!output.has_errors(), "{:?}", output.diagnostics);
+    let StatementKind::Instruction { arguments, .. } = output.value.unwrap().kind else {
+        panic!("expected column options");
+    };
+    assert_eq!(arguments.len(), 6);
+    for index in [2, 4] {
+        assert!(matches!(&arguments[index], Argument::Raw(value) if value == "DEFAULT"));
+    }
+    let Argument::Expression(value) = &arguments[3] else {
+        panic!("expected value expression")
+    };
+    assert_eq!(&text[value.span.start..value.span.end], "F(1, 2)");
+    assert!(matches!(value.kind, ExprKind::Call { .. }));
+}
+
+#[test]
+fn column_options_reject_unknown_or_missing_keywords_and_values() {
+    for tail in [
+        "\"t\", \"c\"",
+        "\"t\", \"c\", DEFAULT",
+        "\"t\", \"c\", NULLABLE, 1",
+        "\"t\", \"c\", \"DEFAULT\", 1",
+        "\"t\", \"c\", DEFAULT(), 1",
+    ] {
+        let output = parse_line(
+            &format!("DT_COLUMN_OPTIONS {tail}"),
+            &DefaultParserContext::default(),
+        );
+        assert!(output.has_errors(), "{tail}");
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("DT_COLUMN_OPTIONS"))
+        );
+    }
 }
 
 #[test]
@@ -408,6 +476,25 @@ fn plain_print_preserves_format_metacharacters_as_raw_text() {
 }
 
 #[test]
+fn comment_only_expression_tail_has_no_omitted_argument() {
+    let output = parse_line(
+        "CLEARMEMORY ;debloat custom code",
+        &DefaultParserContext::default(),
+    );
+    assert!(!output.has_errors(), "{:#?}", output.diagnostics);
+    let StatementKind::Instruction {
+        arguments,
+        raw_arguments,
+        ..
+    } = output.value.unwrap().kind
+    else {
+        panic!("expected instruction");
+    };
+    assert_eq!(raw_arguments, ";debloat custom code");
+    assert!(arguments.is_empty());
+}
+
+#[test]
 fn plain_print_consumes_only_its_first_separator() {
     for (source, expected) in [("PRINT  text", " text"), ("PRINT \u{3000}", "\u{3000}")] {
         let output = parse_line(source, &DefaultParserContext::default());
@@ -640,6 +727,248 @@ fn try_function_lists_close_with_endfunc_not_endlist() {
         &mut DefaultParserContext::default(),
     );
     assert!(invalid.has_errors());
+}
+
+#[test]
+fn callstr_family_uses_one_expression_not_formatted_target() {
+    for name in [
+        "CALLSTR",
+        "JUMPSTR",
+        "TRYCALLSTR",
+        "TRYJUMPSTR",
+        "TRYCCALLSTR",
+        "TRYCJUMPSTR",
+    ] {
+        let output = parse_line(
+            &format!(r#"{name} "TARGET(1)" + ARGS:0"#),
+            &DefaultParserContext::default(),
+        );
+        assert!(!output.has_errors(), "{name}: {:#?}", output.diagnostics);
+        let StatementKind::Instruction { arguments, .. } = output.value.unwrap().kind else {
+            panic!("expected instruction");
+        };
+        assert!(matches!(
+            arguments.as_slice(),
+            [Argument::Expression(erabasic_ast::Expr {
+                kind: ExprKind::Binary {
+                    op: BinaryOp::Add,
+                    ..
+                },
+                ..
+            })]
+        ));
+    }
+}
+
+#[test]
+fn callstr_family_rejects_missing_or_separated_outer_arguments() {
+    for name in [
+        "CALLSTR",
+        "JUMPSTR",
+        "TRYCALLSTR",
+        "TRYJUMPSTR",
+        "TRYCCALLSTR",
+        "TRYCJUMPSTR",
+    ] {
+        for tail in ["", r#""TARGET", 1"#] {
+            let output = parse_line(&format!("{name} {tail}"), &DefaultParserContext::default());
+            assert!(output.has_errors(), "{name} {tail}");
+        }
+    }
+}
+
+#[test]
+fn callstr_try_catch_variants_open_script_blocks() {
+    for name in ["TRYCCALLSTR", "TRYCJUMPSTR"] {
+        let output = parse_erb(
+            &format!("@TEST\n{name} \"TARGET()\"\nCATCH\nPRINTL caught\nENDCATCH\nRETURN\n"),
+            &mut DefaultParserContext::default(),
+        );
+        assert!(!output.has_errors(), "{name}: {:#?}", output.diagnostics);
+        let unterminated = parse_erb(
+            &format!("@TEST\n{name} \"TARGET()\"\nCATCH\nRETURN\n"),
+            &mut DefaultParserContext::default(),
+        );
+        assert!(
+            unterminated
+                .diagnostics
+                .iter()
+                .any(|item| { item.code == DiagnosticCode::UnmatchedBlock })
+        );
+    }
+}
+
+#[test]
+fn call_text_accepts_both_syntaxes_and_preserves_nested_arguments() {
+    for source in [
+        r#"TARGET(OTHER(1, 2), "a,(b)", VALUES:INDEX(3))"#,
+        r#"TARGET, OTHER(1, 2), "a,(b)", VALUES:INDEX(3)"#,
+    ] {
+        let output = parse_call_text_at(source, 0, &DefaultParserContext::default()).unwrap();
+        assert!(output.diagnostics.is_empty());
+        let call = output.call.unwrap();
+        assert_eq!(call.target, "TARGET");
+        assert_eq!(call.arguments.len(), 3);
+        assert!(matches!(
+            &call.arguments[0],
+            Argument::Expression(erabasic_ast::Expr {
+                kind: ExprKind::Call { name, args },
+                ..
+            }) if name == "OTHER" && args.len() == 2
+        ));
+        assert!(matches!(
+            &call.arguments[1],
+            Argument::Expression(erabasic_ast::Expr {
+                kind: ExprKind::String(value),
+                ..
+            }) if value == "a,(b)"
+        ));
+        assert!(matches!(
+            &call.arguments[2],
+            Argument::Expression(erabasic_ast::Expr {
+                kind: ExprKind::Variable { name, .. },
+                ..
+            }) if name == "VALUES"
+        ));
+    }
+}
+
+#[test]
+fn call_text_noop_is_only_whitespace() {
+    let context = DefaultParserContext::default();
+    for source in ["", " \t\r\n", "　"] {
+        assert!(
+            parse_call_text_at(source, 0, &context)
+                .unwrap()
+                .call
+                .is_none()
+        );
+    }
+    for source in ["TARGET", "TARGET()", "TARGET,", "TARGET ; comment"] {
+        let call = parse_call_text_at(source, 0, &context)
+            .unwrap()
+            .call
+            .unwrap();
+        assert_eq!(call.target, "TARGET");
+        assert!(call.arguments.is_empty());
+    }
+    let comment = parse_call_text_at("; comment", 0, &context)
+        .unwrap()
+        .call
+        .unwrap();
+    assert_eq!(comment.target, "");
+    // Empty-target lookup belongs to execution; it must not become a no-op here.
+}
+
+#[test]
+fn call_text_preserves_omissions_without_trailing_extra_slot() {
+    for source in ["TARGET(, 2,,)", "TARGET, , 2,,"] {
+        let call = parse_call_text_at(source, 0, &DefaultParserContext::default())
+            .unwrap()
+            .call
+            .unwrap();
+        assert!(matches!(
+            call.arguments.as_slice(),
+            [
+                Argument::Omitted(_),
+                Argument::Expression(erabasic_ast::Expr {
+                    kind: ExprKind::Integer(2),
+                    ..
+                }),
+                Argument::Omitted(_)
+            ]
+        ));
+    }
+}
+
+#[test]
+fn call_text_lexical_errors_precede_argument_reduction() {
+    let context = DefaultParserContext::default();
+    for source in [r#"TARGET(1 +, "unterminated)"#, "TARGET(1 +", "TARGET\\"] {
+        let error = parse_call_text_at(source, 0, &context).unwrap_err();
+        assert_eq!(error.stage, CallTextParseStage::Lexical, "{source}");
+        assert!(!error.diagnostics.is_empty());
+    }
+    for source in ["TARGET(1 +)", "TARGET(+)", "TARGET, 1 2"] {
+        let error = parse_call_text_at(source, 0, &context).unwrap_err();
+        assert_eq!(error.stage, CallTextParseStage::Arguments, "{source}");
+        assert!(!error.diagnostics.is_empty());
+    }
+}
+
+#[test]
+fn call_text_keeps_utf8_argument_and_omission_spans() {
+    let source = " 函数(, \"文字\",, )";
+    let base = 70;
+    let call = parse_call_text_at(source, base, &DefaultParserContext::default())
+        .unwrap()
+        .call
+        .unwrap();
+    assert_eq!(call.target, "函数");
+    assert_eq!(
+        call.target_span,
+        Span::new(base, base + source.find('(').unwrap())
+    );
+    let Argument::Expression(expression) = &call.arguments[1] else {
+        panic!("expected string expression");
+    };
+    assert_eq!(
+        &source[expression.span.start - base..expression.span.end - base],
+        "\"文字\""
+    );
+    for argument in &call.arguments {
+        let span = match argument {
+            Argument::Expression(expression) => expression.span,
+            Argument::Omitted(span) => *span,
+            _ => panic!("runtime call text only yields expression/omitted slots"),
+        };
+        assert!(source.is_char_boundary(span.start - base));
+        assert!(source.is_char_boundary(span.end - base));
+    }
+}
+
+#[test]
+fn call_text_uses_caller_lexer_configuration_and_macros() {
+    let mut context = DefaultParserContext::default();
+    let error = parse_call_text_at("TARGET(1　+ 2)", 0, &context).unwrap_err();
+    assert_eq!(error.stage, CallTextParseStage::Lexical);
+    context.set_lexer_compatibility(true, false, false);
+    assert!(parse_call_text_at("TARGET(1　+ 2)", 0, &context).is_ok());
+    let error = parse_call_text_at("TARGET(1;#;+2)", 0, &context).unwrap_err();
+    assert_eq!(error.stage, CallTextParseStage::Lexical);
+    context.set_lexer_compatibility(true, true, false);
+    assert!(parse_call_text_at("TARGET(1;#;+2)", 0, &context).is_ok());
+    context.macros_mut().insert(
+        "VALUE".into(),
+        erabasic_lexer::lex("3", &erabasic_lexer::LexerConfig::default()).tokens,
+    );
+    let call = parse_call_text_at("VALUE(VALUE)", 0, &context)
+        .unwrap()
+        .call
+        .unwrap();
+    assert_eq!(call.target, "VALUE");
+    assert!(matches!(
+        call.arguments.as_slice(),
+        [Argument::Expression(erabasic_ast::Expr {
+            kind: ExprKind::Integer(3),
+            ..
+        })]
+    ));
+}
+
+#[test]
+fn call_text_target_escapes_are_not_form_interpolation() {
+    let context = DefaultParserContext::default();
+    let call = parse_call_text_at(r"  F\sN\(X(1)", 0, &context)
+        .unwrap()
+        .call
+        .unwrap();
+    assert_eq!(call.target, "F N(X");
+    let call = parse_call_text_at("F_{VALUE}(1)", 0, &context)
+        .unwrap()
+        .call
+        .unwrap();
+    assert_eq!(call.target, "F_{VALUE}");
 }
 
 #[test]

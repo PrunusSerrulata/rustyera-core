@@ -181,6 +181,7 @@ fn project_file_stores_manifest_payload_once_and_extracts_it_exactly() {
         .next()
         .unwrap();
     let project = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 7,
         files: vec![
             source_file,
@@ -223,6 +224,7 @@ fn project_file_stores_manifest_payload_once_and_extracts_it_exactly() {
 #[test]
 fn frontend_manifest_keeps_resources_and_diagnostic_sources_only() {
     let mut project = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             SubmittedFile {
@@ -252,6 +254,7 @@ fn frontend_manifest_keeps_resources_and_diagnostic_sources_only() {
         ],
     };
     let diagnostics = vec![ProtocolDiagnostic {
+        context: None,
         code: "test".into(),
         level: era_runtime_protocol::RuntimeLogLevel::Warning,
         message: "warning".into(),
@@ -294,6 +297,23 @@ fn compiled_project_cache_rejects_corruption() {
     assert!(decode_project_file_frontend_manifest(&obsolete, obsolete.len()).is_err());
 }
 
+fn project_fixture_version(bytes: &[u8], version: u8) -> Vec<u8> {
+    let mut fixture = bytes.to_vec();
+    fixture[8] = version;
+    let digest_offset = fixture.len() - 32;
+    let digest = blake3::hash(&fixture[..digest_offset]);
+    fixture[digest_offset..].copy_from_slice(digest.as_bytes());
+    fixture
+}
+
+fn assert_streamed_project_manifest(bytes: &[u8], chunk_size: usize, project: &ProjectManifest) {
+    let mut decoder = ProjectFileStreamDecoder::new(bytes.len(), bytes.len()).unwrap();
+    for chunk in bytes.chunks(chunk_size) {
+        decoder.append(chunk).unwrap();
+    }
+    assert_eq!(&decoder.finish().unwrap().project.manifest, project);
+}
+
 #[test]
 fn project_file_projection_honors_limits_and_version() {
     let project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
@@ -316,45 +336,52 @@ fn project_file_projection_honors_limits_and_version() {
     let mut corrupt = bytes.clone();
     *corrupt.last_mut().unwrap() ^= 1;
     assert!(decode_project_file_frontend_manifest(&corrupt, corrupt.len()).is_err());
-    let mut legacy = bytes.clone();
-    legacy[8] = LEGACY_PROJECT_VERSION;
-    let digest_offset = legacy.len() - 32;
-    let digest = blake3::hash(&legacy[..digest_offset]);
-    legacy[digest_offset..].copy_from_slice(digest.as_bytes());
+    let legacy = profileless_project_fixture(&bytes, LEGACY_PROJECT_VERSION);
     assert_eq!(
         decode_project_file(&legacy, legacy.len()).unwrap().manifest,
         project
     );
-    let mut streamed_legacy = ProjectFileStreamDecoder::new(legacy.len(), legacy.len()).unwrap();
-    for byte in legacy.chunks(1) {
-        streamed_legacy.append(byte).unwrap();
-    }
-    assert_eq!(streamed_legacy.finish().unwrap().project.manifest, project);
-    let mut previous = bytes.clone();
-    previous[8] = PREVIOUS_PROJECT_VERSION;
-    let digest_offset = previous.len() - 32;
-    let digest = blake3::hash(&previous[..digest_offset]);
-    previous[digest_offset..].copy_from_slice(digest.as_bytes());
+    assert_streamed_project_manifest(&legacy, 1, &project);
+    let previous = profileless_project_fixture(&bytes, PREVIOUS_PROJECT_VERSION);
     assert_eq!(
         decode_project_file(&previous, previous.len())
             .unwrap()
             .manifest,
         project
     );
-    let mut streamed_previous =
-        ProjectFileStreamDecoder::new(previous.len(), previous.len()).unwrap();
-    for byte in previous.chunks(1) {
-        streamed_previous.append(byte).unwrap();
-    }
+    assert_streamed_project_manifest(&previous, 1, &project);
+    assert_streamed_project_manifest(&bytes, 1, &project);
+    // v12 remains a portable source container, while its compiled artifact is
+    // intentionally obsolete under the Batch 2 data ABI.
+    let data_v12 = project_fixture_version(&bytes, DATA_PROJECT_VERSION);
     assert_eq!(
-        streamed_previous.finish().unwrap().project.manifest,
+        decode_project_file(&data_v12, data_v12.len())
+            .unwrap()
+            .manifest,
         project
     );
-    let mut streamed_current = ProjectFileStreamDecoder::new(bytes.len(), bytes.len()).unwrap();
-    for byte in bytes.chunks(1) {
-        streamed_current.append(byte).unwrap();
-    }
-    assert_eq!(streamed_current.finish().unwrap().project.manifest, project);
+    assert!(
+        decode(&data_v12, data_v12.len())
+            .err()
+            .expect("v12 compiled artifact must require a source rebuild")
+            .contains("requires a source rebuild")
+    );
+    assert_streamed_project_manifest(&data_v12, 17, &project);
+    // v9 has the same source-manifest representation but obsolete compiled semantics.
+    let profiled = project_fixture_version(&bytes, PROFILED_PROJECT_VERSION);
+    assert_eq!(
+        decode_project_file(&profiled, profiled.len())
+            .unwrap()
+            .manifest,
+        project
+    );
+    assert!(
+        decode(&profiled, profiled.len())
+            .err()
+            .unwrap()
+            .contains("requires a source rebuild")
+    );
+    assert_streamed_project_manifest(&profiled, 11, &project);
     let mut stale_cache = previous.clone();
     stale_cache[..8].copy_from_slice(b"RERACACH");
     let error = decode(&stale_cache, stale_cache.len())
@@ -406,6 +433,7 @@ fn compiled_project_cache_encoding_honors_cancellation() {
 fn cooperative_cache_encoding_yields_between_sections_and_manifest_chunks() {
     let resource = vec![0x5a; COOPERATIVE_MANIFEST_CHUNK_BYTES * 2 + 1];
     let project = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             manifest("@SYSTEM_TITLE\nRETURN\n", 1)
@@ -451,17 +479,23 @@ fn cooperative_cache_encoding_yields_between_sections_and_manifest_chunks() {
         None,
     );
 
+    let creations_before = super::cooperative::MANIFEST_ENCODER_CREATIONS.get();
     assert!(encoder.step().unwrap().is_none());
     let mut steps = 1;
     let bytes = loop {
         steps += 1;
         if let Some(bytes) = encoder.step().unwrap() {
-            break bytes;
+            break bytes.into_vec();
         }
         assert!(steps < 256, "cooperative cache encoder did not finish");
     };
 
     assert!(steps > 16, "cache encoding should span multiple host pumps");
+    assert_eq!(
+        super::cooperative::MANIFEST_ENCODER_CREATIONS.get() - creations_before,
+        1,
+        "manifest compression must allocate one encoder across all host pumps"
+    );
     assert_eq!(bytes, canonical);
     let decoded = decode(&bytes, 64 * 1024 * 1024).unwrap();
     let decoded_files = &decoded.snapshot.manifest.files;
@@ -496,7 +530,11 @@ fn cooperative_cache_encoding_yields_between_sections_and_manifest_chunks() {
 
 #[test]
 fn cooperative_manifest_encoding_preserves_empty_payloads_and_reports_file_errors() {
+    let resource: Vec<u8> = (0..163_840_u64)
+        .flat_map(|index| blake3::hash(&index.to_le_bytes()).as_bytes().to_vec())
+        .collect();
     let project = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             manifest("@SYSTEM_TITLE\nRETURN\n", 1)
@@ -509,6 +547,12 @@ fn cooperative_manifest_encoding_preserves_empty_payloads_and_reports_file_error
                 category: FileCategory::Resource,
                 content_hash: Some(ProtocolBytes::new(blake3::hash(&[]).as_bytes().to_vec())),
                 payload: FilePayload::Bytes(ProtocolBytes::new(Vec::new())),
+            },
+            SubmittedFile {
+                relative_path: "resources/large.bin".into(),
+                category: FileCategory::Resource,
+                content_hash: Some(ProtocolBytes::new(blake3::hash(&resource).as_bytes().to_vec())),
+                payload: FilePayload::Bytes(ProtocolBytes::new(resource)),
             },
         ],
     };
@@ -536,14 +580,29 @@ fn cooperative_manifest_encoding_preserves_empty_payloads_and_reports_file_error
         });
         loop {
             match encoder.step() {
-                Ok(Some(bytes)) => break Ok(bytes),
+                Ok(Some(bytes)) => {
+                    assert!(encoder.manifest.files.iter().all(|file| matches!(&file.payload,
+                        FilePayload::Bytes(value) if value.as_slice().is_empty()
+                    )), "completed export files must release their payloads");
+                    break Ok(bytes.into_vec());
+                }
                 Ok(None) => {}
                 Err(error) => break Err(error),
             }
         }
     };
 
+    let creations_before = super::cooperative::MANIFEST_ENCODER_CREATIONS.get();
     let bytes = run(project.clone()).unwrap();
+    assert_eq!(
+        super::cooperative::MANIFEST_ENCODER_CREATIONS.get() - creations_before,
+        1,
+        "full project compression must reuse its manifest encoder"
+    );
+    let canonical = encode_full_project_for_test(
+        &project, &[], &artifact, &build.incremental, snapshot, &build.report.diagnostics,
+    ).unwrap();
+    assert_eq!(bytes, canonical, "direct final-buffer compression must preserve the container bytes");
     assert_eq!(
         decode_project_file(&bytes, bytes.len())
             .unwrap()
@@ -661,4 +720,184 @@ fn sharded_binary_cache_is_deterministic() {
     .unwrap();
 
     assert_eq!(first, second);
+}
+
+// Synthesize the old source section while leaving executable sections opaque: legacy
+// full projects support extraction only and must be recompiled by the current runtime.
+fn profileless_project_fixture(bytes: &[u8], version: u8) -> Vec<u8> {
+    project_manifest_fixture(bytes, version, None)
+}
+
+fn project_manifest_fixture(
+    bytes: &[u8],
+    version: u8,
+    identity: Option<&erabasic_compat::CompatibilityIdentity>,
+) -> Vec<u8> {
+    let mut cursor = stream::HEADER_BYTES;
+    for _ in 0..MANIFEST_SECTION_INDEX {
+        read_section(bytes, &mut cursor, bytes.len()).unwrap();
+    }
+    let start = cursor;
+    let section = read_section(bytes, &mut cursor, bytes.len()).unwrap();
+    let raw = zstd::bulk::decompress(
+        section.compressed,
+        usize::try_from(section.decoded_length).unwrap(),
+    )
+    .unwrap();
+    let mut remaining = &raw[4..];
+    read_bytes(&mut remaining, 4096).unwrap();
+    let legacy = encode_raw_section(PROJECT_COMPRESSION_LEVEL, None, |writer| {
+        writer
+            .write_all(if identity.is_some() {
+                MANIFEST_SECTION_MAGIC
+            } else {
+                LEGACY_MANIFEST_SECTION_MAGIC
+            })
+            .map_err(|error| error.to_string())?;
+        if let Some(identity) = identity {
+            write_bytes(writer, &serde_json::to_vec(identity).unwrap())?;
+        }
+        writer
+            .write_all(remaining)
+            .map_err(|error| error.to_string())
+    })
+    .unwrap();
+    let mut output = bytes[..start].to_vec();
+    output[8] = version;
+    output.extend_from_slice(&legacy);
+    output.extend_from_slice(&bytes[cursor..bytes.len() - 32]);
+    let digest = blake3::hash(&output);
+    output.extend_from_slice(digest.as_bytes());
+    output
+}
+
+#[test]
+fn profile_identity_survives_cache_and_full_project_without_cross_profile_keys() {
+    use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
+    let mut project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
+    let reference_key = project_key(&project_identity(&project), &[]);
+    let source_digest = project_identity(&project).source_digest;
+    project.compatibility =
+        CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
+    assert_eq!(project_identity(&project).source_digest, source_digest);
+    assert_ne!(project_key(&project_identity(&project), &[]), reference_key);
+    let snake_key = project_key(&project_identity(&project), &[]);
+    for contract in [
+        erabasic_compat::SQL_SERVICE_CONTRACT_NAME,
+        erabasic_compat::SQL_LIMITS_CONTRACT_NAME,
+        erabasic_compat::SCENE_CONTRACT_NAME,
+        erabasic_compat::AUDIO_SERVICE_CONTRACT_NAME,
+    ] {
+        let mut different_service = project.clone();
+        bump_compatibility_service_version(&mut different_service.compatibility, contract);
+        assert_ne!(
+            project_key(&project_identity(&different_service), &[]),
+            snake_key,
+            "{contract} must participate in the cache identity"
+        );
+    }
+    project.files.push(SubmittedFile {
+        relative_path: "reraconfig.toml".into(),
+        category: FileCategory::Configuration,
+        payload: FilePayload::Utf8(
+            "[meta]\nschema_version = 4\n[compatibility]\nprofile = \"emuera.skia.snake\"\n".into(),
+        ),
+        content_hash: None,
+    });
+    let build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    let artifact = build.artifact.as_ref().unwrap();
+    assert_eq!(
+        artifact.artifact().manifest.compatibility,
+        project.compatibility
+    );
+    let cache = encode_compiled_cache_for_test(
+        &project,
+        &[],
+        artifact,
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+    let decoded = decode(&cache, cache.len()).unwrap();
+    assert_eq!(
+        decoded.artifact.artifact().manifest.compatibility,
+        project.compatibility
+    );
+    let full = encode_full_project_for_test(
+        &project,
+        &[],
+        artifact,
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+    let projected = decode_project_file_frontend_manifest(&full, full.len()).unwrap();
+    assert_eq!(projected.identity, project_identity(&project));
+    assert!(
+        matches!(&projected.manifest.files[1].payload, FilePayload::Utf8(text) if text.contains("emuera.skia.snake"))
+    );
+    let mut stream = ProjectFileStreamDecoder::new(full.len(), full.len()).unwrap();
+    for chunk in full.chunks(17) {
+        stream.append(chunk).unwrap();
+    }
+    assert_eq!(
+        stream.finish().unwrap().project.identity,
+        project_identity(&project)
+    );
+    let mut old_snake = project.compatibility.clone();
+    old_snake.semantic_version = 1;
+    old_snake.policy_version = 1;
+    assert_historical_profile_rejected(&full, &old_snake);
+    let journal = encode_record(
+        configuration_digest(&project).unwrap(),
+        "[meta]\nschema_version = 4\n[compatibility]\nprofile = \"emuera.em\"\n",
+    )
+    .unwrap()
+    .0;
+    let mut changed = full.clone();
+    changed.extend_from_slice(&journal);
+    assert!(decode_project_file(&changed, changed.len()).is_err());
+}
+
+fn assert_historical_profile_rejected(
+    full: &[u8],
+    identity: &erabasic_compat::CompatibilityIdentity,
+) {
+    let historical = project_manifest_fixture(full, PROFILED_PROJECT_VERSION, Some(identity));
+    let error = decode_project_file(&historical, historical.len())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("unsupported compatibility identity"),
+        "{error}"
+    );
+    let mut old_stream = ProjectFileStreamDecoder::new(historical.len(), historical.len()).unwrap();
+    let result = (|| {
+        for chunk in historical.chunks(13) {
+            old_stream.append(chunk)?;
+        }
+        old_stream.finish()
+    })();
+    let error = result
+        .expect_err("historical snake identity must be rejected")
+        .to_string();
+    assert!(
+        error.contains("unsupported compatibility identity"),
+        "{error}"
+    );
+}
+
+fn bump_compatibility_service_version(
+    identity: &mut erabasic_compat::CompatibilityIdentity,
+    name: &str,
+) {
+    identity
+        .services
+        .iter_mut()
+        .find(|service| service.name == name)
+        .expect("compatibility identity carries the requested service contract")
+        .version += 1;
 }

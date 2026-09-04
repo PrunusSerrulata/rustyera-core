@@ -16,20 +16,64 @@ impl Builder<'_> {
         extension: bool,
         location: SourceLocation,
     ) {
+        self.emit_runtime_call_with_omissions(name, parameters, result, extension, &[], location);
+    }
+
+    pub(in super::super) fn emit_runtime_call_with_omissions(
+        &mut self,
+        name: &str,
+        parameters: &[BytecodeType],
+        result: Option<BytecodeType>,
+        extension: bool,
+        omitted_arguments: &[usize],
+        location: SourceLocation,
+    ) {
         let registry = self.context.host_registry;
         match registry.classification(name) {
             Some(ExecutionBinding::Host(binding)) => {
-                self.emit_host_call(name, parameters, result, binding, location);
+                self.emit_host_call_with_omissions(
+                    name,
+                    parameters,
+                    result,
+                    binding,
+                    omitted_arguments,
+                    location,
+                );
             }
             Some(ExecutionBinding::Native(contract)) => {
                 self.emit_native_call(name, parameters, result, *contract, location);
             }
+            Some(
+                ExecutionBinding::BitArray
+                | ExecutionBinding::ArrayMatch
+                | ExecutionBinding::ExpressionMethod { .. },
+            ) => {
+                self.diagnostics.push(CompilerDiagnostic::at(
+                    CompilerDiagnosticCode::InvalidHir,
+                    location,
+                    "expression methods require lazy typed lowering",
+                ));
+                self.emit(
+                    EncodedInstruction::new(Opcode::Trap, b"invalid eager method call".to_vec()),
+                    location,
+                );
+            }
             Some(ExecutionBinding::Unsupported { reason }) => {
                 self.emit_unsupported_call(name, reason, location);
             }
+            Some(ExecutionBinding::UnsupportedCapability { capability, reason }) => {
+                self.emit_missing_capability_call(name, capability, reason, location);
+            }
             None if extension => {
                 let binding = extension_binding(name);
-                self.emit_host_call(name, parameters, result, &binding, location);
+                self.emit_host_call_with_omissions(
+                    name,
+                    parameters,
+                    result,
+                    &binding,
+                    omitted_arguments,
+                    location,
+                );
             }
             None => self.emit_unsupported_call(
                 name,
@@ -39,12 +83,24 @@ impl Builder<'_> {
         }
     }
 
-    fn emit_host_call(
+    pub(super) fn emit_host_call(
         &mut self,
         name: &str,
         parameters: &[BytecodeType],
         result: Option<BytecodeType>,
         binding: &HostBinding,
+        location: SourceLocation,
+    ) {
+        self.emit_host_call_with_omissions(name, parameters, result, binding, &[], location);
+    }
+
+    fn emit_host_call_with_omissions(
+        &mut self,
+        name: &str,
+        parameters: &[BytecodeType],
+        result: Option<BytecodeType>,
+        binding: &HostBinding,
+        omitted_arguments: &[usize],
         location: SourceLocation,
     ) {
         if binding.contract.portability
@@ -99,11 +155,11 @@ impl Builder<'_> {
         };
         let index = self.add_import(ImportKind::Host, key);
         self.emit(
-            opcode::call(
-                Opcode::CallHost,
+            opcode::host_call(
                 index,
                 u16::try_from(parameters.len()).unwrap_or(u16::MAX),
                 result,
+                omitted_arguments,
             ),
             location,
         );
@@ -119,6 +175,23 @@ impl Builder<'_> {
             EncodedInstruction::new(Opcode::Trap, format!("unsupported {name}").into_bytes()),
             location,
         );
+    }
+
+    fn emit_missing_capability_call(
+        &mut self,
+        name: &str,
+        capability: &str,
+        reason: &str,
+        location: SourceLocation,
+    ) {
+        self.diagnostics.push(CompilerDiagnostic::at(
+            CompilerDiagnosticCode::MissingCapability,
+            location,
+            format!("{name} requires unavailable capability {capability}: {reason}"),
+        ));
+        // Error diagnostics discard the complete artifact before validation or execution. A NOP
+        // keeps lowering deterministic without manufacturing a runtime Trap for a known API.
+        self.emit(EncodedInstruction::new(Opcode::Nop, Vec::new()), location);
     }
 
     pub(in super::super) fn emit_native_call(

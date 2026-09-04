@@ -42,12 +42,30 @@ pub enum Opcode {
     Return = 33,
     CallNative = 34,
     CallHost = 35,
-    ResolveFunction = 36,
-    InvokeDynamic = 37,
+    // 36/37 are retired eager-call opcodes and are rejected by this ISA.
     JumpDynamicLabel = 38,
     InvokeEvent = 39,
+    ResolveUserCall = 40,
+    SelectUserArgument = 41,
+    CaptureUserArgument = 42,
+    InvokeUserCall = 43,
+    GuardUserArgument = 44,
+    AdvanceUserArgument = 45,
+    AbandonUserCall = 46,
+    InvokeCallText = 47,
     Yield = 48,
     AwaitResume = 49,
+    ProbeVariableName = 50,
+    BeginExistVarProbe = 51,
+    FinishExistVarProbe = 52,
+    BeginMapCall = 53,
+    FinishMapCall = 54,
+    AbandonMapCall = 55,
+    BeginBitCall = 56,
+    FinishBitCall = 57,
+    BeginMatchCall = 58,
+    MatchCallRange = 59,
+    FinishMatchCall = 60,
     Trap = 255,
 }
 
@@ -81,12 +99,29 @@ impl TryFrom<u16> for Opcode {
             33 => Self::Return,
             34 => Self::CallNative,
             35 => Self::CallHost,
-            36 => Self::ResolveFunction,
-            37 => Self::InvokeDynamic,
             38 => Self::JumpDynamicLabel,
             39 => Self::InvokeEvent,
+            40 => Self::ResolveUserCall,
+            41 => Self::SelectUserArgument,
+            42 => Self::CaptureUserArgument,
+            43 => Self::InvokeUserCall,
+            44 => Self::GuardUserArgument,
+            45 => Self::AdvanceUserArgument,
+            46 => Self::AbandonUserCall,
+            47 => Self::InvokeCallText,
             48 => Self::Yield,
             49 => Self::AwaitResume,
+            50 => Self::ProbeVariableName,
+            51 => Self::BeginExistVarProbe,
+            52 => Self::FinishExistVarProbe,
+            53 => Self::BeginMapCall,
+            54 => Self::FinishMapCall,
+            55 => Self::AbandonMapCall,
+            56 => Self::BeginBitCall,
+            57 => Self::FinishBitCall,
+            58 => Self::BeginMatchCall,
+            59 => Self::MatchCallRange,
+            60 => Self::FinishMatchCall,
             255 => Self::Trap,
             unknown => return Err(unknown),
         })
@@ -291,7 +326,7 @@ impl EncodedInstruction {
 
 /// Canonical payload constructors shared by the compiler and tests.
 pub mod opcode {
-    use crate::{BytecodeType, EncodedInstruction, Opcode, SymbolKey};
+    use crate::{BytecodeType, EncodedInstruction, Opcode, SymbolKey, UserCallSpec};
 
     #[must_use]
     pub fn push_integer(value: i64) -> EncodedInstruction {
@@ -360,30 +395,40 @@ pub mod opcode {
         EncodedInstruction::from_payload_slice(opcode, &payload)
     }
 
+    /// Encodes a Host call together with the physical argument slots that were omitted in source.
+    ///
+    /// # Panics
+    /// Panics when more than `u16::MAX` slots are omitted or an omitted slot exceeds `u16::MAX`.
+    #[must_use]
+    pub fn host_call(
+        import: u32,
+        arguments: u16,
+        result: Option<BytecodeType>,
+        omitted_arguments: &[usize],
+    ) -> EncodedInstruction {
+        if omitted_arguments.is_empty() {
+            return call(Opcode::CallHost, import, arguments, result);
+        }
+        let omitted_count = u16::try_from(omitted_arguments.len())
+            .expect("one Host call omits more than u16::MAX argument slots");
+        let mut payload = Vec::with_capacity(9 + omitted_arguments.len().saturating_mul(2));
+        payload.extend_from_slice(&import.to_le_bytes());
+        payload.extend_from_slice(&arguments.to_le_bytes());
+        payload.push(result.map_or(u8::MAX, type_tag));
+        payload.extend_from_slice(&omitted_count.to_le_bytes());
+        for index in omitted_arguments {
+            payload.extend_from_slice(
+                &u16::try_from(*index)
+                    .expect("one omitted Host argument slot exceeds u16::MAX")
+                    .to_le_bytes(),
+            );
+        }
+        EncodedInstruction::new(Opcode::CallHost, payload)
+    }
+
     #[must_use]
     pub fn return_value(has_value: bool) -> EncodedInstruction {
         EncodedInstruction::from_payload_slice(Opcode::Return, &[u8::from(has_value)])
-    }
-
-    #[must_use]
-    pub fn resolve_function(
-        missing_target: u32,
-        allow_missing: bool,
-        method: bool,
-    ) -> EncodedInstruction {
-        let mut payload = [0; 6];
-        payload[..4].copy_from_slice(&missing_target.to_le_bytes());
-        payload[4] = u8::from(allow_missing);
-        payload[5] = u8::from(method);
-        EncodedInstruction::from_payload_slice(Opcode::ResolveFunction, &payload)
-    }
-
-    #[must_use]
-    pub fn invoke_dynamic(arguments: u16, tail: bool) -> EncodedInstruction {
-        let mut payload = [0; 3];
-        payload[..2].copy_from_slice(&arguments.to_le_bytes());
-        payload[2] = u8::from(tail);
-        EncodedInstruction::from_payload_slice(Opcode::InvokeDynamic, &payload)
     }
 
     #[must_use]
@@ -397,6 +442,70 @@ pub mod opcode {
     #[must_use]
     pub fn invoke_event() -> EncodedInstruction {
         EncodedInstruction::from_payload_slice(Opcode::InvokeEvent, &[])
+    }
+
+    /// # Panics
+    /// Panics when `spec` contains more than `u16::MAX` argument slots.
+    #[must_use]
+    pub fn resolve_user_call(spec: &UserCallSpec) -> EncodedInstruction {
+        EncodedInstruction::new(Opcode::ResolveUserCall, spec.encode())
+    }
+
+    #[must_use]
+    pub fn select_user_argument(
+        resolve: u32,
+        slot: u16,
+        reference_target: u32,
+    ) -> EncodedInstruction {
+        let mut payload = [0; 10];
+        payload[..4].copy_from_slice(&resolve.to_le_bytes());
+        payload[4..6].copy_from_slice(&slot.to_le_bytes());
+        payload[6..].copy_from_slice(&reference_target.to_le_bytes());
+        EncodedInstruction::from_payload_slice(Opcode::SelectUserArgument, &payload)
+    }
+
+    #[must_use]
+    pub fn capture_user_argument(resolve: u32, slot: u16, reference: bool) -> EncodedInstruction {
+        let mut payload = [0; 7];
+        payload[..4].copy_from_slice(&resolve.to_le_bytes());
+        payload[4..6].copy_from_slice(&slot.to_le_bytes());
+        payload[6] = u8::from(reference);
+        EncodedInstruction::from_payload_slice(Opcode::CaptureUserArgument, &payload)
+    }
+
+    #[must_use]
+    pub fn invoke_user_call(resolve: u32) -> EncodedInstruction {
+        EncodedInstruction::from_payload_slice(Opcode::InvokeUserCall, &resolve.to_le_bytes())
+    }
+
+    #[must_use]
+    pub fn guard_user_argument(resolve: u32, slot: u16, discard_target: u32) -> EncodedInstruction {
+        let mut instruction = select_user_argument(resolve, slot, discard_target);
+        instruction.opcode = Opcode::GuardUserArgument as u16;
+        instruction
+    }
+
+    #[must_use]
+    pub fn advance_user_argument(
+        resolve: u32,
+        slot: u16,
+        reason: crate::UserArgumentAdvance,
+    ) -> EncodedInstruction {
+        let mut payload = [0; 7];
+        payload[..4].copy_from_slice(&resolve.to_le_bytes());
+        payload[4..6].copy_from_slice(&slot.to_le_bytes());
+        payload[6] = reason as u8;
+        EncodedInstruction::from_payload_slice(Opcode::AdvanceUserArgument, &payload)
+    }
+
+    #[must_use]
+    pub fn abandon_user_call(resolve: u32) -> EncodedInstruction {
+        EncodedInstruction::from_payload_slice(Opcode::AbandonUserCall, &resolve.to_le_bytes())
+    }
+
+    #[must_use]
+    pub fn invoke_call_text(spec: crate::CallTextSpec) -> EncodedInstruction {
+        EncodedInstruction::from_payload_slice(Opcode::InvokeCallText, &spec.encode())
     }
 
     #[must_use]
@@ -499,21 +608,25 @@ mod tests {
             opcode::call(Opcode::Call, 11, 2, Some(BytecodeType::String)),
             EncodedInstruction::new(Opcode::Call, call)
         );
+        let mut host_call = 13_u32.to_le_bytes().to_vec();
+        host_call.extend_from_slice(&4_u16.to_le_bytes());
+        host_call.push(u8::MAX);
+        host_call.extend_from_slice(&2_u16.to_le_bytes());
+        host_call.extend_from_slice(&1_u16.to_le_bytes());
+        host_call.extend_from_slice(&3_u16.to_le_bytes());
+        assert_eq!(
+            opcode::host_call(13, 4, None, &[1, 3]),
+            EncodedInstruction::new(Opcode::CallHost, host_call)
+        );
         assert_eq!(
             opcode::return_value(true),
             EncodedInstruction::new(Opcode::Return, vec![1])
         );
-        let mut resolve = 31_u32.to_le_bytes().to_vec();
-        resolve.extend_from_slice(&[1, 0]);
+        assert_eq!(Opcode::try_from(36), Err(36));
+        assert_eq!(Opcode::try_from(37), Err(37));
         assert_eq!(
-            opcode::resolve_function(31, true, false),
-            EncodedInstruction::new(Opcode::ResolveFunction, resolve)
-        );
-        let mut invoke = 5_u16.to_le_bytes().to_vec();
-        invoke.push(1);
-        assert_eq!(
-            opcode::invoke_dynamic(5, true),
-            EncodedInstruction::new(Opcode::InvokeDynamic, invoke)
+            opcode::abandon_user_call(31),
+            EncodedInstruction::new(Opcode::AbandonUserCall, 31_u32.to_le_bytes().to_vec())
         );
         assert_eq!(
             opcode::jump_dynamic_label(23),

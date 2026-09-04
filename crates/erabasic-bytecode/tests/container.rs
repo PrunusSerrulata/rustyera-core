@@ -12,6 +12,11 @@ fn artifact() -> BytecodeArtifact {
     let mut artifact = BytecodeArtifact {
         manifest: ArtifactManifest::new(Digest::default()),
         call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
+        runtime_builtins: Vec::new(),
+        runtime_variables: Vec::new(),
+        runtime_native_authorizations: Vec::new(),
+        runtime_host_authorizations: Vec::new(),
+        runtime_staged_authorizations: Vec::new(),
         project_data,
         globals: Vec::new(),
         native_imports: Vec::new(),
@@ -145,4 +150,49 @@ fn append_unknown(mut bytes: Vec<u8>, required: bool) -> Vec<u8> {
     bytes.extend_from_slice(blake3::hash(payload).as_bytes());
     bytes.extend_from_slice(payload);
     bytes
+}
+
+#[test]
+fn finite_native_authorization_survives_container_patch_and_changes_execution_identity() {
+    use erabasic_bytecode::{
+        BytecodeType, RuntimeArgumentConstraint as C, RuntimeBuiltinSymbol, RuntimeCallableShape,
+        RuntimeExpressionShape, RuntimeNativeAuthorization, canonical_native_contract,
+    };
+    let mut base = artifact();
+    let symbol = RuntimeBuiltinSymbol {
+        name: "MAX".into(),
+        result: BytecodeType::Integer,
+        shapes: vec![RuntimeCallableShape {
+            minimum: 1,
+            maximum: None,
+            omitted_from: 1,
+            arguments: vec![C::Integer],
+            allow_omitted: false,
+        }],
+    };
+    base.runtime_builtins.push(symbol.clone());
+    base.refresh_ids().unwrap();
+    let mut target = base.clone();
+    let family = RuntimeNativeAuthorization::new(&symbol, canonical_native_contract("max"));
+    let integer = Some(RuntimeExpressionShape {
+        value_type: BytecodeType::Integer,
+        variable: false,
+        mutable: false,
+    });
+    let one = family.bind(&[integer]).unwrap();
+    let many = family.bind(&[integer; 8]).unwrap();
+    assert_eq!(one.service_key, many.service_key);
+    assert_ne!(one.import.key, many.import.key);
+    assert!(family.bind(&[]).is_none());
+    target.runtime_native_authorizations.push(family);
+    target.refresh_ids().unwrap();
+    assert_ne!(
+        base.manifest.program_version.execution_id,
+        target.manifest.program_version.execution_id
+    );
+    let patch = create_patch(&base, &target);
+    assert_eq!(apply_patch(&base, &patch).unwrap(), target);
+    let decoded =
+        decode_artifact(&encode_artifact(&target).unwrap(), &DecodeLimits::default()).unwrap();
+    assert_eq!(decoded.into_inner(), target);
 }

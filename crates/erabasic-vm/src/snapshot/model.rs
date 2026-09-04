@@ -26,10 +26,12 @@ pub struct SnapshotContainerInspection {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SnapshotBlocker {
     PendingHotReload,
+    PendingCompletionEvents,
     PrimaryFiberNotSnapshotStable,
     RunnableFiber(FiberId),
     TransientHostWait(FiberId),
     AwaitResume(FiberId),
+    FaultHook(FiberId),
     OldGenerationFrame(FiberId, GenerationId),
     LegacyGenerationState,
     NativeService(String),

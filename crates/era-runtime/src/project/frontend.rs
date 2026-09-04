@@ -1,7 +1,8 @@
 //! Adapters from submitted frontend files to the CSV and analyzer input contracts.
 
 use era_runtime_protocol::{
-    FilePayload, FrontendIoErrorKind, ProtocolDiagnostic, RuntimeLogLevel, SourceLocation,
+    FileCategory, FilePayload, FrontendIoErrorKind, ProtocolDiagnostic, RuntimeLogLevel,
+    SourceLocation, SubmittedFile,
 };
 use erabasic_analyzer::{ProjectSource, SourceIoError, SourceIoErrorKind, SourcePayload};
 use erabasic_csv::{
@@ -40,15 +41,42 @@ impl CompilerSourceIndex {
     }
 }
 
-pub(super) fn csv_file(path: String, payload: FilePayload) -> CsvFrontendFile {
+pub(super) fn index_input_error(file: &SubmittedFile) -> Option<ProtocolDiagnostic> {
+    if !matches!(file.category, FileCategory::Als | FileCategory::Erd) {
+        return None;
+    }
+    let (code, message) = match &file.payload {
+        FilePayload::Utf8(_) => return None,
+        FilePayload::IoError(error) => ("runtime.frontend_io_error", error.message.clone()),
+        FilePayload::Bytes(_) | FilePayload::ExternalResource(_) => (
+            "runtime.expected_utf8",
+            "ALS and ERD data must be submitted as UTF-8".into(),
+        ),
+    };
+    Some(project_diagnostic(
+        code,
+        RuntimeLogLevel::Error,
+        message,
+        Some(SourceLocation {
+            relative_path: file.relative_path.clone(),
+            byte_start: 0,
+            byte_end: 0,
+            line: None,
+            byte_column: None,
+        }),
+    ))
+}
+
+pub(super) fn csv_file(path: String, source_path: String, payload: FilePayload) -> CsvFrontendFile {
     CsvFrontendFile {
         relative_path: path,
+        source_path: Some(source_path),
         payload: match payload {
             FilePayload::Utf8(value) => CsvFilePayload::Utf8(value),
             FilePayload::Bytes(_) | FilePayload::ExternalResource(_) => {
                 CsvFilePayload::IoError(CsvIoError {
                     kind: CsvIoErrorKind::InvalidData,
-                    message: "CSV and EraBasic sources must be submitted as UTF-8".into(),
+                    message: "CSV, ALS and ERD data must be submitted as UTF-8".into(),
                 })
             }
             FilePayload::IoError(error) => CsvFilePayload::IoError(CsvIoError {
@@ -209,6 +237,7 @@ pub(crate) fn project_diagnostic(
     source: Option<SourceLocation>,
 ) -> ProtocolDiagnostic {
     ProtocolDiagnostic {
+        context: None,
         code: code.into(),
         level,
         message: message.into(),
@@ -228,6 +257,7 @@ mod tests {
     #[test]
     fn binary_source_payloads_remain_invalid_utf8_errors() {
         let csv = csv_file(
+            "test.csv".into(),
             "CSV/test.csv".into(),
             FilePayload::Bytes(ProtocolBytes::new([0xff])),
         );
@@ -237,7 +267,7 @@ mod tests {
         assert_eq!(csv_error.kind, CsvIoErrorKind::InvalidData);
         assert_eq!(
             csv_error.message,
-            "CSV and EraBasic sources must be submitted as UTF-8"
+            "CSV, ALS and ERD data must be submitted as UTF-8"
         );
 
         let source = analyzer_source(
@@ -261,7 +291,7 @@ mod tests {
             message: "changed".into(),
             platform_code: Some(17),
         });
-        let csv = csv_file("CSV/test.csv".into(), payload.clone());
+        let csv = csv_file("test.csv".into(), "CSV/test.csv".into(), payload.clone());
         let CsvFilePayload::IoError(csv_error) = csv.payload else {
             panic!("frontend error must remain an I/O error");
         };

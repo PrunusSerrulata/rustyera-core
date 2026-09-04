@@ -9,13 +9,23 @@ license = "GPL-3.0-only"
 [dependencies]
 blake3 = "1.5.5"
 encoding_rs = "0.8.35"
+flate2 = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+unicode-normalization = "0.1.25"
 era-protocol = { path = "../../crates/era-protocol" }
+era-debug-protocol = { path = "../../crates/era-debug-protocol" }
+era-config = { path = "../../crates/era-config" }
 era-runtime = { path = "../../crates/era-runtime" }
 era-runtime-protocol = { path = "../../crates/era-runtime-protocol" }
 erabasic-analyzer = { path = "../../crates/erabasic-analyzer" }
+erabasic-ast = { path = "../../crates/erabasic-ast" }
+erabasic-compat = { path = "../../crates/erabasic-compat" }
 erabasic-compiler = { path = "../../crates/erabasic-compiler" }
 erabasic-csv = { path = "../../crates/erabasic-csv" }
 erabasic-data = { path = "../../crates/erabasic-data" }
+erabasic-html = { path = "../../crates/erabasic-html" }
 erabasic-bytecode = { path = "../../crates/erabasic-bytecode" }
 erabasic-parser = { path = "../../crates/erabasic-parser" }
 erabasic-validator = { path = "../../crates/erabasic-validator" }

@@ -1,33 +1,45 @@
 use std::sync::Arc;
 
 use erabasic_bytecode::{
-    BytecodeFunctionKind, BytecodeStorage, BytecodeType, HostSnapshotCapability, ImportKind,
-    Opcode, SymbolKey, opcode,
+    BytecodeFunctionKind, BytecodeStorage, BytecodeType, ImportKind, Opcode, SymbolKey, opcode,
 };
 
 use crate::state::{
     EventDispatch, EventDispatchEntry, ForLoopState, ProgramGeneration, StructuredScopeKind,
 };
 use crate::{
-    Fiber, FiberId, FiberState, HostCallRequest, HostCallResult, HostReady, HostWaitStability,
-    ImmediateHostCall, ImmediateHostCallResult, NativeCallRequest, NativePlaceView, NativeReady,
-    NativeServiceRegistry, PlaceDescriptor, RunBudget, Vm, VmError, VmEvent, VmFault, VmFaultCode,
-    VmHost, VmRunReport, VmRunStop, VmValue, WaitingHost, bind_persistent_arguments, make_frame,
-    prepare_dynamic_arguments, validate_arguments,
+    Fiber, FiberId, FiberState, HostReady, ImmediateHostCall, ImmediateHostCallResult,
+    NativeCallRequest, NativePlaceView, NativeReady, NativeServiceRegistry, PlaceDescriptor,
+    RunBudget, Vm, VmError, VmEvent, VmFault, VmFaultCode, VmHost, VmRunReport, VmRunStop, VmValue,
+    bind_persistent_arguments, make_frame, validate_arguments,
 };
 
+mod arithmetic;
+pub(crate) mod bit_calls;
 mod character_ops;
+pub(crate) mod compatibility_diagnostics;
 mod dispatch;
 pub(crate) mod dynamic_form;
+mod event_dispatch;
+pub(crate) mod existvar;
 mod extended_ops;
 mod fastpaths;
+pub(crate) mod fault_hooks;
+mod host_calls;
 mod lookup;
+pub(crate) mod map_calls;
+pub(crate) mod matching;
 mod native_ops;
 mod operand;
+mod recovery;
 mod scheduler;
+mod special_native;
 
 use character_ops::{character_series, execute_character_mutation, execute_character_query};
-use dynamic_form::{RuntimeFormStep, begin_runtime_form, resume_runtime_form};
+use dynamic_form::{
+    RuntimeFormStep, begin_runtime_call_text, begin_runtime_form, begin_runtime_form_check,
+    resume_runtime_form,
+};
 use extended_ops::{
     array_snapshot_any_rank, execute_array_copy, execute_array_multi_sort,
     execute_array_multi_sort_ex, execute_random_place_transaction, execute_regex_match,
@@ -37,13 +49,13 @@ use native_ops::{
     array_place, array_snapshot, execute_array_mutation, execute_array_query, execute_bit_mutation,
     execute_encode_to_uni_result, execute_erdname, execute_find_element, execute_get_var,
     execute_getnum, execute_index_by_name, execute_integer_mutation, execute_set_var,
-    execute_split_transaction, execute_strjoin, execute_swap_transaction, execute_variable_fill,
-    integer_argument, native_implicit_place_views, native_place_views, optional_index,
-    validate_native_ready,
+    execute_split_transaction, execute_strjoin, execute_swap_transaction, execute_var_set_ex,
+    execute_variable_fill, integer_argument, native_implicit_place_views, native_place_views,
+    optional_index, validate_native_ready,
 };
 use operand::{
-    assign_binary_tag, binary_value, concat_strings, exact, map_vm_error, pop, pop_arguments,
-    pop_indices, read_u16, read_u32, unary_value,
+    assign_binary_tag, concat_strings, exact, map_vm_error, pop, pop_arguments, pop_indices,
+    read_u16, read_u32,
 };
 
 enum StepOutcome {
@@ -54,6 +66,12 @@ enum StepOutcome {
         notification: crate::VmDiagnosticNotification,
     },
     BulkProgress(u64),
+    // Work completed before a failure still consumes this slice's budget. Keep
+    // this carrier internal; the public failure and its catch category are unchanged.
+    BulkFailure {
+        additional_instructions: u64,
+        error: StepError,
+    },
     DeferredNative,
     Yielded,
     Blocked,
@@ -71,19 +89,7 @@ struct ExecutionPolicy {
     remaining_instructions: u64,
 }
 
-struct StepError {
-    code: VmFaultCode,
-    message: String,
-}
-
-impl StepError {
-    fn new(code: VmFaultCode, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
-    }
-}
+type StepError = crate::ExecutionFailure;
 
 struct InstructionPosition<'a> {
     generation: crate::GenerationId,
@@ -155,6 +161,21 @@ impl Vm {
         if let Some(outcome) = self.dispatch_basic(fiber, position, opcode, policy)? {
             return self.finish_dispatch(fiber, outcome);
         }
+        if let Some(outcome) = self.dispatch_map_calls(fiber, position, opcode, natives)? {
+            return Ok(outcome);
+        }
+        if let Some(outcome) = self.dispatch_bit_calls(fiber, position, opcode, policy)? {
+            return Ok(outcome);
+        }
+        if let Some(outcome) = self.dispatch_match(fiber, position, opcode, policy)? {
+            return self.finish_dispatch(fiber, outcome);
+        }
+        if let Some(outcome) = self.dispatch_existvar(fiber, position, opcode)? {
+            return Ok(outcome);
+        }
+        if let Some(outcome) = self.dispatch_methods(fiber, position, opcode)? {
+            return self.finish_dispatch(fiber, outcome);
+        }
         if let Some(outcome) =
             self.dispatch_calls(fiber, position, opcode, host, natives, host_calls, policy)?
         {
@@ -178,8 +199,11 @@ impl Vm {
             &outcome,
             StepOutcome::Continue | StepOutcome::Diagnostic { .. }
         ) {
-            let stack_len = fiber.frames.last().map_or(0, |frame| frame.stack.len());
-            if stack_len > self.config.maximum_operand_stack {
+            let stack_len = fiber
+                .frames
+                .last()
+                .map_or(Some(0), crate::state::Frame::operand_slots);
+            if stack_len.is_none_or(|len| len > self.config.maximum_operand_stack) {
                 return Err(StepError::new(
                     VmFaultCode::ResourceLimit,
                     "maximum operand stack exceeded",

@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "snake": { "semantic_version": 8, "policy_version": 8 }
+  },
+  "evidenceStatus": "batch_2e_dynamic_observation_not_a_golden",
+  "loadExpect": { "ok": true, "result": { "termination": "waitingInput" } },
+  "allowedOracles": ["snake"],
+  "cases": [
+    {
+      "id": "display-timer-normalization",
+      "group": "DISPLAY_STATE",
+      "targetBatch": 2,
+      "rustCurrentPolicy": "batch_2E_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2E_acceptance",
+      "allowedOracles": ["snake"],
+      "requireSuccessfulLoad": true,
+      "observation": true,
+      "expectationStatus": "compare_actual_observables",
+      "requests": [{ "request": { "op": "run", "entry": "PROBE_TIMER", "watch": ["FLAG:0", "FLAG:1", "FLAG:2", "FLAG:3", "FLAG:4"], "observePresentation": true, "observeDisplayState": true } }]
+    },
+    {
+      "id": "display-timer-invalid-atomic",
+      "group": "DISPLAY_STATE",
+      "targetBatch": 2,
+      "rustCurrentPolicy": "batch_2E_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2E_acceptance",
+      "allowedOracles": ["snake"],
+      "requireSuccessfulLoad": true,
+      "observation": true,
+      "expectationStatus": "compare_actual_observables",
+      "requests": [{ "request": { "op": "run", "entry": "PROBE_TIMER_INVALID", "watch": [], "observePresentation": true, "observeDisplayState": true } }]
+    },
+    {
+      "id": "display-negative-history",
+      "group": "DISPLAY_STATE",
+      "targetBatch": 2,
+      "rustCurrentPolicy": "batch_2E_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2E_acceptance",
+      "allowedOracles": ["snake"],
+      "requireSuccessfulLoad": true,
+      "observation": true,
+      "expectationStatus": "compare_actual_observables",
+      "requests": [{ "request": { "op": "run", "entry": "PROBE_HISTORY", "watch": ["RESULTS:0", "RESULTS:1", "RESULTS:2"] } }]
+    },
+    {
+      "id": "display-text-background",
+      "group": "DISPLAY_STATE",
+      "targetBatch": 2,
+      "rustCurrentPolicy": "batch_2E_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2E_acceptance",
+      "allowedOracles": ["snake"],
+      "requireSuccessfulLoad": true,
+      "observation": true,
+      "expectationStatus": "compare_actual_observables",
+      "requests": [{ "request": { "op": "run", "entry": "PROBE_TEXT_BACKGROUND", "watch": [], "observePresentation": true, "observeDisplayState": true } }]
+    },
+    {
+      "id": "display-text-background-off",
+      "group": "DISPLAY_STATE",
+      "targetBatch": 2,
+      "rustCurrentPolicy": "batch_2E_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2E_acceptance",
+      "allowedOracles": ["snake"],
+      "requireSuccessfulLoad": true,
+      "observation": true,
+      "expectationStatus": "compare_actual_observables",
+      "requests": [{ "request": { "op": "run", "entry": "PROBE_TEXT_BACKGROUND_OFF", "watch": [], "observePresentation": true, "observeDisplayState": true } }]
+    }
+  ]
+}

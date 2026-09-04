@@ -1,7 +1,7 @@
 use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use crate::ProtocolValue;
+use crate::{AudioChannelV1, ProtocolValue};
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(index_only)]
@@ -13,13 +13,19 @@ pub enum AudioEffectAction {
     Stop,
     #[n(2)]
     SetVolume,
+    #[n(3)]
+    Pause,
+    #[n(4)]
+    Resume,
+    #[n(5)]
+    SetRate,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct AudioEffect {
     #[n(0)]
-    pub channel_id: u64,
+    pub channel: AudioChannelV1,
     #[n(1)]
     pub action: AudioEffectAction,
     #[n(2)]
@@ -28,6 +34,12 @@ pub struct AudioEffect {
     pub repeat_count: i64,
     #[n(4)]
     pub volume_millionths: u32,
+    #[n(5)]
+    pub revision: u64,
+    #[n(6)]
+    pub rate_millionths: u32,
+    #[n(7)]
+    pub preserve_pitch: bool,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

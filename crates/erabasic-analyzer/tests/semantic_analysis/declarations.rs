@@ -1,6 +1,212 @@
 use super::*;
 
 #[test]
+fn snake_constant_initializers_emit_warnings_without_losing_saturated_values() {
+    let mut options = AnalyzerOptions::analysis_mode();
+    options.compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![
+                source(
+                    "arithmetic.erh",
+                    "#DIM CONST SATURATED = 9223372036854775807 + 1\n#DIM CONST ZERO_DIV = 9 / 0\n#DIM CONST WRAPPED = UNCHECKED_ADD(9223372036854775807, 1)\n#DIM CONST SKIPPED = 0 && (9 / 0)\n",
+                ),
+                source(
+                    "arithmetic.erb",
+                    "@SYSTEM_TITLE\n#DIM PRIVATE_VALUE = -(-9223372036854775807 - 1)\nRESULT = 9223372036854775807 + 1\nRETURN\n",
+                ),
+            ],
+        },
+        &options,
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let warnings: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            matches!(
+                diagnostic.code,
+                AnalyzerDiagnosticCode::IntegerOverflow
+                    | AnalyzerDiagnosticCode::IntegerDivideByZero
+            )
+        })
+        .collect();
+    assert_eq!(warnings.len(), 3);
+    assert!(warnings.iter().all(|diagnostic| diagnostic.severity
+        == erabasic_analyzer::AnalyzerDiagnosticSeverity::Warning
+        && diagnostic.source.is_some()));
+    let project = report.project.unwrap();
+    for (name, value) in [
+        ("SATURATED", i64::MAX),
+        ("ZERO_DIV", 0),
+        ("WRAPPED", i64::MIN),
+        ("PRIVATE_VALUE", i64::MAX),
+        ("SKIPPED", 0),
+    ] {
+        let variable = project
+            .program
+            .variables
+            .iter()
+            .find(|variable| variable.name == name)
+            .unwrap();
+        assert_eq!(
+            variable.initial_values,
+            vec![erabasic_hir::ConstantValue::Integer(value)],
+            "{name}"
+        );
+    }
+    let statement = &project.program.functions[0].lines[0];
+    let HirStatementKind::Assignment { value, .. } = &statement.kind else {
+        panic!("expected assignment");
+    };
+    assert_eq!(
+        value.constant, None,
+        "runtime warning must not be folded away"
+    );
+}
+
+#[test]
+fn snake_project_constants_fold_power_named_colors_and_rename_values() {
+    let mut project = empty_project();
+    project
+        .static_data
+        .rename
+        .insert("[[铃仙]]".into(), "42".into());
+    let mut options = AnalyzerOptions::analysis_mode();
+    options.compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: project,
+            sources: vec![source(
+                "constants.erh",
+                "#DIM CONST C_G_END = POWER(2, 32) - 1\n#DIM CONST LIST_COLOR_DEFAULT = 0x44000000 + COLOR_FROMNAME(\"dimgray\")\n#DIM CONST RENAMED = [[铃仙]]\n",
+            )],
+        },
+        &options,
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let project = report.project.unwrap();
+    for (name, expected) in [
+        ("C_G_END", 4_294_967_295),
+        ("LIST_COLOR_DEFAULT", 0x4469_6969),
+        ("RENAMED", 42),
+    ] {
+        let variable = project
+            .program
+            .variables
+            .iter()
+            .find(|variable| variable.name == name)
+            .unwrap();
+        assert_eq!(
+            variable.initial_values,
+            vec![erabasic_hir::ConstantValue::Integer(expected)],
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn dynamic_private_initializer_is_lowered_at_function_entry() {
+    let mut options = AnalyzerOptions::analysis_mode();
+    options.compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "dynamic.erb",
+                "@SYSTEM_TITLE\n#DIM DYNAMIC 行文字数 = STRLENSU(GETLINESTR(\"─\"))\nRESULT = 行文字数\nRETURN\n",
+            )],
+        },
+        &options,
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let function = &report.project.unwrap().program.functions[0];
+    let HirStatementKind::Assignment { value, .. } = &function.lines[0].kind else {
+        panic!("expected synthesized function-entry initializer");
+    };
+    assert!(value.constant.is_none());
+    assert!(matches!(value.kind, erabasic_hir::HirExprKind::Call { .. }));
+}
+
+#[test]
+fn dynamic_private_initializer_list_infers_array_and_assigns_each_element() {
+    let mut options = AnalyzerOptions::analysis_mode();
+    options.compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: empty_project(),
+            sources: vec![source(
+                "dynamic-list.erb",
+                "@SYSTEM_TITLE\n#DIMS DYNAMIC LABELS = \"first\", TOSTR(2), \"third\"\nRESULTS = LABELS:1\nRETURN\n",
+            )],
+        },
+        &options,
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    let project = report.project.unwrap();
+    let variable = project
+        .program
+        .variables
+        .iter()
+        .find(|variable| variable.name == "LABELS")
+        .unwrap();
+    assert_eq!(variable.dimensions, vec![3]);
+    let function = &project.program.functions[0];
+    for (index, line) in function.lines[..3].iter().enumerate() {
+        let HirStatementKind::Assignment { target, .. } = &line.kind else {
+            panic!("expected synthesized array initializer assignment");
+        };
+        assert_eq!(
+            target.indices[0].constant,
+            Some(erabasic_hir::ConstantValue::Integer(
+                i64::try_from(index).unwrap()
+            ))
+        );
+    }
+}
+
+#[test]
 fn resolves_header_constants_variables_and_typed_expressions() {
     let report = analyze_project(
         AnalysisInput {
@@ -226,7 +432,8 @@ fn unresolved_named_indices_in_dynamic_call_candidates_are_deferred() {
             sources: vec![source(
                 "dynamic.erb",
                 "@SYSTEM_TITLE\n\
-                 CALLFORM \"OPTIONAL\"\n\
+                 #DIMS TARGET\n\
+                 CALLFORM %TARGET%\n\
                  RETURN\n\
                  @OPTIONAL\n\
                  RESULT = CFLAG:LOCAL\n\

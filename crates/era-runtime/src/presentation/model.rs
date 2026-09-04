@@ -4,15 +4,20 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use era_runtime_protocol::{
-    AudioState, Color, DisplayLine, DisplayRun, InputWait, LineAlignment, MediaPlacement,
-    PresentationDelta, PresentationHistoryOperation, PresentationSettings, PresentationSnapshot,
-    ResourceReplay, TextStyle, TooltipSettings,
+    AudioState, Color, DisplayLine, DisplayRun, InputWait, InteractionToken, LineAlignment,
+    LogicalLength, PresentationDelta, PresentationHistoryOperation, PresentationSettings,
+    PresentationSnapshot, ResourceReplay, SceneOperationV1, SceneSourceV1, SceneStateV1, TextStyle,
+    TooltipSettings,
 };
 use erabasic_vm::CharacterWidthMode;
 use serde::{Deserialize, Serialize};
 
 const fn dirty_line_count() -> bool {
     true
+}
+
+const fn zero_logical_length() -> LogicalLength {
+    LogicalLength(0)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -33,6 +38,9 @@ pub(crate) struct PresentationModel {
     pub(super) input_wait: Option<InputWait>,
     pub(super) next_line: u64,
     pub(super) logical_line_count: i64,
+    /// Monotonic, non-negative semantic document coordinate; independent of LINECOUNT edits.
+    #[serde(default = "zero_logical_length")]
+    pub(super) canonical_document_cursor_y: LogicalLength,
     #[serde(skip, default = "dirty_line_count")]
     pub(super) line_count_dirty: bool,
     pub(super) settings: PresentationSettings,
@@ -49,10 +57,30 @@ pub(crate) struct PresentationModel {
     pub(super) button_generation: u64,
     pub(super) replace_next_temporary: bool,
     pub(super) html_island: Vec<erabasic_html::HtmlDocument>,
-    pub(super) backgrounds: Vec<MediaPlacement>,
     #[serde(default)]
-    pub(super) client_backgrounds: Vec<MediaPlacement>,
+    pub(super) scene: SceneStateV1,
+    #[serde(skip, default)]
+    pub(super) scene_operations: Vec<SceneOperationV1>,
+    /// Non-visual SETBGIMAGE lookup index; `scene` remains the sole rendered authority.
+    #[serde(default)]
+    pub(super) background_layers: Vec<(String, u64)>,
+    #[serde(default)]
+    pub(super) cbg_layers: Vec<CbgLayerIndex>,
+    #[serde(default)]
+    pub(super) cbg_button_map: Option<SceneSourceV1>,
+    #[serde(default)]
+    pub(super) image_layers: Vec<ImageLayerIndex>,
+    #[serde(default = "first_scene_identifier")]
+    pub(super) next_scene_layer_id: u64,
+    #[serde(default = "first_scene_identifier")]
+    pub(super) next_scene_sequence: u64,
     pub(super) audio: Vec<AudioState>,
+    #[serde(default = "default_audio_volume")]
+    pub(super) sound_volume_millionths: u32,
+    // Reserved compatibility slot in the format-30 MessagePack layout. One-shot sound channels
+    // remain frontend-owned and runtime snapshot restoration always clears this value.
+    #[serde(default)]
+    pub(super) sound_playing: bool,
     pub(super) tooltip: TooltipSettings,
     pub(super) resources: ResourceReplay,
     #[serde(default)]
@@ -64,6 +92,19 @@ pub(crate) struct PresentationModel {
     pub(super) delivery: PresentationDelivery,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(super) struct CbgLayerIndex {
+    pub(super) layer_id: u64,
+    pub(super) depth: i64,
+    pub(super) interaction: Option<InteractionToken>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(super) struct ImageLayerIndex {
+    pub(super) layer_id: u64,
+    pub(super) depth: i64,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct PresentationDelivery {
     pub(super) revision: Option<u64>,
@@ -71,6 +112,7 @@ pub(super) struct PresentationDelivery {
     /// Physical rows held by the frontend at the delivery baseline, including one pending row.
     pub(super) history_line_count: usize,
     pub(super) pending_line_id: Option<u64>,
+    pub(super) scene_revision: u64,
     pub(super) dirty_lines: BTreeSet<u64>,
     pub(super) dirty: PresentationDirty,
 }
@@ -88,7 +130,7 @@ pub(super) enum PresentationHistoryEdit {
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct PresentationDirty {
     pub(super) title: bool,
-    pub(super) backgrounds: bool,
+    pub(super) scene: bool,
     pub(super) audio: bool,
     pub(super) input_wait: bool,
     pub(super) settings: bool,
@@ -97,6 +139,14 @@ pub(super) struct PresentationDirty {
     pub(super) html_island: bool,
     pub(super) redraw: bool,
     pub(super) force_snapshot: bool,
+}
+
+const fn first_scene_identifier() -> u64 {
+    1
+}
+
+const fn default_audio_volume() -> u32 {
+    1_000_000
 }
 
 pub(crate) enum PresentationUpdate {

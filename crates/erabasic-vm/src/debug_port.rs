@@ -17,6 +17,7 @@ pub enum VmStepKind {
     Out,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum VmDebugStopReason {
     PauseRequested,

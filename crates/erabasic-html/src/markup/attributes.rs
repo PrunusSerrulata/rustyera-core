@@ -21,6 +21,21 @@ pub(super) fn find_tag_end(source: &str, start: usize) -> Option<usize> {
 }
 
 pub(super) fn parse_attributes(source: &str, base: usize) -> Result<Vec<HtmlAttribute>, HtmlError> {
+    parse_attributes_inner(source, base, false)
+}
+
+pub(super) fn parse_query_attributes(
+    source: &str,
+    base: usize,
+) -> Result<Vec<HtmlAttribute>, HtmlError> {
+    parse_attributes_inner(source, base, true)
+}
+
+fn parse_attributes_inner(
+    source: &str,
+    base: usize,
+    query_entities: bool,
+) -> Result<Vec<HtmlAttribute>, HtmlError> {
     let mut result = Vec::new();
     let mut cursor = 0;
     while cursor < source.len() {
@@ -89,7 +104,11 @@ pub(super) fn parse_attributes(source: &str, base: usize) -> Result<Vec<HtmlAttr
             ));
         };
         cursor += relative;
-        let value = decode_entities(&source[value_start..cursor], base + value_start)?;
+        let value = if query_entities {
+            super::query::decode_for_parser(&source[value_start..cursor], base + value_start)?
+        } else {
+            decode_entities(&source[value_start..cursor], base + value_start)?
+        };
         cursor += quote.len_utf8();
         if result
             .iter()
@@ -107,5 +126,10 @@ pub(super) fn parse_attributes(source: &str, base: usize) -> Result<Vec<HtmlAttr
 }
 
 pub(super) const fn error(kind: HtmlErrorKind, start: usize, end: usize) -> HtmlError {
-    HtmlError { kind, start, end }
+    HtmlError {
+        kind,
+        start,
+        end,
+        origin: super::query::HtmlQueryErrorOrigin::ScriptInput,
+    }
 }

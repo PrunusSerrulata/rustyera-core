@@ -1,5 +1,127 @@
 use super::*;
 
+fn corrupt_arithmetic_warning_site(
+    site: &mut serde_json::Value,
+    corruption: &str,
+    instruction_count: usize,
+) {
+    match corruption {
+        "generation" => site[0] = serde_json::json!(999),
+        "function" => {
+            site[1] = serde_json::to_value(SymbolKey::derive(
+                "test.snapshot",
+                b"missing-arithmetic-warning-function",
+            ))
+            .unwrap();
+        }
+        "instruction" => site[2] = serde_json::json!(instruction_count),
+        "tag" => site[3] = serde_json::json!(3),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn invalid_compatibility_warning_sites_reject_before_restoring_native_random_state() {
+    let artifact = compile_source_with_options(
+        concat!(
+            "@SYSTEM_TITLE\nRESULT:10 = RAND:1000000\n",
+            "FLAG:0 = 9223372036854775807\nRESULT:11 = FLAG:0 + 1\n",
+            "RESULT:12 = 1 / FLAG:1\nWAIT\nRETURN RESULT\n",
+        ),
+        &AnalyzerOptions {
+            compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+            ..AnalyzerOptions::default()
+        },
+    );
+    assert!(
+        artifact
+            .native_imports
+            .iter()
+            .any(|import| import.import.name == "rand")
+    );
+    let entry = &artifact.functions[0];
+    let mut natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 1234);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let fiber = vm.spawn_entry(entry.key, Vec::new()).unwrap();
+    let mut host = PendingHost {
+        stability: HostWaitStability::StableInput,
+        rebound: Vec::new(),
+    };
+    let report = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+    assert!(
+        matches!(vm.fiber_status(fiber), Some(FiberStatus::WaitingHost(_))),
+        "{report:?}"
+    );
+    let snapshot = vm.snapshot(&natives).unwrap();
+    let json = serde_json::to_value(&snapshot).unwrap();
+    let sites = json["compatibility_warning_sites"].as_array().unwrap();
+    assert_eq!(sites.len(), 2, "overflow and division-by-zero sites");
+    assert_eq!(sites[0][3], 0);
+    assert_eq!(sites[1][3], 1);
+    assert!(!json["native_states"].as_array().unwrap().is_empty());
+
+    for corruption in ["generation", "function", "instruction", "tag"] {
+        let mut corrupted = json.clone();
+        corrupt_arithmetic_warning_site(
+            &mut corrupted["compatibility_warning_sites"][0],
+            corruption,
+            entry.code.len(),
+        );
+        let corrupted: VmSnapshot = serde_json::from_value(corrupted).unwrap();
+        let mut restored_natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 9876);
+        let before = serde_json::to_value(vm.snapshot(&restored_natives).unwrap()).unwrap();
+        // Different seeds make an accidental restore observable even if it later fails.
+        assert_ne!(before["native_states"], json["native_states"]);
+        let mut rejected_host = PendingHost {
+            stability: HostWaitStability::StableInput,
+            rebound: Vec::new(),
+        };
+        let rejected = Vm::restore_snapshot(
+            validated(&artifact),
+            VmConfig::default(),
+            corrupted,
+            &mut rejected_host,
+            &mut restored_natives,
+        );
+        assert!(
+            matches!(&rejected, Err(VmError::Snapshot(message)) if message.contains("compatibility diagnostic identity")),
+            "{corruption}: {:?}",
+            rejected.as_ref().err()
+        );
+        assert!(rejected_host.rebound.is_empty(), "{corruption}");
+        let after = serde_json::to_value(vm.snapshot(&restored_natives).unwrap()).unwrap();
+        assert_eq!(
+            after["native_states"], before["native_states"],
+            "{corruption}"
+        );
+    }
+
+    let encoded = snapshot.encode().unwrap();
+    let decoded = VmSnapshot::decode(&encoded, VmConfig::default().maximum_snapshot_bytes).unwrap();
+    let mut restored_natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 9876);
+    let mut restored_host = PendingHost {
+        stability: HostWaitStability::StableInput,
+        rebound: Vec::new(),
+    };
+    let restored = Vm::restore_snapshot(
+        validated(&artifact),
+        VmConfig::default(),
+        decoded,
+        &mut restored_host,
+        &mut restored_natives,
+    )
+    .unwrap();
+    assert_eq!(restored_host.rebound.len(), 1);
+    let restored = serde_json::to_value(restored.snapshot(&restored_natives).unwrap()).unwrap();
+    assert_eq!(
+        restored["compatibility_warning_sites"],
+        json["compatibility_warning_sites"]
+    );
+    assert_eq!(restored["native_states"], json["native_states"]);
+}
+
 #[test]
 fn indexed_data_targets_dynamic_labels_and_try_lists_execute_lazily() {
     let artifact = compile_source(
@@ -409,6 +531,9 @@ fn erdname_resolves_a_user_defined_index_name_at_runtime() {
         "CUSTOM_NAMES".into(),
         erabasic_data::ResolvedUserIndex {
             variable_name: "CUSTOM_NAMES".into(),
+            canonical_names: [(0, "zero".into()), (1, "second".into())]
+                .into_iter()
+                .collect(),
             entries: [("zero".into(), 0), ("second".into(), 1)]
                 .into_iter()
                 .collect(),
@@ -421,6 +546,91 @@ fn erdname_resolves_a_user_defined_index_name_at_runtime() {
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(1));
 }
 
+fn alias_project_data() -> erabasic_data::ProjectData {
+    let mut data = project_data();
+    data.static_data.deferred_indices.resolved.insert(
+        "BUFF".into(),
+        erabasic_data::ResolvedUserIndex {
+            variable_name: "BUFF".into(),
+            entries: [
+                ("main".into(), 10),
+                ("alias".into(), 10),
+                ("negative".into(), -1),
+                ("outside".into(), 300),
+            ]
+            .into_iter()
+            .collect(),
+            canonical_names: [
+                (10, "main".into()),
+                (-1, "negative".into()),
+                (300, "outside".into()),
+            ]
+            .into_iter()
+            .collect(),
+        },
+    );
+    data
+}
+
+#[test]
+fn snake_aliases_resolve_dynamic_indices_and_keep_primary_reverse_names() {
+    let mut options = AnalyzerOptions::analysis_mode();
+    options.compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let artifact = compile_source_with_data_and_options(
+        "@SYSTEM_TITLE\n#DIM BUFF,32\nRESULTS:0 = alias\nBUFF:alias = 42\nRESULT = BUFF:(RESULTS:0) * 10 + (ERDNAME(BUFF,10) == \"main\")\nRETURN RESULT\n",
+        alias_project_data(),
+        &options,
+    );
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(421));
+
+    let original = compile_source_with_data(
+        "@SYSTEM_TITLE\n#DIM BUFF,32\nRESULT = ERDNAME(BUFF,10) == \"alias\"\nRETURN RESULT\n",
+        alias_project_data(),
+    );
+    assert_eq!(run_compiled_result(&original), VmValue::Integer(1));
+}
+
+#[test]
+fn snake_signed_aliases_still_fault_on_out_of_bounds_array_access() {
+    let mut options = AnalyzerOptions::analysis_mode();
+    options.compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    for alias in ["negative", "outside"] {
+        let artifact = compile_source_with_data_and_options(
+            &format!(
+                "@SYSTEM_TITLE\n#DIM BUFF,32\nRESULTS:0 = {alias}\nRESULT = BUFF:(RESULTS:0)\nRETURN RESULT\n"
+            ),
+            alias_project_data(),
+            &options,
+        );
+        let entry = artifact
+            .functions
+            .iter()
+            .find(|function| function.name == "SYSTEM_TITLE")
+            .unwrap()
+            .key;
+        let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+        let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+        vm.spawn_entry(entry, Vec::new()).unwrap();
+        let report = vm.run_slice(
+            &mut ReadyHost::default(),
+            &mut natives,
+            RunBudget::default(),
+        );
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+            "{alias}: {:?}",
+            report.events
+        );
+    }
+}
+
 #[test]
 fn erafl_compatibility_fixture_compiles_and_matches_the_reference_result() {
     const SOURCE: &str = "@ERAFL_COMPAT\n#DIM\u{3000}OUT\n#DIMS CONST PAD = \" \" * 3\nVARI COUNT = 2\nVARS WORD = \"xy\"\nVARI ITEMS, 3\n{\t\nCOUNT += 1\n}\t\nFOR LOCAL, , 2\nITEMS:LOCAL = COUNT\nNEXT\nIF 0\nOUT = ENUMFILES(\"missing-directory\", \"*.none\")\nCALLSHARP MISSING_PLUGIN()\nENDIF\nRESULT = COUNT * 10000 + (WORD == \"xy\") * 1000 + (ITEMS:1 == 3) * 100 + (PAD == \"   \") * 10 + (ERDNAME(CUSTOM_NAMES, 2) == \"later\")\nRETURN RESULT\n";
@@ -429,6 +639,9 @@ fn erafl_compatibility_fixture_compiles_and_matches_the_reference_result() {
         "CUSTOM_NAMES".into(),
         erabasic_data::ResolvedUserIndex {
             variable_name: "CUSTOM_NAMES".into(),
+            canonical_names: [(0, "zero".into()), (2, "later".into())]
+                .into_iter()
+                .collect(),
             entries: [("zero".into(), 0), ("later".into(), 2)]
                 .into_iter()
                 .collect(),
@@ -940,4 +1153,90 @@ fn runtime_fault_resolves_to_utf8_source_location() {
     assert_eq!(source.relative_path, "fault.erb");
     assert_eq!(source.line, 2);
     assert_eq!(source.byte_column, 0);
+}
+
+#[test]
+fn runtime_host_call_plan_obeys_runnable_and_transient_snapshot_boundaries() {
+    struct RuntimeInputHost;
+    impl VmHost for RuntimeInputHost {
+        fn call(&mut self, request: HostCallRequest) -> HostCallResult {
+            if request.import.name.eq_ignore_ascii_case("__GETKEY_ACTIVE") {
+                HostCallResult::Ready(HostReady {
+                    value: Some(VmValue::Integer(1)),
+                    writes: Vec::new(),
+                })
+            } else {
+                assert!(request.import.name.eq_ignore_ascii_case("GETKEY"));
+                HostCallResult::Deferred
+            }
+        }
+    }
+    let artifact = compile_source_with_options(
+        "@SYSTEM_TITLE\nRESULTS:1 '= \"{GETKEY(7)}\"\nRESULTS:0 '= STRFORM(RESULTS:1)\nFLAG:0 = STRFORMCHECK(RESULTS:0)\nRETURN RESULT\n",
+        &AnalyzerOptions {
+            compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+            ..AnalyzerOptions::default()
+        },
+    );
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let fiber = vm
+        .spawn_entry(artifact.functions[0].key, Vec::new())
+        .unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget {
+            maximum_host_calls: 0,
+            ..RunBudget::default()
+        },
+    );
+    assert!(
+        matches!(vm.fiber_status(fiber), Some(FiberStatus::Runnable)),
+        "{report:?}"
+    );
+    assert!(matches!(
+        vm.snapshot_eligibility(&natives),
+        SnapshotEligibility::Ineligible(ref blockers)
+            if blockers.contains(&SnapshotBlocker::RunnableFiber(fiber))
+    ));
+    assert!(vm.encode_snapshot(&natives).is_err());
+
+    let mut pending = RuntimeInputHost;
+    vm.run_slice(&mut pending, &mut natives, RunBudget::default());
+    let Some(FiberStatus::WaitingHost(request)) = vm.fiber_status(fiber) else {
+        panic!("runtime Host request was not issued");
+    };
+    assert!(matches!(
+        vm.snapshot_eligibility(&natives),
+        SnapshotEligibility::Ineligible(ref blockers)
+            if blockers.contains(&SnapshotBlocker::TransientHostWait(fiber))
+    ));
+    assert!(vm.encode_snapshot(&natives).is_err());
+    vm.resume_host(
+        request,
+        HostReady {
+            value: Some(VmValue::Integer(42)),
+            writes: Vec::new(),
+        },
+    )
+    .unwrap();
+    vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(matches!(
+        vm.fiber_status(fiber),
+        Some(FiberStatus::Completed(_))
+    ));
+    let flag = artifact
+        .globals
+        .iter()
+        .find(|value| value.name == "FLAG")
+        .unwrap()
+        .key;
+    assert_eq!(vm.read_variable(flag, &[0], None), Ok(VmValue::Integer(1)));
 }

@@ -8,7 +8,7 @@ use era_protocol::{
 use era_runtime_protocol::{
     CanvasReplayCommand, ConfigurationValueKind, DisplayLine, DisplayRun, FileCategory, FileChange,
     FilePayload, PresentationOperation, PresentationSnapshot, ProjectIdentity, ProjectManifest,
-    ProjectionLength, ProjectionSize, ProjectionTransform, SubmittedFile,
+    ProjectionLength, ProjectionSize, ProjectionTransform, ShutdownRequest, SubmittedFile,
 };
 use erabasic_vm::VmDebugInspect;
 
@@ -16,6 +16,7 @@ use super::*;
 
 fn capabilities() -> ClientCapabilities {
     ClientCapabilities {
+        environment: Vec::new(),
         input_modalities: vec![era_runtime_protocol::InputModality::Keyboard],
         rich_text: false,
         html: false,
@@ -42,6 +43,11 @@ fn capabilities() -> ClientCapabilities {
                 operation: GET_KEY_STATE_OPERATION.into(),
                 versions: VersionRange::exact(GET_KEY_STATE_OPERATION_VERSION),
             },
+            ServiceCapability {
+                kind: ServiceKind::Sql,
+                operation: SQL_OPERATION.into(),
+                versions: VersionRange::exact(SQL_OPERATION_VERSION),
+            },
         ],
         storage: StorageCapabilities {
             revisions: true,
@@ -49,6 +55,18 @@ fn capabilities() -> ClientCapabilities {
             missing_precondition: true,
             delete: true,
         },
+    }
+}
+
+fn profile_configuration_file(profile: erabasic_compat::CompatibilityProfileId) -> SubmittedFile {
+    SubmittedFile {
+        relative_path: "reraconfig.toml".into(),
+        category: FileCategory::Configuration,
+        payload: FilePayload::Utf8(format!(
+            "[meta]\nschema_version = 4\n[compatibility]\nprofile = \"{}\"\n",
+            profile.as_str()
+        )),
+        content_hash: None,
     }
 }
 
@@ -80,6 +98,18 @@ fn drain(session: &mut RuntimeSession) -> Vec<RuntimeMessage> {
 }
 
 fn negotiated_session() -> RuntimeSession {
+    negotiated_session_with_capabilities(capabilities())
+}
+
+fn negotiated_session_without_sql() -> RuntimeSession {
+    let mut client_capabilities = capabilities();
+    client_capabilities
+        .services
+        .retain(|service| service.kind != ServiceKind::Sql);
+    negotiated_session_with_capabilities(client_capabilities)
+}
+
+fn negotiated_session_with_capabilities(client_capabilities: ClientCapabilities) -> RuntimeSession {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     submit(
         &mut session,
@@ -89,7 +119,7 @@ fn negotiated_session() -> RuntimeSession {
             client_name: "test".into(),
             features: Vec::new(),
             requested_limits: RuntimeOptions::default().limits,
-            capabilities: capabilities(),
+            capabilities: client_capabilities,
             preferred_locales: vec!["ja".into()],
             configuration_profile: None,
         }),
@@ -175,6 +205,7 @@ fn submit_debug(session: &mut RuntimeSession, sequence: u64, message: &DebugMess
     session.submit_envelope(&bytes).expect("submit debug");
 }
 
+mod audio_runtime;
 mod debug_flow;
 mod host_runtime;
 mod host_system;
@@ -184,4 +215,8 @@ mod key_macro_input;
 mod protocol_handshake;
 mod protocol_project;
 mod reload_transfer;
+mod resource_storage;
+mod save_checks;
 mod save_lifecycle;
+mod sql_map_snapshot;
+mod sql_runtime;

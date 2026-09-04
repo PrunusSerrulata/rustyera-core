@@ -23,7 +23,7 @@ pub(crate) fn load_variable_sizes(
         return (schema, false);
     };
     let mut changed = BTreeSet::new();
-    for line in enabled_lines(&file.path, &file.content, options, diagnostics) {
+    for line in enabled_lines(&file.source_path, &file.content, options, diagnostics) {
         let tokens: Vec<_> = line.text.split(',').collect();
         if tokens.len() < 2 {
             diagnostics.push(at_line(
@@ -134,7 +134,7 @@ pub(crate) fn load_variable_sizes(
         }
     }
 
-    let fatal = !reconcile(&mut schema, &changed, &file.path, diagnostics);
+    let fatal = !reconcile(&mut schema, &changed, &file.source_path, diagnostics);
     (schema, fatal)
 }
 

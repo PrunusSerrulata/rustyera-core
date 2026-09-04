@@ -1,0 +1,239 @@
+{
+  "version": 1,
+  "kind": "batch0_actual_baseline_summary",
+  "observed_date": "2026-08-27",
+  "raw_evidence": {
+    "group_relative_path": "batch-0-work/results/baseline-8-games.json",
+    "bytes": 9118924,
+    "sha256": "fba28ac0e11cf3aa3806e9855afbf2ecce08cc24334a465ca5d7462e97f6b42c"
+  },
+  "hash_algorithm": "blake3",
+  "core_batch0_base_sha": "aa5cd34e9f11346ee6a66e3ab9c4978c92137103",
+  "oracles": [
+    {
+      "repository": "emuera.em",
+      "semantic_sha": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+      "wrapper_base_sha": "af9886061ba420d530581e7975c4db735c391d03",
+      "wrapper_current": {
+        "dirty_entries": [
+          " M Emuera/Runtime/Utils/WinInput.cs",
+          " M Emuera/UI/Game/EmueraConsole.Headless.cs",
+          " M Emuera/UI/Game/EmueraConsole.cs",
+          " M emuera-reference-cli/OracleService.cs",
+          " M emuera-reference-cli/README.md",
+          " M emuera-reference-cli/REFERENCE_CHANGES.md",
+          " M emuera-reference-cli/ReferenceHost.cs",
+          "?? Emuera/Runtime/Script/Statements/Function/Creator.Headless.cs",
+          "?? Emuera/Runtime/Utils/HeadlessInput.cs",
+          "?? emuera-reference-cli/HeadlessInputTrace.cs",
+          "?? emuera-reference-cli/PresentationProjection.cs"
+        ],
+        "sha": "af9886061ba420d530581e7975c4db735c391d03",
+        "tracked_patch_blake3": "966b7702069e55c565b1fda4acfde721aa18853e1affb1889ede0767dfc8f5f6",
+        "untracked_blake3": {
+          "Emuera/Runtime/Script/Statements/Function/Creator.Headless.cs": "97eff28b36332e88e94ae749d37ae7149bc44b57ba1ff41570c9eb0f67f4ce90",
+          "Emuera/Runtime/Utils/HeadlessInput.cs": "f88c57a1f8d83d470804e62490b3552190aa2402e2e9e9dcf9dcaf377a2cf1c6",
+          "emuera-reference-cli/HeadlessInputTrace.cs": "dec74decc988a43a249189a156692a843c01516d3f49ded462e96089ba1259fd",
+          "emuera-reference-cli/PresentationProjection.cs": "3fd123556b92497ed0d949570148d7121f1c0a1fcceed750fa608a058dc14480"
+        }
+      }
+    },
+    {
+      "repository": "emuera_lazyloading_selfmodified_version",
+      "semantic_sha": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+      "wrapper_base_sha": "4a46d7b52280733e8ecb8eeb630a87facdc03a23",
+      "wrapper_current": {
+        "dirty_entries": [
+          " M Emuera/Runtime/Utils/WinInput.cs",
+          " M Emuera/UI/Game/ConsoleStyledString.cs",
+          " M Emuera/UI/Game/EmueraConsole.Headless.cs",
+          " M Emuera/UI/Game/EmueraConsole.cs",
+          " M emuera-reference-cli/HEADLESS_CHANGES.md",
+          " M emuera-reference-cli/OracleService.cs",
+          " M emuera-reference-cli/README.md",
+          " M emuera-reference-cli/ReferenceHost.cs",
+          " M emuera-reference-cli/tests/smoke.py",
+          " M emuera-reference-cli/tests/test-macos-wine.sh",
+          "?? Emuera/Runtime/Script/Statements/Function/Creator.Headless.cs",
+          "?? Emuera/Runtime/Utils/HeadlessInput.cs",
+          "?? emuera-reference-cli/HeadlessInputTrace.cs",
+          "?? emuera-reference-cli/PresentationProjection.cs",
+          "?? emuera-reference-cli/tests/test_supervision.py"
+        ],
+        "sha": "4a46d7b52280733e8ecb8eeb630a87facdc03a23",
+        "tracked_patch_blake3": "6abf73ad8bc25b69daef3d0c1be21b4bdc034e285e7697ed072b469bfd1dc8bf",
+        "untracked_blake3": {
+          "Emuera/Runtime/Script/Statements/Function/Creator.Headless.cs": "97eff28b36332e88e94ae749d37ae7149bc44b57ba1ff41570c9eb0f67f4ce90",
+          "Emuera/Runtime/Utils/HeadlessInput.cs": "bbc4ddb541c34862e23207baddf255a8ce36b84130da041b3af546fcdecf4d78",
+          "emuera-reference-cli/HeadlessInputTrace.cs": "d2ddd5fca32ba309b2786c7847835acc6a18d15272ee8f5acf4f5a314790dac3",
+          "emuera-reference-cli/PresentationProjection.cs": "8f3977e9e833e55c7c43121479deb705ac8c17e32e0bb1b36d219fc5abb19e74",
+          "emuera-reference-cli/tests/test_supervision.py": "622474ace17ff374e3cfd697bb68c34124d669c69081596b7c92c73c9ede97a2"
+        }
+      }
+    }
+  ],
+  "games": [
+    {
+      "project": "eratw-sub-modding",
+      "content_hash": "9e06614d965c0454a95770c9870842c48bfec8a8f7e7766f9e79590010a52862",
+      "group_hashes": {
+        "configuration": "f80109d14ba9c3c029da1c8058dc08b0f143f61966ec6527d538b3b2d35930e4",
+        "resource": "7bbd47c07206147c3ee6a26ac24eb25a71cc4a0b1153576a9d86794545cb6e69",
+        "source": "3cea967159f5327b5de1f0d455d0da5435f9887f690f7e66114dbe84577b9492"
+      },
+      "files": 16662,
+      "bytes": 899061574,
+      "excluded_reasons": {
+        "runtime_or_cache_artifact": 14,
+        "development_or_compiled_cache": 2,
+        "runtime_save_or_log_directory": 2
+      },
+      "git": {
+        "dirty_entries": [
+          " M emuera.config"
+        ],
+        "sha": "667b9cd0b838211cd0f1db4a151b876aaea6fa2f",
+        "tracked_patch_blake3": "a9c5b7fba19924e4f6a808361d9ccbd7d43b3f812556a5714cee876775dba0e7",
+        "untracked_blake3": {}
+      }
+    },
+    {
+      "project": "eraAkumaMaid",
+      "content_hash": "8eaf605d4158a2d84959e19c9ae1ffa84f855a581d1166f11e1ee3551f861f78",
+      "group_hashes": {
+        "configuration": "2e67db440d899cc58211ebb20b2657368e193a27280d436a02e372f9c8b790e0",
+        "resource": "b714c3e197944d31590c2cfbd8823583de3e09c0078a9cb39a6d8dea267f0ee6",
+        "source": "ce31509478cff02f42fb521fb624183e1571c4a0f9d8348fccb0d5816a7ba5b6"
+      },
+      "files": 2614,
+      "bytes": 68132586,
+      "excluded_reasons": {
+        "runtime_or_cache_artifact": 2,
+        "runtime_save_or_log_directory": 1
+      },
+      "git": null
+    },
+    {
+      "project": "eraMaouEx",
+      "content_hash": "d46bb8b70f20ae3790c02710e4f20c8bfc75a6ed96fb59d395a9b4cdf2caf66f",
+      "group_hashes": {
+        "configuration": "99b867ae338d513c3ada18ea7a70c5c552b93e7568982e2ecfb518ee33055646",
+        "resource": "1dda3cc82d5bc2828d811c8b922216cc368329faf373dafb80082cd43c075234",
+        "source": "d2e1b7e8641963760f528977af3f8b710931b5cadb1593bdd9b01d1d2a153e63"
+      },
+      "files": 399,
+      "bytes": 10521027,
+      "excluded_reasons": {
+        "runtime_or_cache_artifact": 2,
+        "runtime_save_or_log_directory": 1
+      },
+      "git": null
+    },
+    {
+      "project": "eraTW",
+      "content_hash": "42edad57dc74aa214ba7cf5a3bd6a627ff69f5f9109f6bfb62c8ae965e73fc27",
+      "group_hashes": {
+        "configuration": "ee09ac08c0c906554c7d4301419d2ecc89abd87f6a2e12c9c70565daadc05b88",
+        "resource": "b1404a2a971ed7499b6a8f620cde91fb32fbf42f57f23c8e0a12973e05b8ec2b",
+        "source": "16b86ab3df4eb8ebc10385f76b64ebaf714f1fea1288560fb5db945af11dd49e"
+      },
+      "files": 3406,
+      "bytes": 141293567,
+      "excluded_reasons": {
+        "runtime_or_cache_artifact": 1,
+        "development_or_compiled_cache": 1,
+        "runtime_save_or_log_directory": 1
+      },
+      "git": null
+    },
+    {
+      "project": "erafl",
+      "content_hash": "37a7b8182d39678b7a27a9c5c31a7aa490af438dc9cb554805a873d115551563",
+      "group_hashes": {
+        "configuration": "47aa4b98ce974db9adec8ad9c5c584c89e6a6250f1eb60b6c5766e7bb1754efd",
+        "resource": "768b37ff65592c802dbabdd0a37c6214f4182cba05d874833908989ad92c9a1d",
+        "source": "edca72f90d0e453ad6282060fa184fe636d878745ac1c66973b8ac3f4d0d978f"
+      },
+      "files": 3330,
+      "bytes": 84251257,
+      "excluded_reasons": {
+        "runtime_or_cache_artifact": 4,
+        "development_or_compiled_cache": 1,
+        "runtime_save_or_log_directory": 1
+      },
+      "git": {
+        "dirty_entries": [
+          "?? reraconfig.toml"
+        ],
+        "sha": "bdc595aa08f9e1422527f6232d6d50b9640296a7",
+        "tracked_patch_blake3": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+        "untracked_blake3": {
+          "reraconfig.toml": "2524a58a89bd468981f9fdf376582272f47c2d544f85859a95f193c4d95c648e"
+        }
+      }
+    },
+    {
+      "project": "erarorona",
+      "content_hash": "0f5958d3faa776108afd5adb7fa320e71e4d861ebab4f45f9909c4e894410ece",
+      "group_hashes": {
+        "configuration": "3ac300b907c4ca5d665857e3319784a0a405d34fcd93ec12dd8f3738d030e959",
+        "resource": "6946951455730e50059cfbb7fb0e6a8ad670eb843937a428f40bcff227bc8342",
+        "source": "d34853f7b8935ea99ac45afa0078cf3822066faa50c87e53fb29f0cc699312aa"
+      },
+      "files": 2013,
+      "bytes": 209776532,
+      "excluded_reasons": {
+        "runtime_or_cache_artifact": 4,
+        "development_or_compiled_cache": 2,
+        "runtime_save_or_log_directory": 1
+      },
+      "git": {
+        "dirty_entries": [
+          "?? .rustyera/",
+          "?? era萝乐娜.reraproj",
+          "?? reraconfig.toml"
+        ],
+        "sha": "27fc57db35c29fbb3ec3ed7a6d823fb9b2097748",
+        "tracked_patch_blake3": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+        "untracked_blake3": {
+          ".rustyera/cache/compiled-project.reracache": "54b3150ed85ee43b1dfcf831bc175418bd87c07a806c3826745f1c84c89a7611",
+          ".rustyera/cache/source-index-v1.json": "9b6f46fc4946c36ead1ba113ed149cf9df54a25f68af58284c772ed430de4a15",
+          "era萝乐娜.reraproj": "b97e01afc1d8bf24bb317f6783fd9871c343b201896c41e3c6c33b52110cc744",
+          "reraconfig.toml": "3f60fa8df4391d9e4bef78d51f12dccd4cb40f8cf37cc21860410c7d435e31de"
+        }
+      }
+    },
+    {
+      "project": "eratohoK",
+      "content_hash": "6d123809a539f3ca912ef854ccc6f68a24294625a6d367a2af5df2a60c97a4c6",
+      "group_hashes": {
+        "configuration": "09e247e0bdfc653700be7ba9bd62c2ba54f98f5f9080c2193a5f3729a7dabb8c",
+        "resource": "627802f640274b985005cb7e017c753cd9aba18c6ce311e0ce34d6711838a8ab",
+        "source": "b9f41e393307096c29e80f6e487bac07418a736315274ed844daceb4590096ce"
+      },
+      "files": 3290,
+      "bytes": 131099657,
+      "excluded_reasons": {
+        "runtime_or_cache_artifact": 1,
+        "runtime_save_or_log_directory": 1
+      },
+      "git": null
+    },
+    {
+      "project": "era魔界牧場1.050_tc8",
+      "content_hash": "18c7f0eca682dfcd00196e90d65fbd41e776e05a8e3eaa21afa36af776807a72",
+      "group_hashes": {
+        "configuration": "e01ebeac91b7e8ccd6ec739f16f47ded9635e829cb7ec7feb76e96e1237db221",
+        "resource": "9eee0cd7a246554c42088baa9a26b2fce0d618ed570e8eb3abd83ab1c71ce5ba",
+        "source": "582d65f3eacedc0ee1cb50130d98218fa86c85ccee67061853fae85e3f7c4af5"
+      },
+      "files": 1448,
+      "bytes": 12104617,
+      "excluded_reasons": {
+        "runtime_or_cache_artifact": 2,
+        "runtime_save_or_log_directory": 1
+      },
+      "git": null
+    }
+  ]
+}

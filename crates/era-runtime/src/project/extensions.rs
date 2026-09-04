@@ -20,12 +20,6 @@ pub(super) fn category_relative_path(path: &str, category: &str) -> String {
     }
 }
 
-pub(super) fn is_deferred_index_source(path: &str) -> bool {
-    std::path::Path::new(path)
-        .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("erd"))
-}
-
 #[allow(clippy::too_many_lines)]
 pub(super) fn prepare_extensions(
     declarations: &[era_runtime_protocol::ExtensionDeclaration],

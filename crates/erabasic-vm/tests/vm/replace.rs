@@ -65,10 +65,13 @@ impl VmHost for EraflTooltipHost {
                 writes: Vec::new(),
             });
         }
-        HostCallResult::Error(format!(
-            "unexpected eraFL tooltip fixture host call: {}",
-            request.import.name
-        ))
+        HostCallResult::Error(
+            format!(
+                "unexpected eraFL tooltip fixture host call: {}",
+                request.import.name
+            )
+            .into(),
+        )
     }
 }
 

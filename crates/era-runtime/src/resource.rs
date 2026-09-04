@@ -1,10 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem::size_of;
 
 use era_runtime_protocol::{
-    CanvasReplay, CanvasReplayCommand, CanvasSize, FileCategory, FilePayload,
-    ImageMetadataResponse, ProjectManifest, ResourceReplay, SpriteFrameReplay, SpriteReplay,
-    validate_relative_path,
+    CompatibilityProfileId, FileCategory, FilePayload, ImageMetadataResponse, ProjectManifest,
+    SceneSourceV1, validate_relative_path,
 };
 use serde::{Deserialize, Serialize};
 
@@ -17,10 +16,17 @@ pub(crate) struct ResourceGraph {
     images: BTreeMap<String, ResourceImage>,
     sprites: BTreeMap<String, SpriteDefinition>,
     canvases: BTreeMap<i64, CanvasSurface>,
+    /// Immutable definitions retained only while an exact revision is referenced.
+    #[serde(default)]
+    exact_revisions: ExactRevisionStore,
     #[serde(skip, default)]
     retained_canvas_command_bytes: usize,
     animation_timer_ms: i32,
     canvas_defaults: CanvasDefaults,
+    #[serde(default)]
+    static_sprite_revision: u64,
+    #[serde(default = "default_next_sprite_revision")]
+    next_sprite_revision: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -38,6 +44,7 @@ impl Default for ResourceGraph {
             images: BTreeMap::new(),
             sprites: BTreeMap::new(),
             canvases: BTreeMap::new(),
+            exact_revisions: ExactRevisionStore::default(),
             retained_canvas_command_bytes: 0,
             animation_timer_ms: 0,
             canvas_defaults: CanvasDefaults {
@@ -47,8 +54,89 @@ impl Default for ResourceGraph {
                 font_size: 100,
                 font_style: 0,
             },
+            static_sprite_revision: 0,
+            next_sprite_revision: default_next_sprite_revision(),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct ExactRevisionStore {
+    sprites: BTreeMap<String, BTreeMap<u64, SpriteDefinition>>,
+    canvases: BTreeMap<i64, BTreeMap<u64, CanvasSurface>>,
+    #[serde(skip, default)]
+    retained_canvas_command_bytes: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ReplayClosure {
+    sprites: BTreeSet<(String, u64)>,
+    canvases: BTreeSet<(i64, u64)>,
+    retained_sprites: BTreeSet<(String, u64)>,
+    retained_canvases: BTreeSet<(i64, u64)>,
+}
+
+enum ReplayWork {
+    Sprite(String, u64, bool),
+    Canvas(i64, u64, bool),
+}
+
+const fn default_next_sprite_revision() -> u64 {
+    1
+}
+
+fn static_sprite_revision(manifest: &ProjectManifest) -> u64 {
+    let mut files = manifest
+        .files
+        .iter()
+        .filter(|file| {
+            matches!(
+                file.category,
+                FileCategory::Resource | FileCategory::ResourceManifest
+            )
+        })
+        .collect::<Vec<_>>();
+    files.sort_by_key(|file| {
+        (
+            file.relative_path.to_ascii_lowercase(),
+            file.relative_path.as_str(),
+        )
+    });
+    let mut hasher = blake3::Hasher::new_derive_key("rustyera.static-sprite-revision.v1");
+    for file in files {
+        hasher.update(file.relative_path.as_bytes());
+        hasher.update(&[file.category as u8]);
+        if let Some(content_hash) = &file.content_hash {
+            hasher.update(content_hash.as_slice());
+            continue;
+        }
+        match &file.payload {
+            FilePayload::Utf8(value) => {
+                hasher.update(value.as_bytes());
+            }
+            FilePayload::Bytes(value) => {
+                hasher.update(value.as_slice());
+            }
+            FilePayload::ExternalResource(resource) => {
+                hasher.update(&resource.byte_length.to_le_bytes());
+                if let Some(metadata) = &resource.image_metadata {
+                    hasher.update(&metadata.width.to_le_bytes());
+                    hasher.update(&metadata.height.to_le_bytes());
+                    hasher.update(metadata.format.as_bytes());
+                    hasher.update(&[u8::from(metadata.animated)]);
+                }
+            }
+            FilePayload::IoError(_) => {
+                hasher.update(b"io-error");
+            }
+        }
+    }
+    let digest = hasher.finalize();
+    u64::from_le_bytes(
+        digest.as_bytes()[..size_of::<u64>()]
+            .try_into()
+            .expect("BLAKE3 digest contains a u64"),
+    )
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -57,6 +145,8 @@ struct CanvasSurface {
     height: u32,
     revision: u64,
     commands: Vec<CanvasCommand>,
+    #[serde(default)]
+    polygon_points: Vec<[i32; 2]>,
     #[serde(skip, default)]
     retained_command_bytes: usize,
     brush_argb: u32,
@@ -77,6 +167,7 @@ enum CanvasCommand {
     },
     DrawSprite {
         name: String,
+        resource_revision: u64,
         destination: [i32; 4],
         color_matrix: Option<Vec<i64>>,
     },
@@ -119,6 +210,7 @@ enum CanvasCommand {
         destination: [i32; 4],
         color_matrix: Option<Vec<i64>>,
         mask_canvas_id: Option<i64>,
+        mask_revision: Option<u64>,
         rotation_millidegrees: i64,
         rotation_center: Option<[i32; 2]>,
     },
@@ -126,6 +218,12 @@ enum CanvasCommand {
         content_digest: Vec<u8>,
         encoded: Vec<u8>,
     },
+    PolygonPointAdd {
+        point: [i32; 2],
+    },
+    PolygonPointClear,
+    DrawPolygon,
+    FillPolygon,
 }
 
 impl CanvasCommand {
@@ -153,7 +251,11 @@ impl CanvasCommand {
             | Self::SetBrush { .. }
             | Self::SetPen { .. }
             | Self::SetDashStyle { .. }
-            | Self::DrawLine { .. } => 0,
+            | Self::DrawLine { .. }
+            | Self::PolygonPointAdd { .. }
+            | Self::PolygonPointClear
+            | Self::DrawPolygon
+            | Self::FillPolygon => 0,
         };
         size_of::<Self>().saturating_add(dynamic)
     }
@@ -213,6 +315,36 @@ impl ResourceGraph {
             }
             image.bytes.clear();
         }
+        self.ensure_canvas_retained_bytes();
+        let mut roots = self
+            .exact_revisions
+            .sprites
+            .iter()
+            .flat_map(|(name, revisions)| {
+                revisions.keys().map(|revision| SceneSourceV1::Sprite {
+                    sprite_name: name.clone(),
+                    resource_revision: *revision,
+                })
+            })
+            .collect::<Vec<_>>();
+        roots.extend(
+            self.exact_revisions
+                .canvases
+                .iter()
+                .flat_map(|(canvas_id, revisions)| {
+                    revisions.keys().map(|revision| SceneSourceV1::Canvas {
+                        canvas_id: *canvas_id,
+                        resource_revision: *revision,
+                    })
+                }),
+        );
+        let (exact_revisions, _) = self.collect_replay_closure(&roots, true)?;
+        if self.total_canvas_bytes_with(&exact_revisions) > canvas::MAXIMUM_CANVAS_COMMAND_BYTES {
+            return Err(
+                "runtime snapshot exact replay closure exceeds canvas command budget".into(),
+            );
+        }
+        self.exact_revisions = exact_revisions;
         Ok(())
     }
 
@@ -243,7 +375,11 @@ impl ResourceGraph {
         manifest: &ProjectManifest,
         mut progress: impl FnMut(usize, usize),
     ) -> (Self, Vec<ResourceDiagnostic>) {
-        let mut graph = Self::default();
+        let mut graph = Self {
+            static_sprite_revision: static_sprite_revision(manifest),
+            next_sprite_revision: default_next_sprite_revision(),
+            ..Self::default()
+        };
         let mut diagnostics = Vec::new();
         let mut preloaded_metadata = Vec::new();
         let total = Self::work_item_count(manifest);
@@ -286,6 +422,8 @@ impl ResourceGraph {
             progress(completed, total);
         }
 
+        let missing_images_are_warnings =
+            manifest.compatibility.profile == CompatibilityProfileId::EmueraSkiaSnake;
         let mut manifests = manifest
             .files
             .iter()
@@ -302,7 +440,13 @@ impl ResourceGraph {
                 progress(completed, total);
                 continue;
             };
-            parse_resource_manifest(&mut graph, &mut diagnostics, &manifest.relative_path, text);
+            parse_resource_manifest(
+                &mut graph,
+                &mut diagnostics,
+                &manifest.relative_path,
+                text,
+                missing_images_are_warnings,
+            );
             completed += 1;
             progress(completed, total);
         }
@@ -378,7 +522,11 @@ impl ResourceGraph {
         let image = self
             .images
             .get(&relative_path.to_ascii_lowercase())
-            .and_then(|image| image.metadata.as_ref())
+            .ok_or("image resource is unavailable")?;
+        let digest = image.digest;
+        let image = image
+            .metadata
+            .as_ref()
             .ok_or("image metadata is unavailable")?;
         for sprite in self.sprites.values_mut() {
             for frame in &mut sprite.frames {
@@ -405,6 +553,7 @@ impl ResourceGraph {
                 }
                 frame.source_width = Some(width);
                 frame.source_height = Some(height);
+                frame.content_digest = Some(digest);
                 if sprite.width == 0 {
                     sprite.width = frame.destination_width.unwrap_or(width);
                 }
@@ -420,18 +569,121 @@ impl ResourceGraph {
         self.sprites.get(&name.to_ascii_uppercase())
     }
 
-    pub(crate) fn move_sprite(&mut self, name: &str, x: i32, y: i32, relative: bool) -> bool {
-        let Some(sprite) = self.sprites.get_mut(&name.to_ascii_uppercase()) else {
+    pub(crate) fn create_file_sprite(
+        &mut self,
+        name: &str,
+        requested_path: &str,
+        declaring_source: Option<&str>,
+        relative_to_source: bool,
+    ) -> bool {
+        let key = name.to_ascii_uppercase();
+        if name.is_empty() {
+            return false;
+        }
+        if self.sprites.contains_key(&key) {
+            // The fixed snake implementation treats repeated file-backed creation
+            // as an idempotent success, unlike canvas-backed SPRITECREATE.
+            return true;
+        }
+        let Ok(requested_path) = validate_relative_path(requested_path) else {
             return false;
         };
-        if relative {
-            sprite.position_x = sprite.position_x.saturating_add(x);
-            sprite.position_y = sprite.position_y.saturating_add(y);
+        let resolved = if relative_to_source {
+            let Some(source) = declaring_source.and_then(|path| validate_relative_path(path).ok())
+            else {
+                return false;
+            };
+            let directory = source
+                .rsplit_once('/')
+                .map_or("", |(directory, _)| directory);
+            let joined = if directory.is_empty() {
+                requested_path
+            } else {
+                format!("{directory}/{requested_path}")
+            };
+            let Ok(joined) = validate_relative_path(&joined) else {
+                return false;
+            };
+            joined
         } else {
-            sprite.position_x = x;
-            sprite.position_y = y;
-        }
+            requested_path
+        };
+        let Some(image) = self.images.get(&resolved.to_ascii_lowercase()) else {
+            return false;
+        };
+        let Some(metadata) = &image.metadata else {
+            return false;
+        };
+        let image_path = image.relative_path.clone();
+        let content_digest = image.digest;
+        let width = metadata.width;
+        let height = metadata.height;
+        let revision = self.allocate_sprite_revision();
+        self.sprites.insert(
+            key.clone(),
+            SpriteDefinition {
+                name: key,
+                revision,
+                width,
+                height,
+                frames: vec![SpriteFrame {
+                    image_path,
+                    content_digest: Some(content_digest),
+                    canvas_id: None,
+                    canvas_revision: None,
+                    source_x: 0,
+                    source_y: 0,
+                    source_width: Some(width),
+                    source_height: Some(height),
+                    offset_x: 0,
+                    offset_y: 0,
+                    delay_ms: 1_000,
+                    destination_width: None,
+                    destination_height: None,
+                }],
+                dynamic: true,
+                position_x: 0,
+                position_y: 0,
+                canvas_id: None,
+                canvas_revision: None,
+                canvas_rectangle: None,
+            },
+        );
         true
+    }
+
+    pub(crate) fn move_sprite(&mut self, name: &str, x: i32, y: i32, relative: bool) -> bool {
+        let key = name.to_ascii_uppercase();
+        let Some(sprite) = self.sprites.get(&key) else {
+            return false;
+        };
+        let position = if relative {
+            (
+                sprite.position_x.saturating_add(x),
+                sprite.position_y.saturating_add(y),
+            )
+        } else {
+            (x, y)
+        };
+        if (sprite.position_x, sprite.position_y) == position {
+            return true;
+        }
+        let revision = self.allocate_sprite_revision();
+        let sprite = self.sprites.get_mut(&key).expect("sprite was checked");
+        sprite.position_x = position.0;
+        sprite.position_y = position.1;
+        sprite.revision = revision;
+        true
+    }
+
+    pub(crate) fn sprite_revision(&self, name: &str) -> Option<u64> {
+        self.sprite(name).map(|sprite| sprite.revision)
+    }
+
+    pub(super) fn allocate_sprite_revision(&mut self) -> u64 {
+        let revision = self.next_sprite_revision;
+        self.next_sprite_revision = self.next_sprite_revision.saturating_add(1);
+        revision
     }
 
     pub(crate) fn sprite_pixel_request(
@@ -503,237 +755,18 @@ impl ResourceGraph {
             .find(|image| image.digest.as_slice() == content_digest)
     }
 
-    // This is deliberately one exhaustive translation table so adding an
-    // internal command cannot silently omit its public replay equivalent.
-    #[allow(clippy::too_many_lines)]
-    pub(crate) fn replay(&self) -> ResourceReplay {
-        let mut sprites = self
-            .sprites
-            .values()
-            .map(|sprite| SpriteReplay {
-                name: sprite.name.clone(),
-                size: [sprite.width, sprite.height],
-                position: [sprite.position_x, sprite.position_y],
-                frames: sprite
-                    .frames
-                    .iter()
-                    .map(|frame| SpriteFrameReplay {
-                        resource_id: frame.image_path.clone(),
-                        source_rectangle: [
-                            frame.source_x,
-                            frame.source_y,
-                            i32::try_from(frame.source_width.unwrap_or_default())
-                                .unwrap_or(i32::MAX),
-                            i32::try_from(frame.source_height.unwrap_or_default())
-                                .unwrap_or(i32::MAX),
-                        ],
-                        offset: [frame.offset_x, frame.offset_y],
-                        delay_ms: frame.delay_ms,
-                        destination_size: frame
-                            .destination_width
-                            .zip(frame.destination_height)
-                            .map(|(width, height)| [width, height]),
-                        canvas_id: frame.canvas_id,
-                    })
-                    .collect(),
-                canvas_id: sprite.canvas_id,
-                canvas_rectangle: sprite.canvas_rectangle.map(canvas_rect),
-            })
-            .collect::<Vec<_>>();
-        let mut replay_resource_ordinal = 0_u64;
-        let canvases = self
-            .canvases
-            .iter()
-            .map(|(canvas_id, canvas)| CanvasReplay {
-                canvas_id: *canvas_id,
-                size: CanvasSize {
-                    width: canvas.width,
-                    height: canvas.height,
-                },
-                commands: canvas
-                    .commands
-                    .iter()
-                    .map(|command| {
-                        if let CanvasCommand::LoadEncodedImage {
-                            content_digest,
-                            encoded,
-                        } = command
-                            && let Some(image) =
-                                self.project_image_reference(content_digest, encoded)
-                            && let Some(metadata) = &image.metadata
-                        {
-                            let name = loop {
-                                let candidate = format!(
-                                    "__RUSTYERA_PROJECT_RESOURCE_{replay_resource_ordinal}"
-                                );
-                                replay_resource_ordinal = replay_resource_ordinal.saturating_add(1);
-                                if !sprites
-                                    .iter()
-                                    .any(|sprite| sprite.name.eq_ignore_ascii_case(&candidate))
-                                {
-                                    break candidate;
-                                }
-                            };
-                            sprites.push(SpriteReplay {
-                                name: name.clone(),
-                                size: [metadata.width, metadata.height],
-                                position: [0, 0],
-                                frames: vec![SpriteFrameReplay {
-                                    resource_id: image.relative_path.clone(),
-                                    source_rectangle: [
-                                        0,
-                                        0,
-                                        i32::try_from(metadata.width).unwrap_or(i32::MAX),
-                                        i32::try_from(metadata.height).unwrap_or(i32::MAX),
-                                    ],
-                                    offset: [0, 0],
-                                    delay_ms: 1_000,
-                                    destination_size: None,
-                                    canvas_id: None,
-                                }],
-                                canvas_id: None,
-                                canvas_rectangle: None,
-                            });
-                            return CanvasReplayCommand::DrawSprite {
-                                name,
-                                destination: canvas_rect([
-                                    0,
-                                    0,
-                                    i32::try_from(canvas.width).unwrap_or(i32::MAX),
-                                    i32::try_from(canvas.height).unwrap_or(i32::MAX),
-                                ]),
-                                color_matrix: None,
-                            };
-                        }
-                        match command {
-                            CanvasCommand::Clear { argb, rectangle } => {
-                                CanvasReplayCommand::Clear {
-                                    argb: *argb,
-                                    rectangle: rectangle.map(canvas_rect),
-                                }
-                            }
-                            CanvasCommand::DrawSprite {
-                                name,
-                                destination,
-                                color_matrix,
-                            } => CanvasReplayCommand::DrawSprite {
-                                name: name.clone(),
-                                destination: canvas_rect(*destination),
-                                color_matrix: color_matrix.clone(),
-                            },
-                            CanvasCommand::SetPixel { point, argb } => {
-                                CanvasReplayCommand::SetPixel {
-                                    point: era_runtime_protocol::CanvasPoint {
-                                        x: point[0],
-                                        y: point[1],
-                                    },
-                                    argb: *argb,
-                                }
-                            }
-                            CanvasCommand::FillRectangle {
-                                rectangle,
-                                brush_argb,
-                            } => CanvasReplayCommand::FillRectangle {
-                                rectangle: canvas_rect(*rectangle),
-                                brush_argb: *brush_argb,
-                            },
-                            CanvasCommand::SetBrush { argb } => {
-                                CanvasReplayCommand::SetBrush { argb: *argb }
-                            }
-                            CanvasCommand::SetPen { argb, width } => CanvasReplayCommand::SetPen {
-                                argb: *argb,
-                                width: *width,
-                            },
-                            CanvasCommand::SetDashStyle { style, cap } => {
-                                CanvasReplayCommand::SetDashStyle {
-                                    style: *style,
-                                    cap: *cap,
-                                }
-                            }
-                            CanvasCommand::SetFont {
-                                family,
-                                size,
-                                style_bits,
-                            } => CanvasReplayCommand::SetFont {
-                                family: family.clone(),
-                                size: *size,
-                                style_bits: *style_bits,
-                            },
-                            CanvasCommand::DrawLine { start, end } => {
-                                CanvasReplayCommand::DrawLine {
-                                    start: era_runtime_protocol::CanvasPoint {
-                                        x: start[0],
-                                        y: start[1],
-                                    },
-                                    end: era_runtime_protocol::CanvasPoint {
-                                        x: end[0],
-                                        y: end[1],
-                                    },
-                                }
-                            }
-                            CanvasCommand::DrawText { text, point } => {
-                                CanvasReplayCommand::DrawText {
-                                    text: text.clone(),
-                                    point: era_runtime_protocol::CanvasPoint {
-                                        x: point[0],
-                                        y: point[1],
-                                    },
-                                }
-                            }
-                            CanvasCommand::DrawCanvas {
-                                source_canvas_id,
-                                source_revision,
-                                source,
-                                destination,
-                                color_matrix,
-                                mask_canvas_id,
-                                rotation_millidegrees,
-                                rotation_center,
-                            } => CanvasReplayCommand::DrawCanvas {
-                                source_canvas_id: *source_canvas_id,
-                                source_revision: *source_revision,
-                                source: canvas_rect(*source),
-                                destination: canvas_rect(*destination),
-                                color_matrix: color_matrix.clone(),
-                                mask_canvas_id: *mask_canvas_id,
-                                rotation_millidegrees: *rotation_millidegrees,
-                                rotation_center: rotation_center.map(|point| {
-                                    era_runtime_protocol::CanvasPoint {
-                                        x: point[0],
-                                        y: point[1],
-                                    }
-                                }),
-                            },
-                            CanvasCommand::LoadEncodedImage {
-                                content_digest,
-                                encoded,
-                            } => CanvasReplayCommand::LoadEncodedImage {
-                                content_digest: content_digest.clone(),
-                                encoded: encoded.clone(),
-                            },
-                        }
-                    })
-                    .collect(),
-                revision: canvas.revision,
-            })
-            .collect();
-        ResourceReplay {
-            sprites,
-            canvases,
-            animation_timer_ms: self.animation_timer_ms,
+    pub(crate) fn set_animation_timer(&mut self, milliseconds: i64) -> bool {
+        if !(i64::from(i32::MIN)..=i64::from(i16::MAX)).contains(&milliseconds) {
+            return false;
         }
-    }
-
-    pub(crate) fn set_animation_timer(&mut self, milliseconds: i64) {
         self.animation_timer_ms = if milliseconds <= 0 {
             0
         } else {
-            i32::try_from(milliseconds.clamp(10, i64::from(i16::MAX)))
-                .expect("clamped animation timer fits i32")
+            i32::try_from(milliseconds.max(10)).expect("clamped animation timer fits i32")
         };
+        true
     }
 
-    #[cfg(test)]
     pub(crate) const fn animation_timer(&self) -> i32 {
         self.animation_timer_ms
     }
@@ -750,8 +783,9 @@ fn is_image_path(path: &str) -> bool {
 
 mod canvas;
 mod manifest;
+mod replay;
 #[cfg(test)]
 mod tests;
 
-use self::canvas::{canvas_rect, opaque_rgb};
+use self::canvas::opaque_rgb;
 use self::manifest::parse_resource_manifest;

@@ -3,8 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use erabasic_data::{NameAlias, NameTable, NameTableKind, ProjectSchema};
 
 use crate::{
-    CsvDiagnostic, CsvDiagnosticCode, CsvDiagnosticSeverity, CsvLoadOptions, input::FileIndex,
-    reader::enabled_lines,
+    CsvDiagnostic, CsvDiagnosticCode, CsvDiagnosticSeverity, CsvLoadOptions,
+    input::FileIndex,
+    reader::{EnabledLine, enabled_lines},
 };
 
 pub(crate) const TABLE_FILES: [(&str, NameTableKind); 29] = [
@@ -67,7 +68,7 @@ pub(crate) fn load_name_tables(
             .get_mut(&kind)
             .expect("all name tables are allocated before loading");
         load_table(
-            file.path.as_str(),
+            file.source_path.as_str(),
             &file.content,
             kind,
             table,
@@ -82,7 +83,7 @@ pub(crate) fn load_name_tables(
         let alias_name = format!("{stem}.als");
         if let Some(alias_file) = files.csv_file(&alias_name) {
             load_aliases(
-                &alias_file.path,
+                &alias_file.source_path,
                 &alias_file.content,
                 table,
                 options,
@@ -184,29 +185,12 @@ fn load_aliases(
 ) {
     let mut defined_indices = BTreeSet::new();
     let mut alias_names = BTreeSet::new();
+    let snake_rules = options.compatibility.uses_snake_alias_rules();
     for line in enabled_lines(path, content, options, diagnostics) {
-        let tokens: Vec<_> = line.text.split(',').collect();
-        if tokens.len() < 2 {
-            diagnostics.push(at_line(
-                CsvDiagnosticCode::MissingComma,
-                CsvDiagnosticSeverity::Warning,
-                1,
-                &line,
-                "an alias row requires an index and alias",
-            ));
-            continue;
-        }
-        let Ok(index) = tokens[0].trim().parse::<i32>() else {
-            diagnostics.push(at_line(
-                CsvDiagnosticCode::InvalidInteger,
-                CsvDiagnosticSeverity::Warning,
-                1,
-                &line,
-                "the first alias value is not an integer",
-            ));
+        let Some((index, name)) = parse_alias_row(&line, diagnostics) else {
             continue;
         };
-        if !defined_indices.insert(index) {
+        if !snake_rules && !defined_indices.insert(index) {
             diagnostics.push(at_line(
                 CsvDiagnosticCode::DuplicateIndex,
                 CsvDiagnosticSeverity::Warning,
@@ -215,21 +199,56 @@ fn load_aliases(
                 format!("alias index {index} is defined more than once"),
             ));
         }
-        let alias = tokens[1].to_owned();
+        let alias = if snake_rules { name.trim() } else { name }.to_owned();
         if !alias_names.insert(alias.clone()) {
-            // Dictionary.Add throws and the reference abandons the remainder of this
-            // alias file. Preserve that recovery boundary.
             diagnostics.push(at_line(
                 CsvDiagnosticCode::DuplicateAlias,
-                CsvDiagnosticSeverity::Error,
-                3,
+                if snake_rules {
+                    CsvDiagnosticSeverity::Warning
+                } else {
+                    CsvDiagnosticSeverity::Error
+                },
+                if snake_rules { 1 } else { 3 },
                 &line,
                 format!("alias {alias:?} is defined more than once"),
             ));
+            if snake_rules {
+                continue;
+            }
+            // Original Dictionary.Add throws and abandons the rest of the alias file.
             break;
         }
         table.aliases.push(NameAlias { name: alias, index });
     }
+}
+
+pub(crate) fn parse_alias_row<'a>(
+    line: &'a EnabledLine,
+    diagnostics: &mut Vec<CsvDiagnostic>,
+) -> Option<(i32, &'a str)> {
+    let mut tokens = line.text.split(',');
+    let index_text = tokens.next().unwrap_or_default();
+    let Some(name) = tokens.next() else {
+        diagnostics.push(at_line(
+            CsvDiagnosticCode::MissingComma,
+            CsvDiagnosticSeverity::Warning,
+            1,
+            line,
+            "an alias row requires an index and alias",
+        ));
+        return None;
+    };
+    let Ok(index) = index_text.trim().parse::<i32>() else {
+        diagnostics.push(at_line(
+            CsvDiagnosticCode::InvalidInteger,
+            CsvDiagnosticSeverity::Warning,
+            1,
+            line,
+            "the first alias value is not an integer",
+        ));
+        return None;
+    };
+    Some((index, name))
 }
 
 pub(crate) fn at_line(

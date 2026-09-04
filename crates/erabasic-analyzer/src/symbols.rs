@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use erabasic_data::{ProjectData, StorageScope, ValueType, VariableSchema};
 use erabasic_hir::{
@@ -7,14 +7,23 @@ use erabasic_hir::{
 };
 
 use crate::{
-    declarations::DeclaredVariable, identifiers::identifier_key, options::AnalyzerOptions,
+    declarations::{DeclaredVariable, LayeredDeclarationLookup, RuntimeInitializer},
+    identifiers::identifier_key,
+    options::AnalyzerOptions,
 };
+
+#[derive(Clone, Debug)]
+pub(crate) struct FunctionRuntimeInitializer {
+    pub variable: VariableId,
+    pub initializer: RuntimeInitializer,
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct FunctionSymbol {
     pub id: FunctionId,
     pub kind: FunctionKind,
     pub return_type: SemanticType,
+    pub parameter_count: usize,
 }
 
 pub(crate) struct Symbols {
@@ -25,6 +34,10 @@ pub(crate) struct Symbols {
     local_templates: Vec<VariableSchema>,
     functions: Vec<FunctionSymbol>,
     functions_by_name: BTreeMap<String, usize>,
+    runtime_initializers: BTreeMap<FunctionId, Vec<FunctionRuntimeInitializer>>,
+    function_variables: BTreeMap<FunctionId, Vec<VariableId>>,
+    global_constants: Arc<BTreeMap<String, ConstantValue>>,
+    global_dimensions: Arc<BTreeMap<String, Vec<usize>>>,
     allow_function_overloading: bool,
     ignore_case: bool,
 }
@@ -43,6 +56,10 @@ impl Symbols {
             local_templates: Vec::new(),
             functions: Vec::new(),
             functions_by_name: BTreeMap::new(),
+            runtime_initializers: BTreeMap::new(),
+            function_variables: BTreeMap::new(),
+            global_constants: Arc::new(BTreeMap::new()),
+            global_dimensions: Arc::new(BTreeMap::new()),
             allow_function_overloading: options.allow_function_overloading,
             ignore_case: options.ignore_case,
         };
@@ -85,6 +102,29 @@ impl Symbols {
                 location,
             );
         }
+        result.global_constants = Arc::new(
+            result
+                .variables
+                .iter()
+                .filter(|variable| variable.owner.is_none())
+                .filter(|variable| variable.storage == StorageScope::Constant)
+                .filter_map(|variable| {
+                    variable
+                        .initial_values
+                        .first()
+                        .cloned()
+                        .map(|value| (result.key(&variable.name), value))
+                })
+                .collect(),
+        );
+        result.global_dimensions = Arc::new(
+            result
+                .variables
+                .iter()
+                .filter(|variable| variable.owner.is_none())
+                .map(|variable| (result.key(&variable.name), variable.dimensions.clone()))
+                .collect(),
+        );
         result
     }
 
@@ -93,6 +133,7 @@ impl Symbols {
         name: &str,
         kind: FunctionKind,
         return_type: SemanticType,
+        parameter_count: usize,
     ) -> Result<FunctionId, FunctionId> {
         let key = self.key(name);
         if let Some(existing) = self
@@ -112,6 +153,7 @@ impl Symbols {
                     id,
                     kind,
                     return_type,
+                    parameter_count,
                 });
                 return Ok(id);
             }
@@ -123,6 +165,7 @@ impl Symbols {
             id,
             kind,
             return_type,
+            parameter_count,
         });
         Ok(id)
     }
@@ -154,6 +197,10 @@ impl Symbols {
                 id
             };
             self.locals.insert((function, variable_name), id);
+            let variables = self.function_variables.entry(function).or_default();
+            if !variables.contains(&id) {
+                variables.push(id);
+            }
         }
     }
 
@@ -184,7 +231,7 @@ impl Symbols {
         if let Some(existing) = self.locals.get(&key) {
             return Err(*existing);
         }
-        Ok(self.add_variable(
+        let variable = self.add_variable(
             &declaration.schema,
             Some(function),
             VariableScope::Function,
@@ -192,7 +239,22 @@ impl Symbols {
             declaration.static_lifetime,
             declaration.initial_values.clone(),
             Some(declaration.location),
-        ))
+        );
+        if let Some(initializer) = &declaration.runtime_initializer {
+            self.runtime_initializers.entry(function).or_default().push(
+                FunctionRuntimeInitializer {
+                    variable,
+                    initializer: initializer.clone(),
+                },
+            );
+        }
+        Ok(variable)
+    }
+
+    pub fn runtime_initializers(&self, function: FunctionId) -> &[FunctionRuntimeInitializer] {
+        self.runtime_initializers
+            .get(&function)
+            .map_or(&[], Vec::as_slice)
     }
 
     pub fn resolve_variable(&self, function: FunctionId, name: &str) -> Option<&Variable> {
@@ -204,26 +266,31 @@ impl Symbols {
         self.variables.get(id.0 as usize)
     }
 
-    pub fn constant_values(&self) -> BTreeMap<String, ConstantValue> {
-        self.variables
-            .iter()
-            .filter(|variable| variable.storage == StorageScope::Constant)
-            .filter_map(|variable| {
-                variable
-                    .initial_values
-                    .first()
-                    .cloned()
-                    .map(|value| (self.key(&variable.name), value))
-            })
-            .collect()
-    }
-
-    pub fn variable_dimensions(&self, function: FunctionId) -> BTreeMap<String, Vec<usize>> {
-        self.variables
-            .iter()
-            .filter(|variable| variable.owner.is_none() || variable.owner == Some(function))
-            .map(|variable| (self.key(&variable.name), variable.dimensions.clone()))
-            .collect()
+    pub fn declaration_lookups(
+        &self,
+        function: FunctionId,
+    ) -> (
+        LayeredDeclarationLookup<ConstantValue>,
+        LayeredDeclarationLookup<Vec<usize>>,
+    ) {
+        let mut constants = LayeredDeclarationLookup::new(Arc::clone(&self.global_constants));
+        let mut dimensions = LayeredDeclarationLookup::new(Arc::clone(&self.global_dimensions));
+        for variable in self
+            .function_variables
+            .get(&function)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| self.variables.get(id.0 as usize))
+        {
+            let key = self.key(&variable.name);
+            dimensions.insert(key.clone(), variable.dimensions.clone());
+            if variable.storage == StorageScope::Constant
+                && let Some(value) = variable.initial_values.first()
+            {
+                constants.insert(key, value.clone());
+            }
+        }
+        (constants, dimensions)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -240,6 +307,11 @@ impl Symbols {
         let id = VariableId(u32::try_from(self.variables.len()).expect("too many variables"));
         let key = self.key(schema.id.name());
         self.variables.push(Variable {
+            reference_semantics: crate::reference_origin::variable_semantics(
+                schema,
+                reference,
+                location.is_some(),
+            ),
             id,
             name: schema.id.name().to_owned(),
             value_type: semantic_type(schema.value_type),
@@ -248,6 +320,24 @@ impl Symbols {
             persistence: schema.persistence,
             mutable: schema.mutable,
             reference,
+            match_name_rejection: if reference
+                || matches!(scope, VariableScope::Function | VariableScope::Parameter)
+                || schema.is_enabled()
+            {
+                None
+            } else if scope == VariableScope::EraFunction || schema.can_forbid {
+                Some(erabasic_hir::MatchNameRejectionKind::Script)
+            } else {
+                Some(erabasic_hir::MatchNameRejectionKind::Internal)
+            },
+            character_disposal: if matches!(&schema.id, erabasic_data::VariableId::Builtin(_))
+                && schema.storage == StorageScope::Character
+                && schema.dimensions.len() == 1
+            {
+                erabasic_hir::CharacterArrayDisposal::ClearSparse
+            } else {
+                erabasic_hir::CharacterArrayDisposal::Preserve
+            },
             static_lifetime,
             initial_values,
             scope,
@@ -256,6 +346,10 @@ impl Symbols {
         });
         if let Some(function) = owner {
             self.locals.insert((function, key), id);
+            let variables = self.function_variables.entry(function).or_default();
+            if !variables.contains(&id) {
+                variables.push(id);
+            }
         } else {
             self.globals.insert(key, id);
         }

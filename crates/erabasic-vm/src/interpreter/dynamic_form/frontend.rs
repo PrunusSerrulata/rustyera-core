@@ -8,7 +8,7 @@ pub(super) fn parse_runtime_form(
     function: SymbolKey,
     source: &str,
     node_limit: usize,
-) -> Result<(FormattedString, usize), StepError> {
+) -> Result<(FormattedString, super::call_plan::RuntimeCallPlan), StepError> {
     if source.len() > MAX_RUNTIME_FORM_BYTES {
         return Err(resource_limit(
             "STRFORM source exceeds the runtime parser limit",
@@ -18,13 +18,7 @@ pub(super) fn parse_runtime_form(
     let program = vm.generations.get(&generation).ok_or_else(|| {
         StepError::new(VmFaultCode::MissingSymbol, "STRFORM generation is missing")
     })?;
-    let compatibility = program.artifact.call_compatibility;
-    let mut context = DefaultParserContext::default();
-    context.set_lexer_compatibility(
-        compatibility.allow_full_width_space,
-        compatibility.debug_semicolon,
-        compatibility.ignore_triple_symbols,
-    );
+    let context = parser_context(program);
     let parsed = parse_formatted_at(source, 0, &context);
     if parsed.has_errors() {
         let message = parsed
@@ -33,7 +27,8 @@ pub(super) fn parse_runtime_form(
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("; ");
-        return Err(StepError::new(
+        return Err(StepError::script(
+            crate::ScriptFaultKind::Parse,
             VmFaultCode::Native,
             format!("STRFORM expansion failed: {message}"),
         ));
@@ -45,8 +40,8 @@ pub(super) fn parse_runtime_form(
         )
     })?;
     resolve_named_indices(program, function, &mut formatted, 0)?;
-    let nodes = validate_form(vm, natives, generation, function, &formatted, node_limit)?;
-    Ok((formatted, nodes))
+    let plan = validate_form(vm, natives, generation, function, &formatted, node_limit)?;
+    Ok((formatted, plan))
 }
 
 fn resolve_named_indices(
@@ -91,7 +86,7 @@ fn resolve_named_indices(
     Ok(())
 }
 
-fn resolve_expression_named_indices(
+pub(super) fn resolve_expression_named_indices(
     program: &crate::ProgramGeneration,
     function: SymbolKey,
     expression: &mut Expr,
@@ -174,8 +169,6 @@ fn resolve_expression_named_indices(
     Ok(())
 }
 
-// Validation is an exhaustive, iterative walk over every supported FORM AST node.
-#[allow(clippy::too_many_lines)]
 fn validate_form(
     vm: &Vm,
     natives: &NativeServiceRegistry,
@@ -183,204 +176,26 @@ fn validate_form(
     function: SymbolKey,
     formatted: &FormattedString,
     node_limit: usize,
-) -> Result<usize, StepError> {
-    enum Node<'a> {
-        Form(&'a FormattedString),
-        Expr(&'a Expr),
-    }
-
+) -> Result<super::call_plan::RuntimeCallPlan, StepError> {
     let program = vm.generations.get(&generation).ok_or_else(|| {
         StepError::new(VmFaultCode::MissingSymbol, "STRFORM generation is missing")
     })?;
-    let mut pending = vec![Node::Form(formatted)];
-    let mut nodes = 0usize;
-    while let Some(node) = pending.pop() {
-        nodes = nodes.saturating_add(1);
-        if nodes > node_limit {
-            return Err(resource_limit("STRFORM AST exceeds the VM operand limit"));
-        }
-        match node {
-            Node::Form(formatted) => {
-                for part in &formatted.parts {
-                    match part {
-                        FormPart::Text(_) => {}
-                        FormPart::Triple { symbol, .. } => {
-                            let names = match symbol {
-                                '*' => Some(("NAME", "TARGET")),
-                                '+' => Some(("CALLNAME", "MASTER")),
-                                '=' => Some(("CALLNAME", "PLAYER")),
-                                '/' => Some(("NAME", "ASSI")),
-                                '$' => Some(("CALLNAME", "TARGET")),
-                                _ => None,
-                            }
-                            .ok_or_else(|| {
-                                unsupported(format!(
-                                    "STRFORM triple symbol {symbol:?} is unsupported"
-                                ))
-                            })?;
-                            for name in [names.0, names.1] {
-                                if program.scoped_variable(function, name).is_none() {
-                                    return Err(StepError::new(
-                                        VmFaultCode::MissingSymbol,
-                                        format!("STRFORM variable {name} is missing"),
-                                    ));
-                                }
-                            }
-                        }
-                        FormPart::StringInterpolation {
-                            expression, width, ..
-                        }
-                        | FormPart::IntegerInterpolation {
-                            expression, width, ..
-                        } => {
-                            pending.push(Node::Expr(expression));
-                            if let Some(width) = width {
-                                pending.push(Node::Expr(width));
-                            }
-                        }
-                        FormPart::Conditional {
-                            condition,
-                            then_value,
-                            else_value,
-                            ..
-                        } => {
-                            pending.push(Node::Expr(condition));
-                            pending.push(Node::Form(then_value));
-                            if let Some(else_value) = else_value {
-                                pending.push(Node::Form(else_value));
-                            }
-                        }
-                    }
-                }
-            }
-            Node::Expr(expression) => match &expression.kind {
-                ExprKind::Integer(_) | ExprKind::String(_) => {}
-                ExprKind::Identifier(name) => {
-                    ensure_variable(program, function, name)?;
-                }
-                ExprKind::Variable { name, indices } => {
-                    ensure_variable(program, function, name)?;
-                    pending.extend(indices.iter().map(Node::Expr));
-                }
-                ExprKind::Call { name, args } => {
-                    if let Some(target) = program.function_by_name(name) {
-                        if target.kind != BytecodeFunctionKind::Method || target.result.is_none() {
-                            return Err(StepError::new(
-                                VmFaultCode::TypeMismatch,
-                                format!("STRFORM target {name} is not a value-returning function"),
-                            ));
-                        }
-                        if target
-                            .parameters
-                            .iter()
-                            .any(|parameter| parameter.by_reference)
-                        {
-                            return Err(unsupported(format!(
-                                "STRFORM target {name} requires a reference argument"
-                            )));
-                        }
-                        if args.len() > target.parameters.len()
-                            || target
-                                .parameters
-                                .iter()
-                                .enumerate()
-                                .any(|(index, parameter)| {
-                                    args.get(index).is_none_or(Option::is_none)
-                                        && parameter.default.is_none()
-                                        && !program
-                                            .artifact
-                                            .call_compatibility
-                                            .allow_omitted_arguments
-                                })
-                        {
-                            return Err(StepError::new(
-                                VmFaultCode::TypeMismatch,
-                                format!("STRFORM target {name} has incompatible arguments"),
-                            ));
-                        }
-                    } else {
-                        let supported_native =
-                            program.artifact.native_imports.iter().any(|native| {
-                                native.import.name.eq_ignore_ascii_case(name)
-                                    && native.import.result.is_some()
-                                    && !matches!(
-                                        native.import.result,
-                                        Some(
-                                            BytecodeType::IntegerPlace | BytecodeType::StringPlace
-                                        )
-                                    )
-                                    && native.import.parameters.len() == args.len()
-                                    && (name.eq_ignore_ascii_case("STRFORM")
-                                        || natives.contains(native.import.key))
-                            });
-                        if !supported_native {
-                            let host_only = program
-                                .artifact
-                                .host_imports
-                                .iter()
-                                .any(|host| host.import.name.eq_ignore_ascii_case(name));
-                            return Err(if host_only {
-                                unsupported(format!(
-                                    "STRFORM host callable {name} is unsupported in a template"
-                                ))
-                            } else {
-                                StepError::new(
-                                    VmFaultCode::MissingSymbol,
-                                    format!("STRFORM callable {name} is missing"),
-                                )
-                            });
-                        }
-                    }
-                    pending.extend(args.iter().flatten().map(Node::Expr));
-                }
-                ExprKind::Unary { op, operand } => {
-                    if matches!(op, UnaryOp::PreIncrement | UnaryOp::PreDecrement) {
-                        return Err(unsupported("STRFORM increment expressions are unsupported"));
-                    }
-                    pending.push(Node::Expr(operand));
-                }
-                ExprKind::Postfix { .. } => {
-                    return Err(unsupported("STRFORM increment expressions are unsupported"));
-                }
-                ExprKind::Binary { left, right, .. } => {
-                    pending.push(Node::Expr(left));
-                    pending.push(Node::Expr(right));
-                }
-                ExprKind::Ternary {
-                    condition,
-                    then_expr,
-                    else_expr,
-                } => {
-                    pending.push(Node::Expr(condition));
-                    pending.push(Node::Expr(then_expr));
-                    pending.push(Node::Expr(else_expr));
-                }
-                ExprKind::Formatted(formatted) => pending.push(Node::Form(formatted)),
-                ExprKind::Group(inner) => pending.push(Node::Expr(inner)),
-                ExprKind::Error => {
-                    return Err(unsupported("STRFORM contains an invalid expression"));
-                }
-            },
-        }
-    }
-    Ok(nodes)
+    let mut analysis = super::typing::TypeAnalysis::new(
+        program,
+        function,
+        generation,
+        false,
+        node_limit,
+        Some(natives),
+    );
+    analysis.form(formatted, 0)?;
+    super::call_plan::RuntimeCallPlan::from_analysis(
+        super::call_plan::RuntimePlanSource::Form(formatted.clone()),
+        analysis,
+    )
 }
 
-fn ensure_variable(
-    program: &crate::ProgramGeneration,
-    function: SymbolKey,
-    name: &str,
-) -> Result<(), StepError> {
-    if program.scoped_variable(function, name).is_none() {
-        return Err(StepError::new(
-            VmFaultCode::MissingSymbol,
-            format!("STRFORM variable {name} is missing"),
-        ));
-    }
-    Ok(())
-}
-
-fn preflight_nesting(source: &str) -> Result<(), StepError> {
+pub(super) fn preflight_nesting(source: &str) -> Result<(), StepError> {
     let mut braces = 0usize;
     let mut parentheses = 0usize;
     let mut percent_expression = false;
@@ -435,4 +250,71 @@ fn preflight_nesting(source: &str) -> Result<(), StepError> {
         }
     }
     Ok(())
+}
+
+/// Fixed EXISTVAR reduction, with no Restructure, cell access, or service execution.
+pub(in crate::interpreter) fn probe_runtime_expression(
+    vm: &Vm,
+    generation: GenerationId,
+    function: SymbolKey,
+    source: &str,
+) -> Result<(), StepError> {
+    if source.len() > MAX_RUNTIME_FORM_BYTES {
+        return Err(resource_limit("EXISTVAR parser source limit"));
+    }
+    preflight_nesting(source)?;
+    let program = vm
+        .generations
+        .get(&generation)
+        .ok_or_else(|| StepError::new(VmFaultCode::MissingSymbol, "probe generation is missing"))?;
+    let policy = program.artifact.call_compatibility;
+    let mut context = DefaultParserContext::default();
+    context.set_compatibility(program.artifact.manifest.compatibility.clone());
+    context.set_lexer_compatibility(
+        policy.allow_full_width_space,
+        policy.debug_semicolon,
+        policy.ignore_triple_symbols,
+    );
+    let parsed = erabasic_parser::parse_expression(source, &context);
+    if parsed.has_errors() {
+        return Err(StepError::script(
+            crate::ScriptFaultKind::Parse,
+            VmFaultCode::Native,
+            parsed
+                .diagnostics
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; "),
+        ));
+    }
+    // ReduceAll returns null for an empty token stream; fixed EXISTVAR still returns 1.
+    let Some(mut expression) = parsed.value else {
+        return Ok(());
+    };
+    resolve_expression_named_indices(program, function, &mut expression, 0)?;
+    // This resolves only named-index membership from existing schema/ERD/ALS data.
+    // Explicit String indices remain String and do not look up keys or bounds.
+    super::typing::TypeAnalysis::new(
+        program,
+        function,
+        generation,
+        true,
+        vm.config.maximum_operand_stack.min(MAX_RUNTIME_FORM_BYTES),
+        None,
+    )
+    .expression(&expression, 0)?;
+    Ok(())
+}
+
+pub(super) fn parser_context(program: &crate::ProgramGeneration) -> DefaultParserContext {
+    let compatibility = program.artifact.call_compatibility;
+    let mut context = DefaultParserContext::default();
+    context.set_compatibility(program.artifact.manifest.compatibility.clone());
+    context.set_lexer_compatibility(
+        compatibility.allow_full_width_space,
+        compatibility.debug_semicolon,
+        compatibility.ignore_triple_symbols,
+    );
+    context
 }

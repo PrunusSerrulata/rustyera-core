@@ -1,4 +1,5 @@
 use super::*;
+use era_runtime_protocol::{AudioEffectAction, AudioPlaybackStateV1};
 
 #[test]
 fn goto_into_case_body_emits_a_nonfatal_warning_and_continues() {
@@ -7,6 +8,7 @@ fn goto_into_case_body_emits_a_nonfatal_warning_and_continues() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
@@ -69,26 +71,59 @@ fn goto_into_case_body_emits_a_nonfatal_warning_and_continues() {
 fn run_immediate_query_project(
     source: &str,
 ) -> (RuntimeSession, RuntimeDriveReport, Vec<RuntimeMessage>) {
+    run_immediate_query_project_with_profile(
+        source,
+        erabasic_compat::CompatibilityIdentity::default(),
+    )
+}
+
+fn run_immediate_query_project_with_profile(
+    source: &str,
+    compatibility: erabasic_compat::CompatibilityIdentity,
+) -> (RuntimeSession, RuntimeDriveReport, Vec<RuntimeMessage>) {
+    run_immediate_query_project_with_budget(
+        source,
+        compatibility,
+        RuntimeDriveBudget {
+            maximum_vm_instructions: 1_000_000,
+            maximum_runtime_transitions: 1_024,
+        },
+    )
+}
+
+fn run_immediate_query_project_with_budget(
+    source: &str,
+    compatibility: erabasic_compat::CompatibilityIdentity,
+    budget: RuntimeDriveBudget,
+) -> (RuntimeSession, RuntimeDriveReport, Vec<RuntimeMessage>) {
     let mut session = negotiated_session();
+    let config = profile_configuration_file(compatibility.profile);
     submit(
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility,
             project_revision: 1,
-            files: vec![SubmittedFile {
-                relative_path: "main.erb".into(),
-                category: FileCategory::Erb,
-                payload: FilePayload::Utf8(source.into()),
-                content_hash: None,
-            }],
+            files: vec![
+                config,
+                SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8(source.into()),
+                    content_hash: None,
+                },
+            ],
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
     let loaded = drain(&mut session);
-    assert!(loaded.iter().any(|message| matches!(
-        message,
-        RuntimeMessage::ProjectLoadReport(report) if report.success
-    )));
+    assert!(
+        loaded.iter().any(|message| matches!(
+            message,
+            RuntimeMessage::ProjectLoadReport(report) if report.success
+        )),
+        "{loaded:#?}"
+    );
     submit(
         &mut session,
         2,
@@ -96,12 +131,7 @@ fn run_immediate_query_project(
             mode: StartMode::NewGame { seed: Some(1) },
         }),
     );
-    let report = session
-        .drive(RuntimeDriveBudget {
-            maximum_vm_instructions: 1_000_000,
-            maximum_runtime_transitions: 1_024,
-        })
-        .unwrap();
+    let report = session.drive(budget).unwrap();
     let messages = drain(&mut session);
     (session, report, messages)
 }
@@ -202,6 +232,7 @@ fn negative_printed_html_index_falls_back_to_a_sourced_vm_fault() {
                 code: FaultCode::VmFault,
                 message,
                 origin: Some(origin),
+                ..
         }) if message == "HTML_GETPRINTEDSTR line number must be non-negative"
             && origin.command.eq_ignore_ascii_case("HTML_GETPRINTEDSTR")
                 && origin.source.as_ref().is_some_and(|source| source.relative_path == "main.erb")
@@ -399,15 +430,40 @@ fn malformed_immediate_html_print_falls_back_to_a_sourced_vm_fault() {
         messages.iter().any(|message| matches!(
             message,
             RuntimeMessage::Fault(RuntimeFault {
+                context: _,
                 code: FaultCode::VmFault,
                 message,
                 origin: Some(origin),
+                ..
         }) if message.contains("HTML_PRINT UnknownTag")
             && origin.command.eq_ignore_ascii_case("HTML_PRINT")
                 && origin.source.as_ref().is_some_and(|source| source.relative_path == "main.erb")
         )),
         "{messages:#?}"
     );
+}
+
+#[test]
+fn prefixed_hex_html_colors_are_shared_by_both_profiles() {
+    let source =
+        "@SYSTEM_TITLE\nHTML_PRINT \"<font color='#0x90EE90'>ok</font>\"\nFORCEWAIT\nRETURN\n";
+    for profile in [
+        erabasic_compat::CompatibilityProfileId::EmueraEm,
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    ] {
+        let (session, _, messages) = run_immediate_query_project_with_profile(
+            source,
+            erabasic_compat::CompatibilityIdentity::for_profile(profile),
+        );
+        assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{profile:?}");
+        assert!(
+            !messages
+                .iter()
+                .any(|message| matches!(message, RuntimeMessage::Fault(_))),
+            "{profile:?}: {messages:#?}"
+        );
+        assert!(projected_presentation_text(&session.presentation.snapshot()).contains("ok"));
+    }
 }
 
 #[test]
@@ -421,9 +477,11 @@ fn malformed_immediate_html_query_falls_back_to_a_sourced_vm_fault() {
         messages.iter().any(|message| matches!(
             message,
             RuntimeMessage::Fault(RuntimeFault {
+                context: _,
                 code: FaultCode::VmFault,
                 message,
                 origin: Some(origin),
+                ..
         }) if message == "malformed HTML text"
             && origin.command.eq_ignore_ascii_case("HTML_TOPLAINTEXT")
                 && origin.source.as_ref().is_some_and(|source| source.relative_path == "main.erb")
@@ -436,11 +494,14 @@ fn malformed_immediate_html_query_falls_back_to_a_sourced_vm_fault() {
 fn moneystr_invalid_format_keeps_vm_fault_priority_without_project_context() {
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
                 category: FileCategory::Erb,
-                payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                payload: FilePayload::Utf8(
+                    "@SYSTEM_TITLE\nRESULTS '= MONEYSTR(1, \"invalid[\")\nRETURN\n".into(),
+                ),
                 content_hash: None,
             }],
         },
@@ -448,51 +509,45 @@ fn moneystr_invalid_format_keeps_vm_fault_priority_without_project_context() {
     );
     let artifact = build.artifact.expect("valid project");
     let mut vm = RuntimeVm::new(artifact, VmConfig::default());
-    let binding = erabasic_compiler::default_host_registry()
-        .resolve("MONEYSTR")
-        .expect("MONEYSTR Host binding");
-    let function = erabasic_bytecode::SymbolKey::derive("test.function", b"moneystr");
-    let request = VmHostRequest {
-        id: erabasic_vm::HostRequestId(1),
-        fiber: erabasic_vm::FiberId(1),
-        import: erabasic_bytecode::HostImport {
-            import: erabasic_bytecode::RuntimeImport {
-                key: erabasic_bytecode::SymbolKey::derive("test.host", b"moneystr"),
-                namespace: binding.namespace,
-                name: binding.name,
-                abi_version: binding.abi_version,
-                parameters: vec![
-                    erabasic_bytecode::BytecodeType::Integer,
-                    erabasic_bytecode::BytecodeType::String,
-                ],
-                result: Some(erabasic_bytecode::BytecodeType::String),
-            },
-            effect: binding.effect,
-            capability: binding.capability,
-            snapshot_capability: binding.snapshot_capability,
-            contract: binding.contract,
-        },
-        arguments: vec![VmValue::Integer(1), VmValue::String("invalid[".into())],
-        origin: erabasic_vm::VmExecutionOrigin {
-            generation: erabasic_vm::GenerationId(1),
-            function,
-            function_name: "SYSTEM_TITLE".into(),
-            instruction: 0,
-            command: "MONEYSTR".into(),
-            source: None,
-        },
-    };
+    let entry = vm
+        .vm()
+        .artifact()
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let request = vm
+        .drive(RunBudget::default(), VmDriveMode::Normal)
+        .events
+        .into_iter()
+        .find_map(|event| match event {
+            VmPortEvent::HostCall(request) => Some(request),
+            _ => None,
+        })
+        .expect("real MONEYSTR host request");
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     session.handle_host_call(&mut vm, &request).unwrap();
+    assert!(
+        !drain(&mut session)
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::Fault(_)))
+    );
+    for event in vm.drive(RunBudget::default(), VmDriveMode::Normal).events {
+        session.handle_vm_event(&mut vm, event).unwrap();
+    }
     let messages = drain(&mut session);
     assert!(
         messages.iter().any(|message| matches!(
             message,
             RuntimeMessage::Fault(RuntimeFault {
+                context: _,
                 code: FaultCode::VmFault,
                 message,
                 origin: Some(origin),
-            }) if message.contains("MONEYSTR format is invalid") && origin.command == "MONEYSTR"
+                ..
+            }) if message.contains("MONEYSTR format is invalid") && origin.command.eq_ignore_ascii_case("MONEYSTR")
         )),
         "{messages:#?}"
     );
@@ -529,6 +584,7 @@ fn gcreatefromfile_defaults_to_content_directory_and_replays_dynamic_sprite() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -647,6 +703,7 @@ fn retired_drawing_backend_queries_keep_the_reference_compatibility_value() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
@@ -681,8 +738,10 @@ fn retired_drawing_backend_queries_keep_the_reference_compatibility_value() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn audio_commands_project_canonical_sound_directory_resources() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
+    let snake = snake_compile_identity();
     let mut client_capabilities = capabilities();
     client_capabilities.audio = true;
     submit(
@@ -704,13 +763,15 @@ fn audio_commands_project_canonical_sound_directory_resources() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: snake.clone(),
             project_revision: 1,
             files: vec![
+                profile_configuration_file(snake.profile),
                 SubmittedFile {
                     relative_path: "main.erb".into(),
                     category: FileCategory::Erb,
                     payload: FilePayload::Utf8(
-                        "@SYSTEM_TITLE\nPLAYBGM \"theme.mp3\"\nPLAYSOUND \"door.mp3\"\nSETSOUNDVOLUME 25\nPLAYSOUND \"knock.mp3\"\nSTOPSOUND\nWAIT\nRETURN\n"
+                        "@SYSTEM_TITLE\nPLAYBGM \"theme.mp3\"\nPLAYSOUND \"door.mp3\"\nSETSOUNDVOLUME 25\nPLAYSOUND \"knock.mp3\"\nCLEARMEMORY\nRESULT:13 = RESULT\nSTOPSOUND\nWAIT\nRETURN\n"
                             .into(),
                     ),
                     content_hash: None,
@@ -764,27 +825,40 @@ fn audio_commands_project_canonical_sound_directory_resources() {
 
     assert_audio_effect(
         &messages,
-        1,
+        AudioChannelV1::Bgm,
         AudioEffectAction::Play,
         Some("sound/theme.mp3"),
     );
     for resource in ["sound/door.mp3", "sound/knock.mp3"] {
-        assert_audio_effect(&messages, 0, AudioEffectAction::Play, Some(resource));
+        assert_audio_effect(
+            &messages,
+            AudioChannelV1::Sound(0),
+            AudioEffectAction::Play,
+            Some(resource),
+        );
     }
     for action in [AudioEffectAction::SetVolume, AudioEffectAction::Stop] {
-        assert_audio_effect(&messages, 0, action, None);
+        assert_audio_effect(&messages, AudioChannelV1::Sound(0), action, None);
     }
     let audio = session.presentation.snapshot().audio;
     assert_eq!(audio.len(), 1);
-    assert_eq!(audio[0].channel_id, 1);
+    assert_eq!(audio[0].channel, AudioChannelV1::Bgm);
     assert_eq!(audio[0].resource_id, "sound/theme.mp3");
     assert_eq!(audio[0].volume_millionths, 1_000_000);
-    assert!(audio[0].playing);
+    assert_eq!(audio[0].state, AudioPlaybackStateV1::Playing);
+    assert_eq!(audio[0].rate_millionths, 1_000_000);
+    assert!(audio[0].preserve_pitch);
+}
+
+fn snake_compile_identity() -> erabasic_compat::CompatibilityIdentity {
+    erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    )
 }
 
 fn assert_audio_effect(
     messages: &[RuntimeMessage],
-    channel_id: u64,
+    channel: AudioChannelV1,
     action: AudioEffectAction,
     resource_id: Option<&str>,
 ) {
@@ -795,14 +869,17 @@ fn assert_audio_effect(
                 if batch.effects.iter().any(|effect| matches!(
                     &effect.kind,
                     EffectKind::Audio(audio)
-                        if audio.channel_id == channel_id
+                        if audio.channel == channel
                             && audio.action == action
+                            && audio.revision > 0
+                            && audio.rate_millionths == 1_000_000
+                            && audio.preserve_pitch
                             && resource_id.is_none_or(|expected| {
                                 audio.resource_id.as_deref() == Some(expected)
                             })
                 ))
         )),
-        "missing channel {channel_id} {action:?} audio effect for {resource_id:?}: {messages:#?}"
+        "missing channel {channel:?} {action:?} audio effect for {resource_id:?}: {messages:#?}"
     );
 }
 
@@ -829,6 +906,7 @@ fn one_message_skip_input_drains_non_value_waits_until_forcewait() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "message-skip.erb".into(),
@@ -995,6 +1073,7 @@ fn message_skip_stops_when_can_skip_is_explicitly_omitted() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "message-skip-value.erb".into(),
@@ -1076,6 +1155,7 @@ fn project_load_start_and_print_cross_the_message_boundary() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -1205,6 +1285,7 @@ fn linecount_drives_clearline_and_bounded_padding_loops() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -1263,3 +1344,814 @@ fn linecount_drives_clearline_and_bounded_padding_loops() {
 }
 
 include!("host_runtime_continued.rs");
+
+#[test]
+fn host_assert_and_throw_keep_uncaught_fault_source_and_committed_effects() {
+    for (statement, command, expected) in [
+        ("ASSERT 0", "ASSERT", "ASSERT failed"),
+        ("THROW explicit-host-error", "THROW", "explicit-host-error"),
+        (
+            "SAVEDATA -1, \"invalid\"",
+            "SAVEDATA",
+            "SAVEDATA argument 1 must be between 0 and 2147483647",
+        ),
+    ] {
+        let source = format!("@SYSTEM_TITLE\nFLAG:0 = 7\n{statement}\nFLAG:0 = 9\nRETURN\n");
+        let (session, _, messages) = run_immediate_query_project(&source);
+        assert_eq!(session.phase(), RuntimePhase::Faulted);
+        assert_eq!(
+            read_runtime_integer(session.vm.as_ref().unwrap(), "FLAG", &[0], None).unwrap(),
+            7
+        );
+        let faults: Vec<_> = messages
+            .iter()
+            .filter_map(|message| match message {
+                RuntimeMessage::Fault(fault) => Some(fault),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(faults.len(), 1);
+        assert_eq!(faults[0].code, FaultCode::VmFault);
+        assert_eq!(faults[0].message, expected);
+        let origin = faults[0].origin.as_ref().unwrap();
+        assert!(origin.command.eq_ignore_ascii_case(command));
+        assert_eq!(origin.source.as_ref().unwrap().relative_path, "main.erb");
+    }
+}
+
+#[test]
+fn snake_before_throw_reports_the_original_throw_without_before_error() {
+    let source = "@SYSTEM_TITLE\nFLAG:0 = 7\nTHROW original-throw\nFLAG:0 = 9\nRETURN\n\
+        @BEFORE_THROW\nFLAG:1 += 1\nRETURN\n\
+        @BEFORE_ERROR\nFLAG:2 += 1\nRETURN\n";
+    let (session, _, messages) = run_immediate_query_project_with_profile(
+        source,
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    assert_eq!(session.phase(), RuntimePhase::Faulted);
+    let vm = session.vm.as_ref().unwrap();
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[0], None).unwrap(), 7);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[1], None).unwrap(), 1);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[2], None).unwrap(), 0);
+    let fault = messages
+        .iter()
+        .find_map(|message| match message {
+            RuntimeMessage::Fault(fault) => Some(fault),
+            _ => None,
+        })
+        .expect("original throw fault");
+    assert_eq!(fault.message, "original-throw");
+    let vm_fault = fault.vm.as_ref().expect("structured VM fault");
+    assert_ne!(vm_fault.primary.correlation_id, 0);
+    assert!(vm_fault.secondary.is_none());
+    assert!(
+        fault
+            .origin
+            .as_ref()
+            .unwrap()
+            .command
+            .eq_ignore_ascii_case("THROW")
+    );
+}
+
+#[test]
+fn snake_before_error_keeps_original_fault_and_attaches_hook_failure() {
+    let source = "@SYSTEM_TITLE\nFLAG:0 = 7\nASSERT 0\nFLAG:0 = 9\nRETURN\n\
+        @BEFORE_ERROR\nFLAG:1 += 1\nTHROW hook-failed\nRETURN\n\
+        @BEFORE_THROW\nFLAG:2 += 1\nRETURN\n";
+    let (session, _, messages) = run_immediate_query_project_with_profile(
+        source,
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    assert_eq!(session.phase(), RuntimePhase::Faulted);
+    let vm = session.vm.as_ref().unwrap();
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[0], None).unwrap(), 7);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[1], None).unwrap(), 1);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[2], None).unwrap(), 0);
+    let fault = messages
+        .iter()
+        .find_map(|message| match message {
+            RuntimeMessage::Fault(fault) => Some(fault),
+            _ => None,
+        })
+        .expect("original assertion fault");
+    assert_eq!(fault.message, "ASSERT failed");
+    let vm_fault = fault.vm.as_ref().expect("structured VM fault");
+    let secondary = vm_fault.secondary.as_ref().expect("secondary hook fault");
+    assert_eq!(secondary.message, "hook-failed");
+    assert_eq!(
+        secondary.parent_correlation_id,
+        Some(vm_fault.primary.correlation_id)
+    );
+    assert!(
+        secondary
+            .origin
+            .as_ref()
+            .unwrap()
+            .command
+            .eq_ignore_ascii_case("THROW")
+    );
+}
+
+#[test]
+fn snake_before_error_normal_completion_still_reports_original_fault() {
+    let source = "@SYSTEM_TITLE\nFLAG:0 = 7\nASSERT 0\nFLAG:0 = 9\nRETURN\n\
+        @BEFORE_ERROR\nFLAG:1 += 1\nRETURN\n";
+    let (session, _, messages) = run_immediate_query_project_with_profile(
+        source,
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    assert_eq!(session.phase(), RuntimePhase::Faulted);
+    let vm = session.vm.as_ref().unwrap();
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[0], None).unwrap(), 7);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[1], None).unwrap(), 1);
+    let fault = messages
+        .iter()
+        .find_map(|message| match message {
+            RuntimeMessage::Fault(fault) => Some(fault),
+            _ => None,
+        })
+        .expect("original assertion fault");
+    assert_eq!(fault.message, "ASSERT failed");
+    assert!(
+        fault
+            .vm
+            .as_ref()
+            .is_some_and(|vm_fault| vm_fault.secondary.is_none())
+    );
+}
+
+#[test]
+fn disabled_and_reference_profiles_do_not_run_final_fault_hooks() {
+    let source = "@SYSTEM_TITLE\nASSERT 0\nRETURN\n@BEFORE_ERROR\nFLAG:1 += 1\nRETURN\n";
+    let compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let mut session = negotiated_session();
+    let mut config = profile_configuration_file(compatibility.profile);
+    let FilePayload::Utf8(contents) = &mut config.payload else {
+        unreachable!("profile configuration is UTF-8")
+    };
+    contents.push_str("[runtime]\ndisable_before_error_throw = true\n");
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility,
+            project_revision: 1,
+            files: vec![
+                config,
+                SubmittedFile {
+                    relative_path: "main.erb".into(),
+                    category: FileCategory::Erb,
+                    payload: FilePayload::Utf8(source.into()),
+                    content_hash: None,
+                },
+            ],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    assert!(drain(&mut session).iter().any(|message| matches!(message,
+        RuntimeMessage::ProjectLoadReport(report) if report.success)));
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "FLAG", &[1], None).unwrap(),
+        0
+    );
+    assert!(
+        !session
+            .vm
+            .as_ref()
+            .unwrap()
+            .vm()
+            .artifact()
+            .call_compatibility
+            .before_error_throw_hooks
+    );
+
+    let (reference, _, _) = run_immediate_query_project(source);
+    assert_eq!(
+        read_runtime_integer(reference.vm.as_ref().unwrap(), "FLAG", &[1], None).unwrap(),
+        0
+    );
+    assert!(
+        !reference
+            .vm
+            .as_ref()
+            .unwrap()
+            .vm()
+            .artifact()
+            .call_compatibility
+            .before_error_throw_hooks
+    );
+    let (enabled, _, _) = run_immediate_query_project_with_profile(
+        source,
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    let disabled_artifact = session.vm.as_ref().unwrap().artifact_id();
+    let enabled_vm = enabled.vm.as_ref().unwrap();
+    assert!(
+        enabled_vm
+            .vm()
+            .artifact()
+            .call_compatibility
+            .before_error_throw_hooks
+    );
+    assert_ne!(disabled_artifact, enabled_vm.artifact_id());
+}
+
+#[test]
+fn stable_snapshot_is_rejected_while_before_error_waits_for_input() {
+    let source = "@SYSTEM_TITLE\nASSERT 0\nRETURN\n@BEFORE_ERROR\nINPUT\nRETURN\n";
+    let (mut session, _, messages) = run_immediate_query_project_with_profile(
+        source,
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:#?}");
+    session
+        .export_state(
+            100,
+            StateExportRequest {
+                kind: StateExportKind::VmSnapshot,
+                snapshot_purpose: SnapshotExportPurpose::Normal,
+            },
+        )
+        .unwrap();
+    let messages = drain(&mut session);
+    assert!(
+        messages.iter().any(|message| matches!(message,
+        RuntimeMessage::StateExportReady(StateExportReady {
+            result: StateExportResult::Ineligible { reasons }, ..
+        }) if reasons.contains(&SnapshotIneligibleReason::SnapshotStateUnavailable))),
+        "{messages:#?}"
+    );
+}
+
+#[test]
+fn runaway_resource_fault_does_not_enter_before_error() {
+    let source = "@SYSTEM_TITLE\nWHILE 1\nWEND\nRETURN\n@BEFORE_ERROR\nFLAG:1 += 1\nRETURN\n";
+    let (mut session, _, _) = run_immediate_query_project_with_budget(
+        source,
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+        RuntimeDriveBudget {
+            maximum_vm_instructions: 1,
+            maximum_runtime_transitions: 1,
+        },
+    );
+    for _ in 0..140 {
+        if session.phase() == RuntimePhase::Faulted {
+            break;
+        }
+        session
+            .drive(RuntimeDriveBudget {
+                maximum_vm_instructions: 1,
+                maximum_runtime_transitions: 1,
+            })
+            .unwrap();
+        drain(&mut session);
+    }
+    assert_eq!(session.phase(), RuntimePhase::Faulted);
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "FLAG", &[1], None).unwrap(),
+        0
+    );
+}
+
+#[test]
+fn host_completion_remains_work_at_transition_and_instruction_boundaries() {
+    let (mut session, report, _) = run_immediate_query_project_with_budget(
+        "@SYSTEM_TITLE\nTHROW boundary\nRETURN\n",
+        erabasic_compat::CompatibilityIdentity::default(),
+        RuntimeDriveBudget {
+            maximum_vm_instructions: 1_000,
+            maximum_runtime_transitions: 2,
+        },
+    );
+    assert_eq!(report.runtime_transitions, 2);
+    assert_eq!(session.phase(), RuntimePhase::Running);
+    assert!(session.vm.as_ref().unwrap().has_pending_events());
+    assert!(!session.vm.as_ref().unwrap().has_runnable_fibers());
+    let completion = session
+        .drive(RuntimeDriveBudget {
+            maximum_vm_instructions: 0,
+            maximum_runtime_transitions: 1,
+        })
+        .unwrap();
+    assert_eq!(completion.vm_instructions, 0);
+    assert_eq!(completion.state, RuntimeDriveState::Faulted);
+    let messages = drain(&mut session);
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| matches!(message,
+                RuntimeMessage::Fault(fault) if fault.message == "boundary"
+            ))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn snake_strformcheck_catches_host_assert_and_throw_without_rollback() {
+    for statement in ["ASSERT 0", "THROW explicit-host-error"] {
+        let source = format!(
+            "@SYSTEM_TITLE\nFLAG:0 = STRFORMCHECK(\"{{FAIL()}}\")\nFLAG:2 = 1\nWAIT\nRETURN\n@FAIL\n#FUNCTION\nFLAG:1 += 1\n{statement}\nFLAG:1 = 99\nRETURNF 1\n"
+        );
+        let (session, _, messages) = run_immediate_query_project_with_profile(
+            &source,
+            erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+        );
+        assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+        let vm = session.vm.as_ref().unwrap();
+        assert_eq!(read_runtime_integer(vm, "FLAG", &[0], None).unwrap(), 0);
+        assert_eq!(read_runtime_integer(vm, "FLAG", &[1], None).unwrap(), 1);
+        assert_eq!(read_runtime_integer(vm, "FLAG", &[2], None).unwrap(), 1);
+        assert!(
+            !messages
+                .iter()
+                .any(|message| matches!(message, RuntimeMessage::Fault(_)))
+        );
+    }
+}
+
+#[test]
+fn html_error_wire_data_cannot_claim_script_provenance() {
+    let error = erabasic_html::decode_query_entities(
+        "&unknown;",
+        erabasic_html::HtmlQueryEntityPolicy::ReferenceQuery,
+        erabasic_html::HtmlQueryLimits::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.origin(),
+        erabasic_html::HtmlQueryErrorOrigin::ScriptInput
+    );
+    let mut serialized = serde_json::to_value(&error).unwrap();
+    assert!(serialized.get("origin").is_none());
+    serialized["origin"] = serde_json::json!("ScriptInput");
+    let decoded: erabasic_html::HtmlQueryError = serde_json::from_value(serialized).unwrap();
+    assert_eq!(
+        decoded.origin(),
+        erabasic_html::HtmlQueryErrorOrigin::NonScript
+    );
+    assert_eq!(
+        (decoded.kind, &decoded.range, &decoded.message),
+        (error.kind, &error.range, &error.message)
+    );
+}
+
+#[test]
+fn host_scalar_and_read_failures_only_preserve_explicit_script_sources() {
+    assert!(matches!(
+        i32_argument_value(&[VmValue::Integer(i64::MAX)], 0),
+        Err(RuntimeError::Script {
+            kind: erabasic_vm::ScriptFaultKind::Bounds,
+            ..
+        })
+    ));
+    assert!(matches!(
+        i32_argument_value(&[VmValue::String("bad".into())], 0),
+        Err(RuntimeError::Internal(_))
+    ));
+    assert!(matches!(
+        checked_argb(-1),
+        Err(RuntimeError::Script {
+            kind: erabasic_vm::ScriptFaultKind::Argument,
+            ..
+        })
+    ));
+    let explicit = erabasic_vm::ExecutionFailure::script(
+        erabasic_vm::ScriptFaultKind::Bounds,
+        erabasic_vm::VmFaultCode::InvalidInstruction,
+        "bounds",
+    );
+    assert!(matches!(
+        runtime_script_read_error(erabasic_vm::VmError::ScriptFailure(explicit)),
+        RuntimeError::Script {
+            kind: erabasic_vm::ScriptFaultKind::Bounds,
+            ..
+        }
+    ));
+    let internal =
+        erabasic_vm::ExecutionFailure::new(erabasic_vm::VmFaultCode::InvalidInstruction, "bounds");
+    assert!(matches!(
+        runtime_script_read_error(erabasic_vm::VmError::ScriptFailure(internal)),
+        RuntimeError::Internal(_)
+    ));
+    assert!(matches!(
+        runtime_script_read_error(erabasic_vm::VmError::InvalidArguments("bounds".into())),
+        RuntimeError::Internal(_)
+    ));
+}
+
+#[test]
+fn direct_runtime_host_uses_existing_domain_errors_and_unsupported_boundary() {
+    for (expression, checked, faulted) in [
+        ("{HOTKEY_STATE(0,0)}", 0, false),
+        ("{GETMEMORYUSAGE()}", 0, true),
+        ("{SPRITECREATE(\"x\",0,0,0,1,1,1,1)}", 1, false),
+    ] {
+        let source = format!(
+            "@SYSTEM_TITLE\nRESULTS:0 '= \"{expression}\"\nFLAG:0 = STRFORMCHECK(RESULTS:0)\nFLAG:1 = 1\nWAIT\nRETURN\n"
+        );
+        let (session, _, messages) = run_immediate_query_project_with_profile(
+            &source,
+            erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+        );
+        let vm = session.vm.as_ref().unwrap();
+        assert_eq!(
+            read_runtime_integer(vm, "FLAG", &[0], None).unwrap(),
+            checked
+        );
+        if faulted {
+            assert_eq!(session.phase(), RuntimePhase::Faulted);
+            assert_eq!(read_runtime_integer(vm, "FLAG", &[1], None).unwrap(), 0);
+            assert!(messages.iter().any(|message| matches!(
+                message,
+                RuntimeMessage::Fault(RuntimeFault {
+                    code: FaultCode::UnsupportedRuntimeFeature,
+                    ..
+                })
+            )));
+        } else {
+            assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+            assert_eq!(read_runtime_integer(vm, "FLAG", &[1], None).unwrap(), 1);
+            assert!(
+                !messages
+                    .iter()
+                    .any(|message| matches!(message, RuntimeMessage::Fault(_)))
+            );
+        }
+    }
+}
+
+#[test]
+fn runtime_project_load_keeps_spritecreate_arity_profile_boundary() {
+    for (profile, arity, expected_success) in [
+        (erabasic_compat::CompatibilityProfileId::EmueraEm, 2, true),
+        (erabasic_compat::CompatibilityProfileId::EmueraEm, 6, true),
+        (erabasic_compat::CompatibilityProfileId::EmueraEm, 8, false),
+        (erabasic_compat::CompatibilityProfileId::EmueraEm, 10, false),
+        (
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            2,
+            true,
+        ),
+        (
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            6,
+            true,
+        ),
+        (
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            8,
+            true,
+        ),
+        (
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            10,
+            true,
+        ),
+    ] {
+        let arguments = match arity {
+            2 => "\"S\", 1",
+            6 => "\"S\", 1, 0, 0, 2, 1",
+            8 => "\"S\", 1, 0, 0, 2, 1, -3, 4",
+            10 => "\"S\", 1, 0, 0, 2, 1, -3, 4, 7, 9",
+            _ => unreachable!(),
+        };
+        let compatibility = erabasic_compat::CompatibilityIdentity::for_profile(profile);
+        let mut session = negotiated_session();
+        submit(
+            &mut session,
+            1,
+            RuntimeMessage::ProjectManifest(ProjectManifest {
+                compatibility,
+                project_revision: 1,
+                files: vec![
+                    profile_configuration_file(profile),
+                    SubmittedFile {
+                        relative_path: "main.erb".into(),
+                        category: FileCategory::Erb,
+                        payload: FilePayload::Utf8(format!(
+                            "@SYSTEM_TITLE\nRESULT = SPRITECREATE({arguments})\nRETURN\n"
+                        )),
+                        content_hash: None,
+                    },
+                ],
+            }),
+        );
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        let messages = drain(&mut session);
+        let report = messages
+            .iter()
+            .find_map(|message| match message {
+                RuntimeMessage::ProjectLoadReport(report) => Some(report),
+                _ => None,
+            })
+            .expect("project load report");
+        assert_eq!(
+            report.success, expected_success,
+            "{profile:?} arity {arity}: {:?}",
+            report.diagnostics
+        );
+    }
+}
+
+#[test]
+fn dynamic_varsize_uses_host_defaults_but_callstr_unique_restructure_dereferences_null() {
+    let source = "@SYSTEM_TITLE\nFLAG:10 = VARSIZE(\"FLAG\")\nRESULTS:10 '= \"{VARSIZE(\\\"FLAG\\\")}|{VARSIZE(\\\"FLAG\\\",0)}|{VARSIZE(\\\"FLAG\\\",,)}\"\nRESULTS:12 '= STRFORM(RESULTS:10)\nRESULTS:11 '= \"TAKE(VARSIZE(\\\"FLAG\\\",,))\"\nFLAG:0 = STRFORMCHECK(\"{CALLER()}\")\nWAIT\nRETURN\n@CALLER\n#FUNCTION\nFLAG:1 += 1\nTRYCCALLSTR RESULTS:11\nCATCH\nFLAG:2 = 1\nENDCATCH\nFLAG:3 = 1\nRETURNF 1\n@TAKE(ARG)\nFLAG:4 = 1\nRETURN\n";
+    let (session, _, messages) = run_immediate_query_project_with_profile(
+        source,
+        erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+    );
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:?}");
+    let vm = session.vm.as_ref().unwrap();
+    let length = read_runtime_integer(vm, "FLAG", &[10], None).unwrap();
+    let text = vm
+        .read_runtime_state(&[erabasic_vm::VmRuntimeRead {
+            variable: runtime_variable_key(vm, "RESULTS").unwrap(),
+            indices: vec![12],
+            character: None,
+        }])
+        .unwrap()
+        .remove(0);
+    assert_eq!(text, VmValue::String(format!("{length}|{length}|{length}")));
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[0], None).unwrap(), 0);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[1], None).unwrap(), 1);
+    for index in [2, 3, 4] {
+        assert_eq!(read_runtime_integer(vm, "FLAG", &[index], None).unwrap(), 0);
+    }
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::Fault(_)))
+    );
+}
+
+#[test]
+fn varsize_dimension_narrowing_is_shared_by_static_and_dynamic_calls_in_both_profiles() {
+    let source = "@SYSTEM_TITLE\nFLAG:10 = VARSIZE(\"FLAG\")\nFLAG:11 = VARSIZE(\"FLAG\",4294967296)\nRESULTS:10 = {VARSIZE(\"FLAG\",4294967296)}|{VARSIZE(\"FLAG\",(-9223372036854775807 - 1))}\nRESULTS:12 '= STRFORM(RESULTS:10)\nWAIT\nRETURN\n";
+    for profile in [
+        erabasic_compat::CompatibilityProfileId::EmueraEm,
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    ] {
+        let (session, _, messages) = run_immediate_query_project_with_profile(
+            source,
+            erabasic_compat::CompatibilityIdentity::for_profile(profile),
+        );
+        assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:?}");
+        let vm = session.vm.as_ref().unwrap();
+        let length = read_runtime_integer(vm, "FLAG", &[10], None).unwrap();
+        assert_eq!(
+            read_runtime_integer(vm, "FLAG", &[11], None).unwrap(),
+            length
+        );
+        let value = vm
+            .read_runtime_state(&[erabasic_vm::VmRuntimeRead {
+                variable: runtime_variable_key(vm, "RESULTS").unwrap(),
+                indices: vec![12],
+                character: None,
+            }])
+            .unwrap()
+            .remove(0);
+        assert_eq!(value, VmValue::String(format!("{length}|{length}")));
+    }
+}
+
+#[test]
+fn animation_timer_preserves_profile_forms_and_snake_command_result() {
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let (session, _, messages) = run_immediate_query_project_with_profile(
+        "@SYSTEM_TITLE\nRESULT = 77\nSETANIMETIMER 1\nFLAG:0 = RESULT\nFLAG:1 = GETANIMETIMER()\nBITMAP_CACHE_ENABLE 1\nBITMAP_CACHE_ENABLE 0\nFLAG:2 = RESULT\nWAIT\nRETURN\n",
+        snake,
+    );
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:?}");
+    let vm = session.vm.as_ref().unwrap();
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[0], None).unwrap(), 77);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[1], None).unwrap(), 10);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[2], None).unwrap(), 77);
+    assert_eq!(
+        session
+            .project_snapshot
+            .as_ref()
+            .unwrap()
+            .resource_graph
+            .animation_timer(),
+        10
+    );
+    let notices = messages
+        .iter()
+        .filter_map(|message| match message {
+            RuntimeMessage::Diagnostic(diagnostic)
+                if diagnostic.code == "compat.bitmap_cache_enable_noop" =>
+            {
+                Some(diagnostic)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(notices.len(), 1, "{messages:#?}");
+    assert_eq!(notices[0].level, RuntimeLogLevel::Warning);
+    assert_eq!(notices[0].notification, DiagnosticNotification::LogOnly);
+    assert_eq!(
+        notices[0]
+            .context
+            .as_ref()
+            .and_then(|context| context.api.as_deref()),
+        Some("bitmap_cache_enable")
+    );
+
+    let (session, _, messages) = run_immediate_query_project(
+        "@SYSTEM_TITLE\nRESULT = SETANIMETIMER(1)\nFLAG:0 = RESULT\nWAIT\nRETURN\n",
+    );
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:?}");
+    assert_eq!(
+        read_runtime_integer(session.vm.as_ref().unwrap(), "FLAG", &[0], None).unwrap(),
+        1
+    );
+}
+
+#[test]
+fn snake_cbg_and_image_layer_calls_project_one_ordered_scene_authority() {
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let source = "@SYSTEM_TITLE\n\
+        FLAG:0 = GCREATE(1, 4, 4)\n\
+        FLAG:1 = SPRITECREATE(\"ONE\", 1)\n\
+        FLAG:2 = SPRITECREATE(\"HOVER\", 1)\n\
+        FLAG:3 = CBGSETG(1, 10, 20, 5)\n\
+        FLAG:4 = CBGSETSPRITE(\"ONE\")\n\
+        FLAG:5 = CBGSETBUTTONSPRITE(33, \"ONE\", \"HOVER\", 1, 2, 6, \"tip\")\n\
+        FLAG:6 = CBGSETBMAPG(1)\n\
+        SETIMAGELAYER \"ONE\", 7\n\
+        FLAG:7 = EXISTSIMAGELAYER(7)\n\
+        SETIMAGELAYER \"ONE\", 7, 3, 4, 5, 6, 128\n\
+        SETIMAGELAYERL \"ONE\", 8\n\
+        CLEARIMAGELAYER 7\n\
+        FLAG:8 = EXISTSIMAGELAYER(7)\n\
+        CLEARIMAGELAYER_ALL\n\
+        FLAG:9 = CBGREMOVERANGE(5, 5)\n\
+        FLAG:10 = CBGCLEARBUTTON()\n\
+        FLAG:11 = CBGSETG(1, 30, 40, 6)\n\
+        FLAG:12 = CBGSETBUTTONSPRITE(44, \"MISSING\", \"HOVER\", 1, 2, 9)\n\
+        WAIT\n\
+        RETURN\n";
+    let (mut session, _, messages) = run_immediate_query_project_with_profile(source, snake);
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:#?}");
+    let vm = session.vm.as_ref().unwrap();
+    for index in 0..=7 {
+        assert_eq!(
+            read_runtime_integer(vm, "FLAG", &[index], None).unwrap(),
+            1,
+            "FLAG:{index}"
+        );
+    }
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[8], None).unwrap(), 0);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[9], None).unwrap(), 1);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[10], None).unwrap(), 1);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[11], None).unwrap(), 1);
+    assert_eq!(read_runtime_integer(vm, "FLAG", &[12], None).unwrap(), 1);
+
+    session
+        .presentation
+        .set_projection(true, true, false, true, false);
+    let snapshot = session.presentation.snapshot();
+    assert_eq!(snapshot.scene.layers.len(), 2);
+    assert_eq!(snapshot.scene.layers[0].depth, 6);
+    assert_eq!(
+        snapshot.scene.layers[0].offset.x,
+        era_runtime_protocol::LogicalLength(30_000)
+    );
+    assert_eq!(
+        snapshot.scene.layers[0].offset.y,
+        era_runtime_protocol::LogicalLength(40_000)
+    );
+    assert_eq!(snapshot.scene.layers[1].depth, 1);
+    assert!(matches!(
+        &snapshot.scene.layers[1].source,
+        era_runtime_protocol::SceneSourceV1::Sprite { sprite_name, .. }
+            if sprite_name == "ONE"
+    ));
+    assert!(
+        snapshot
+            .scene
+            .layers
+            .iter()
+            .all(|layer| layer.interaction.is_none())
+    );
+}
+
+#[test]
+fn snake_cbg_rejects_reserved_zero_depth_without_mutating_the_scene() {
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let (session, _, messages) = run_immediate_query_project_with_profile(
+        "@SYSTEM_TITLE\nFLAG:0 = GCREATE(1, 1, 1)\nFLAG:1 = CBGSETG(1, 0, 0, 0)\nWAIT\nRETURN\n",
+        snake,
+    );
+    assert_eq!(session.phase(), RuntimePhase::Faulted, "{messages:#?}");
+    assert!(session.presentation.snapshot().scene.layers.is_empty());
+}
+
+#[test]
+fn snake_display_queries_and_whole_line_background_use_canonical_history() {
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let (session, _, messages) = run_immediate_query_project_with_profile(
+        "@SYSTEM_TITLE\nPRINTL oldest\nPRINT pending\nRESULTS '= GETDISPLAYLINE(-1)\nTEXT_BGC_ON 1122867, 50\nWAIT\nRETURN\n",
+        snake,
+    );
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:?}");
+    assert_eq!(
+        read_runtime_string(session.vm.as_ref().unwrap(), "RESULTS").unwrap(),
+        "oldest"
+    );
+    let snapshot = session.presentation.snapshot();
+    assert_eq!(
+        snapshot.settings.text_line_background,
+        Some(era_runtime_protocol::Color {
+            red: 0x11,
+            green: 0x22,
+            blue: 0x33,
+            alpha: 127,
+        })
+    );
+    assert!(
+        snapshot
+            .history
+            .logical_lines
+            .iter()
+            .all(|line| line.text_background_eligible)
+    );
+}
+
+#[test]
+fn invalid_animation_timer_is_atomic() {
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let (session, _, messages) = run_immediate_query_project_with_profile(
+        "@SYSTEM_TITLE\nSETANIMETIMER 20\nSETANIMETIMER 32768\nRETURN\n",
+        snake,
+    );
+    assert_eq!(session.phase(), RuntimePhase::Faulted, "{messages:?}");
+    assert_eq!(
+        session
+            .project_snapshot
+            .as_ref()
+            .unwrap()
+            .resource_graph
+            .animation_timer(),
+        20
+    );
+    assert!(
+        messages.iter().any(|message| match message {
+            RuntimeMessage::PresentationSnapshot(snapshot) => {
+                snapshot.resources.animation_timer_ms == 20
+            }
+            RuntimeMessage::PresentationDelta(delta) => {
+                delta.operations.iter().any(|operation| {
+                    matches!(
+                        operation,
+                        PresentationOperation::SetResources { resources }
+                            if resources.animation_timer_ms == 20
+                    )
+                })
+            }
+            _ => false,
+        }),
+        "{messages:#?}"
+    );
+}

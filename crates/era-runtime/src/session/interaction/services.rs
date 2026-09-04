@@ -16,6 +16,35 @@ impl RuntimeSession {
                 "service response has no pending request",
             );
         };
+        if let PendingService::Sql(continuation) = pending {
+            return self.complete_sql_service(
+                message_id,
+                response.request_id,
+                continuation,
+                response.result,
+            );
+        }
+        if let PendingService::Audio(continuation) = pending {
+            return self.complete_audio_observation(continuation, response.result);
+        }
+        if let PendingService::Host(ExternalCompletion::DevicePump {
+            request,
+            epoch,
+            after_event_sequence,
+            milliseconds,
+        }) = pending
+        {
+            return self.finish_device_pump(
+                request,
+                epoch,
+                after_event_sequence,
+                milliseconds,
+                response.result,
+            );
+        }
+        if let PendingService::Host(ExternalCompletion::HtmlQuery { continuation }) = pending {
+            return self.complete_html_query(continuation, response.result);
+        }
         if let PendingService::ProjectImageMetadata { relative_path } = pending {
             let result = match response.result {
                 ServiceResult::Ready { payload } => {
@@ -53,6 +82,7 @@ impl RuntimeSession {
                     let report = &mut pending.candidate.build_mut().report;
                     report.success = false;
                     report.diagnostics.push(ProtocolDiagnostic {
+                        context: None,
                         code: "runtime.invalid_image_metadata".into(),
                         level: RuntimeLogLevel::Error,
                         message,
@@ -115,6 +145,7 @@ impl RuntimeSession {
             if let Some(message) = failure {
                 self.emit(
                     RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                        context: None,
                         code: "runtime.platform_effect_failed".into(),
                         level: RuntimeLogLevel::Warning,
                         message,
@@ -202,11 +233,20 @@ impl RuntimeSession {
         let payload = match response.result {
             ServiceResult::Ready { payload } => payload,
             ServiceResult::Error { error } => {
-                return self.fault(
-                    FaultCode::ServiceFailure,
-                    &format!("{}: {}", error.code, error.message),
-                    None,
+                let projection_query = matches!(
+                    &pending,
+                    PendingService::Host(
+                        ExternalCompletion::PointerState { .. }
+                            | ExternalCompletion::LineGeometry { .. }
+                            | ExternalCompletion::CanvasPixel { .. }
+                    )
                 );
+                let code = if projection_query {
+                    super::super::html_query::projection_service_failure(&error.code).0
+                } else {
+                    FaultCode::ServiceFailure
+                };
+                return self.fault(code, &format!("{}: {}", error.code, error.message), None);
             }
         };
         match pending {
@@ -217,14 +257,17 @@ impl RuntimeSession {
             PendingService::Host(completion) => {
                 let mut writes = Vec::new();
                 let host_request = match &completion {
+                    ExternalCompletion::DevicePump { .. }
+                    | ExternalCompletion::HtmlQuery { .. } => {
+                        unreachable!("handled before payload decoding")
+                    }
                     ExternalCompletion::GetKey { request: id, .. }
                     | ExternalCompletion::LocalDateTime { request: id, .. }
                     | ExternalCompletion::SpritePixel { request: id }
                     | ExternalCompletion::UpdateCheck { request: id, .. }
                     | ExternalCompletion::PointerState { request: id, .. }
+                    | ExternalCompletion::LineGeometry { request: id, .. }
                     | ExternalCompletion::Extension { request: id, .. }
-                    | ExternalCompletion::ProjectionInteger { request: id, .. }
-                    | ExternalCompletion::HtmlSubstring { request: id, .. }
                     | ExternalCompletion::TextExtent { request: id, .. }
                     | ExternalCompletion::DrawTextExtent { request: id, .. }
                     | ExternalCompletion::CanvasPixel { request: id, .. }
@@ -233,6 +276,9 @@ impl RuntimeSession {
                     | ExternalCompletion::SerializePhysicalHistory { request: id, .. } => *id,
                 };
                 let value = match completion {
+                    ExternalCompletion::DevicePump { .. } => {
+                        unreachable!("device pump handled before generic response decoding")
+                    }
                     ExternalCompletion::GetKey {
                         key_code,
                         triggered,
@@ -329,13 +375,28 @@ impl RuntimeSession {
                         projection_space_revision,
                         ..
                     } => {
-                        let state: PointerStateResponse = decode_canonical(payload.as_slice())?;
+                        let state: PointerStateResponse = match decode_canonical(payload.as_slice())
+                        {
+                            Ok(state) => state,
+                            Err(error) => {
+                                // The pending continuation has already been consumed. A bad
+                                // reply must terminate its wait instead of escaping from drive.
+                                return self.fault(
+                                    FaultCode::ServiceFailure,
+                                    &format!("invalid pointer_state service response: {error}"),
+                                    None,
+                                );
+                            }
+                        };
+                        // The provider answers the immutable projection carried by this
+                        // request. The frontend may publish a newer environment while it
+                        // samples the pointer, but that does not invalidate the exact
+                        // historical result. The canonical presentation remains fixed while
+                        // the VM is waiting for this completion.
                         if state.presentation_revision != presentation_revision
                             || state.presentation_revision != self.presentation.revision()
                             || state.environment_revision != environment_revision
-                            || state.environment_revision != self.projection_environment_revision
                             || state.projection_space_revision != projection_space_revision
-                            || state.projection_space_revision != self.projection_space_revision
                         {
                             return self.fault(
                                 FaultCode::ServiceFailure,
@@ -348,6 +409,49 @@ impl RuntimeSession {
                             PointerCoordinate::Y => VmValue::Integer(state.y.0),
                             PointerCoordinate::Button => VmValue::String(state.button_value),
                         })
+                    }
+                    ExternalCompletion::LineGeometry {
+                        context, line_id, ..
+                    } => {
+                        let geometry: GetLineGeometryV1Response =
+                            match decode_canonical(payload.as_slice()) {
+                                Ok(geometry) => geometry,
+                                Err(error) => {
+                                    return self.fault(
+                                        FaultCode::ServiceFailure,
+                                        &format!(
+                                            "invalid get_line_geometry_v1 service response: {error}"
+                                        ),
+                                        None,
+                                    );
+                                }
+                            };
+                        if !self.validate_projection_query_context(context, geometry.context)? {
+                            return Ok(());
+                        }
+                        if geometry.line_id != line_id
+                            || geometry.height.0 < 0
+                            || geometry.viewport_height.0 < 0
+                        {
+                            return self.fault(
+                                FaultCode::ServiceFailure,
+                                "line geometry response contains a mismatched line or negative size",
+                                None,
+                            );
+                        }
+                        let Some(value) = geometry
+                            .top
+                            .0
+                            .checked_add(geometry.height.0)
+                            .and_then(|value| value.checked_sub(geometry.viewport_height.0))
+                        else {
+                            return self.fault(
+                                FaultCode::ServiceFailure,
+                                "line geometry response overflows GETLINEY coordinates",
+                                None,
+                            );
+                        };
+                        Some(VmValue::Integer(value))
                     }
                     ExternalCompletion::Extension {
                         return_type,
@@ -463,35 +567,8 @@ impl RuntimeSession {
                             }
                         }
                     }
-                    ExternalCompletion::ProjectionInteger { context, .. } => {
-                        let result: ProjectionIntegerResponse =
-                            decode_canonical(payload.as_slice())?;
-                        if !self.validate_projection_query_context(context, result.context)? {
-                            return Ok(());
-                        }
-                        Some(VmValue::Integer(result.value))
-                    }
-                    ExternalCompletion::HtmlSubstring { context, .. } => {
-                        let result: HtmlSubstringResponse = decode_canonical(payload.as_slice())?;
-                        if !self.validate_projection_query_context(context, result.context)? {
-                            return Ok(());
-                        }
-                        let vm = self.vm.as_ref().ok_or_else(|| {
-                            RuntimeError::Internal("HTML substring completion has no VM".into())
-                        })?;
-                        if let Some(target) = global_place_at(vm, "RESULTS", 0) {
-                            writes.push(HostWrite {
-                                target,
-                                value: VmValue::String(result.head.clone()),
-                            });
-                        }
-                        if let Some(target) = global_place_at(vm, "RESULTS", 1) {
-                            writes.push(HostWrite {
-                                target,
-                                value: VmValue::String(result.tail),
-                            });
-                        }
-                        Some(VmValue::String(result.head))
+                    ExternalCompletion::HtmlQuery { .. } => {
+                        unreachable!("handled before payload decoding")
                     }
                     ExternalCompletion::TextExtent { context, .. } => {
                         let result: TextExtentResponse = decode_canonical(payload.as_slice())?;
@@ -562,14 +639,36 @@ impl RuntimeSession {
                     }
                     ExternalCompletion::CanvasPixel {
                         context,
+                        canvas_id,
                         canvas_revision,
                         ..
                     } => {
-                        let result: CanvasPixelResponse = decode_canonical(payload.as_slice())?;
+                        let result: CanvasPixelResponse = match decode_canonical(payload.as_slice())
+                        {
+                            Ok(result) => result,
+                            Err(error) => {
+                                return self.fault(
+                                    FaultCode::ServiceFailure,
+                                    &format!(
+                                        "invalid sample_canvas_pixel service response: {error}"
+                                    ),
+                                    None,
+                                );
+                            }
+                        };
                         if !self.validate_projection_query_context(context, result.context)? {
                             return Ok(());
                         }
-                        if result.canvas_revision != canvas_revision {
+                        let current_revision = self
+                            .project_snapshot
+                            .as_ref()
+                            .and_then(|project| {
+                                project.resource_graph.canvas_observation(canvas_id)
+                            })
+                            .map(|(_, _, revision)| revision);
+                        if result.canvas_revision != canvas_revision
+                            || current_revision != Some(canvas_revision)
+                        {
                             return self.fault(
                                 FaultCode::ServiceFailure,
                                 "stale canvas raster revision",
@@ -651,7 +750,9 @@ impl RuntimeSession {
             }
             PendingService::ProjectImageMetadata { .. }
             | PendingService::PlatformEffect { .. }
-            | PendingService::CandidateSaveClock { .. } => {
+            | PendingService::CandidateSaveClock { .. }
+            | PendingService::Audio(_)
+            | PendingService::Sql(_) => {
                 unreachable!("handled above")
             }
         }

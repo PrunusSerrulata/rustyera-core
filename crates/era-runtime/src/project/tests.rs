@@ -4,17 +4,311 @@ use era_runtime_protocol::{
     ExtensionValueType, ExternalResource, FileCategory, FileChange, FilePayload,
     ImageMetadataResponse, ProjectAnalysisRequest, ReloadProject, RuntimeLogLevel, SubmittedFile,
 };
+use std::fmt::Write as _;
 
 use super::*;
 use era_runtime_protocol::ConfigurationApplication;
 use erabasic_data::LegacyEncoding;
 
 #[test]
-fn only_erd_sources_are_forwarded_to_the_deferred_index_loader() {
-    assert!(is_deferred_index_source("ERB/index.ERD"));
-    assert!(is_deferred_index_source("nested/index.erd"));
-    assert!(!is_deferred_index_source("ERB/main.ERB"));
-    assert!(!is_deferred_index_source("ERB/header.ERH"));
+fn static_user_argument_diagnostics_use_compat_code_and_profile_context() {
+    for strict in [false, true] {
+        let mut manifest = index_manifest("ERB/");
+        let script = manifest
+            .files
+            .iter_mut()
+            .find(|file| file.category == FileCategory::Erb)
+            .unwrap();
+        script.payload = FilePayload::Utf8(
+            "@SYSTEM_TITLE\nCALL TAKE, 1, 2\nRETURN\n@TAKE(ARG)\nRETURN\n".into(),
+        );
+        let configuration = manifest
+            .files
+            .iter_mut()
+            .find(|file| file.category == FileCategory::Configuration)
+            .unwrap();
+        let FilePayload::Utf8(text) = &mut configuration.payload else {
+            unreachable!()
+        };
+        write!(
+            text,
+            "[diagnostics]\nstrict_user_call_arguments = {strict}\n"
+        )
+        .unwrap();
+        let build = build_project(&manifest, None);
+        assert_eq!(
+            build.report.success, !strict,
+            "{:?}",
+            build.report.diagnostics
+        );
+        let matching = build
+            .report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "compat.call.excess_arguments")
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1);
+        let diagnostic = matching[0];
+        assert_eq!(
+            diagnostic.level,
+            if strict {
+                RuntimeLogLevel::Error
+            } else {
+                RuntimeLogLevel::Warning
+            }
+        );
+        let context = diagnostic.context.as_ref().unwrap();
+        assert_eq!(context.stage, "compat");
+        assert_eq!(context.identity.as_ref(), Some(&manifest.compatibility));
+        let source = diagnostic.source.as_ref().unwrap();
+        assert_eq!(source.relative_path, "ERB/main.erb");
+        assert!(source.byte_end > source.byte_start);
+        if !strict {
+            let warm = build_project(&manifest, Some(&build.incremental));
+            let matching = warm
+                .report
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.code == "compat.call.excess_arguments")
+                .collect::<Vec<_>>();
+            assert_eq!(matching, vec![diagnostic]);
+        }
+    }
+}
+
+#[test]
+fn als_and_erd_are_data_inputs_with_profile_consistent_resolution() {
+    for root in ["ERB/", ""] {
+        let manifest = index_manifest(root);
+        let build = build_project(&manifest, None);
+        assert!(build.report.success, "{:?}", build.report.diagnostics);
+        let artifact = build.artifact.unwrap();
+        let indices = &artifact
+            .artifact()
+            .project_data
+            .static_data
+            .deferred_indices
+            .resolved;
+        assert_eq!(indices["BUFF"].entries["alias"], 10);
+        assert_eq!(indices["BUFF"].entries["negative"], -1);
+        assert_eq!(indices["BUFF"].entries["outside"], 300);
+        assert_eq!(indices["BUFF"].canonical_names[&10], "main");
+        assert!(artifact.artifact().source_map.sources.iter().all(|source| {
+            !source.relative_path.to_ascii_lowercase().ends_with(".erd")
+                && !source.relative_path.to_ascii_lowercase().ends_with(".als")
+        }));
+    }
+}
+
+fn index_manifest(root: &str) -> ProjectManifest {
+    let file = |path: String, category, text: &str| SubmittedFile {
+        relative_path: path,
+        category,
+        payload: FilePayload::Utf8(text.into()),
+        content_hash: None,
+    };
+    ProjectManifest {
+        compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+        project_revision: 1,
+        files: vec![
+            file(
+                "reraconfig.toml".into(),
+                FileCategory::Configuration,
+                "[meta]\nschema_version = 4\n[compatibility]\nprofile = \"emuera.skia.snake\"\n",
+            ),
+            file(
+                format!("{root}definitions.erh"),
+                FileCategory::Erh,
+                "#DIM BUFF,32\n",
+            ),
+            file(
+                format!("{root}main.erb"),
+                FileCategory::Erb,
+                "@SYSTEM_TITLE\nRETURN\n",
+            ),
+            file(
+                format!("{root}BUFF.erd"),
+                FileCategory::Erd,
+                "10,main\n11,other\n",
+            ),
+            file(
+                format!("{root}BUFF.als"),
+                FileCategory::Als,
+                "10, alias \n-1,negative\n300,outside\n",
+            ),
+        ],
+    }
+}
+
+#[test]
+fn index_file_read_failures_and_non_utf8_payloads_are_not_ignored() {
+    for category in [FileCategory::Als, FileCategory::Erd] {
+        for payload in [
+            FilePayload::Bytes(ProtocolBytes::new(vec![0xff])),
+            FilePayload::ExternalResource(ExternalResource {
+                byte_length: 10,
+                image_metadata: None,
+            }),
+            FilePayload::IoError(era_runtime_protocol::FrontendIoError {
+                kind: era_runtime_protocol::FrontendIoErrorKind::NotFound,
+                message: "file disappeared during scan".into(),
+                platform_code: None,
+            }),
+        ] {
+            let mut manifest = index_manifest("ERB/");
+            let file = manifest
+                .files
+                .iter_mut()
+                .find(|file| file.category == category)
+                .unwrap();
+            // Required-input validation follows the category, not an attacker-controlled suffix.
+            file.relative_path = "ERB/BUFF.nonstandard".into();
+            file.payload = payload;
+            let build = build_project(&manifest, None);
+            assert!(!build.report.success, "{category:?} unexpectedly ignored");
+            assert!(
+                build.report.diagnostics.iter().any(|diagnostic| {
+                    diagnostic.level == RuntimeLogLevel::Error
+                        && diagnostic
+                            .source
+                            .as_ref()
+                            .is_some_and(|source| source.relative_path.contains("BUFF"))
+                }),
+                "{:?}",
+                build.report.diagnostics
+            );
+        }
+    }
+}
+
+#[test]
+fn optional_csv_not_found_remains_optional_but_index_errors_keep_both_roots() {
+    let mut manifest = index_manifest("ERB/");
+    let missing = FilePayload::IoError(era_runtime_protocol::FrontendIoError {
+        kind: era_runtime_protocol::FrontendIoErrorKind::NotFound,
+        message: "disappeared after scan".into(),
+        platform_code: None,
+    });
+    manifest.files.push(SubmittedFile {
+        relative_path: "CSV/optional.csv".into(),
+        category: FileCategory::Csv,
+        payload: missing.clone(),
+        content_hash: None,
+    });
+    assert!(build_project(&manifest, None).report.success);
+    manifest.files.last_mut().unwrap().relative_path = "CSV/BUFF.als".into();
+    manifest.files.last_mut().unwrap().category = FileCategory::Als;
+    manifest
+        .files
+        .iter_mut()
+        .find(|file| file.relative_path == "ERB/BUFF.als")
+        .unwrap()
+        .payload = missing;
+    let build = build_project(&manifest, None);
+    assert!(!build.report.success);
+    let paths = build
+        .report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "runtime.frontend_io_error")
+        .map(|diagnostic| diagnostic.source.as_ref().unwrap().relative_path.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        paths,
+        ["CSV/BUFF.als", "ERB/BUFF.als"].into_iter().collect()
+    );
+}
+
+#[test]
+fn initial_and_deferred_index_diagnostics_preserve_provenance_and_utf8_spans() {
+    let mut manifest = index_manifest("ERB/");
+    let contents = "10,别名\n坏,错误\n";
+    manifest.files.last_mut().unwrap().payload = FilePayload::Utf8(contents.into());
+    for (path, category, text) in [
+        ("CSV/BUFF.csv", FileCategory::Csv, "12,csvprimary\n"),
+        ("CSV/BUFF.als", FileCategory::Als, contents),
+        ("CSV/FLAG.csv", FileCategory::Csv, "10,flagprimary\n"),
+        ("CSV/FLAG.als", FileCategory::Als, contents),
+    ] {
+        manifest.files.push(SubmittedFile {
+            relative_path: path.into(),
+            category,
+            payload: FilePayload::Utf8(text.into()),
+            content_hash: None,
+        });
+    }
+    let build = build_project(&manifest, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    for path in ["CSV/BUFF.als", "ERB/BUFF.als", "CSV/FLAG.als"] {
+        let source = build
+            .report
+            .diagnostics
+            .iter()
+            .filter_map(|diagnostic| diagnostic.source.as_ref())
+            .find(|source| source.relative_path == path && source.byte_start > 0)
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing full-path diagnostic for {path}: {:?}",
+                    build.report.diagnostics
+                )
+            });
+        assert_eq!(source.byte_start, "10,别名\n".len() as u64);
+        assert_eq!(
+            &contents[usize::try_from(source.byte_start).unwrap()
+                ..usize::try_from(source.byte_end).unwrap()],
+            "坏,错误"
+        );
+    }
+}
+
+#[test]
+fn index_only_reload_matches_cold_loading_after_upsert_remove_and_readd() {
+    let mut manifest = index_manifest("ERB/");
+    let mut previous = build_project(&manifest, None);
+    assert!(previous.report.success, "{:?}", previous.report.diagnostics);
+    let alias_file = manifest.files.last().unwrap().clone();
+    let erd_file = manifest.files[3].clone();
+    let mut updated = alias_file.clone();
+    updated.payload = FilePayload::Utf8("11,alias\n".into());
+    for change in [
+        FileChange::Upsert { file: updated },
+        FileChange::Remove {
+            category: FileCategory::Als,
+            relative_path: alias_file.relative_path.clone(),
+        },
+        FileChange::Upsert { file: alias_file },
+        FileChange::Remove {
+            category: FileCategory::Erd,
+            relative_path: erd_file.relative_path.clone(),
+        },
+        FileChange::Upsert { file: erd_file },
+    ] {
+        let next = apply_project_delta(
+            &manifest,
+            &ReloadProject {
+                base_revision: manifest.project_revision,
+                target_revision: manifest.project_revision + 1,
+                changes: vec![change],
+            },
+        )
+        .unwrap();
+        let warm = build_project(&next, Some(&previous.incremental));
+        let cold = build_project(&next, None);
+        assert!(warm.report.success, "{:?}", warm.report.diagnostics);
+        assert!(cold.report.success, "{:?}", cold.report.diagnostics);
+        assert_eq!(
+            warm.artifact.as_ref().unwrap().artifact().project_data,
+            cold.artifact.as_ref().unwrap().artifact().project_data
+        );
+        assert_ne!(
+            previous.snapshot.as_ref().unwrap().project_identity,
+            warm.snapshot.as_ref().unwrap().project_identity
+        );
+        manifest = next;
+        previous = warm;
+    }
 }
 
 fn configuration(text: &str) -> SubmittedFile {
@@ -32,6 +326,7 @@ fn external_resource_metadata_avoids_startup_service_request() {
     let digest = blake3::hash(bytes);
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "resources/image.png".into(),
@@ -62,6 +357,7 @@ fn invalid_external_resource_metadata_falls_back_to_lazy_service_detection() {
     let digest = blake3::hash(bytes);
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "resources/image.png".into(),
@@ -99,7 +395,7 @@ fn semantic_configuration_is_applied_and_retired_settings_are_reported_once() {
     let config = parse_configuration(
         &[
             configuration(
-                "\u{feff}Sort filenames:YES\nIgnore case:NO\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nAllow long input by mouse for ONEINPUT:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nAuto TOSTR conversion for user function arguments:YES\nDo not process triple symbols inside FORM:YES\nImitate ERD to VARSIZE dimension specification:YES\nText color:1,2,3\nDefault ANSI encoding:KOREAN\nフォント名:Test\n",
+                "\u{feff}Sort filenames:YES\nIgnore case:NO\nMake autosaves:NO\nEnable undo with ctrl-z:YES\nAllow long input by mouse for ONEINPUT:YES\nUse the binary format for saving data:YES\nCompress save data:YES\nSave data count per page:30\nFont size:20\nLine height:22\nAllow CALL on event functions:YES\nAllow arguments omission for user functions:YES\nTreat snake excess user arguments as errors:YES\nAuto TOSTR conversion for user function arguments:YES\nDo not process triple symbols inside FORM:YES\nImitate behavior for RAND:YES\nDo not auto-complete arguments for character variables:YES\nImitate ERD to VARSIZE dimension specification:YES\nDisable BEFORE_ERROR/THROW events:YES\nText color:1,2,3\nDefault ANSI encoding:KOREAN\nフォント名:Test\n",
             ),
             SubmittedFile {
                 relative_path: "setting.json".into(),
@@ -127,9 +423,13 @@ fn semantic_configuration_is_applied_and_retired_settings_are_reported_once() {
     assert_eq!(config.line_height, 22);
     assert!(config.analyzer.compatible_call_event);
     assert!(config.analyzer.compatible_function_argument_optional);
+    assert!(config.analyzer.strict_user_call_arguments);
     assert!(config.analyzer.compatible_function_argument_auto_convert);
     assert!(config.analyzer.ignore_triple_symbols);
+    assert!(config.analyzer.compatible_rand);
+    assert!(config.analyzer.system_no_target);
     assert!(config.analyzer.varsize_dimension_is_one_based);
+    assert!(config.analyzer.disable_before_error_throw);
     assert_eq!(config.analyzer.default_foreground_color, 0x0001_0203);
     assert_eq!(config.legacy_encoding, LegacyEncoding::Korean);
     assert_eq!(
@@ -181,7 +481,7 @@ fn reraconfig_takes_priority_and_legacy_sources_generate_it_only_when_absent() {
         relative_path: "reraconfig.toml".into(),
         category: FileCategory::Configuration,
         payload: FilePayload::Utf8(
-            "[meta]\r\nschema_version = 3\r\n[text]\r\nfont_size = 24\r\n".into(),
+            "[meta]\r\nschema_version = 5\r\n[text]\r\nfont_size = 24\r\n".into(),
         ),
         content_hash: None,
     };
@@ -218,8 +518,8 @@ fn schema_v1_reraconfig_is_returned_for_atomic_client_persistence() {
     );
     let generated = parsed
         .generated_source
-        .expect("schema version 1 must be persisted as version 3");
-    assert!(generated.contains("schema_version = 3"));
+        .expect("schema version 1 must be persisted as version 4");
+    assert!(generated.contains("schema_version = 5"));
     assert!(generated.contains("font_size = 20"));
     assert!(!generated.contains("drawing_method"));
     assert!(diagnostics.iter().any(|diagnostic| {
@@ -366,6 +666,7 @@ fn project_build_populates_analyzer_diagnostic_line_and_byte_column() {
     let text = "@SYSTEM_TITLE\nUNKNOWN 1\nRETURN\n";
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "ERB/bad.erb".into(),
@@ -395,9 +696,10 @@ fn project_build_populates_analyzer_diagnostic_line_and_byte_column() {
 
 #[test]
 fn owned_project_build_maps_compiler_errors_to_utf8_byte_columns() {
-    let text = "@SYSTEM_TITLE\nPRINTL 日本語\nRESULT = GETMETH(\"TARGET\")\nRETURN\n";
+    let text = "@SYSTEM_TITLE\nPRINTL 日本語\nRESULT = GETNUMB(\"TARGET\")\nRETURN\n";
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "ERB/compiler-error.erb".into(),
@@ -424,7 +726,7 @@ fn owned_project_build_maps_compiler_errors_to_utf8_byte_columns() {
     assert_eq!(source.byte_column, Some(9));
     assert_eq!(
         source.byte_start,
-        u64::try_from(text.find("GETMETH").unwrap()).unwrap()
+        u64::try_from(text.find("GETNUMB").unwrap()).unwrap()
     );
 }
 
@@ -432,6 +734,7 @@ fn owned_project_build_maps_compiler_errors_to_utf8_byte_columns() {
 fn project_load_report_projects_only_defined_gamebase_information() {
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "CSV/GameBase.csv".into(),
@@ -460,6 +763,7 @@ fn project_load_report_projects_only_defined_gamebase_information() {
 
     let missing = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 2,
             files: vec![SubmittedFile {
                 relative_path: "GAMEBASE.CSV".into(),
@@ -506,6 +810,7 @@ fn focused_eratw_system_slices_exercise_runtime_owned_save_flows() {
 #[test]
 fn project_delta_is_monotonic_normalized_and_unique() {
     let current = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 4,
         files: vec![SubmittedFile {
             relative_path: "ERB\\main.erb".into(),
@@ -555,6 +860,7 @@ fn project_delta_is_monotonic_normalized_and_unique() {
 #[test]
 fn analysis_selection_checks_unreachable_code_without_loading_a_project() {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 9,
         files: vec![
             SubmittedFile {
@@ -602,6 +908,7 @@ fn portable_extensions_participate_in_analysis_and_deterministic_host_lowering()
         operation_version: ProtocolVersion::new(1, 0),
     };
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![SubmittedFile {
             relative_path: "main.erb".into(),
@@ -627,6 +934,7 @@ fn portable_extensions_participate_in_analysis_and_deterministic_host_lowering()
 #[test]
 fn query_visible_configuration_participates_in_project_identity() {
     let manifest = |font_size| ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             SubmittedFile {
@@ -657,6 +965,7 @@ fn query_visible_configuration_participates_in_project_identity() {
 fn search_subdirectories_configuration_loads_nested_character_templates() {
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -705,6 +1014,7 @@ fn runtime_project_build_retains_a_compact_serializable_incremental_cache() {
     }
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
@@ -737,6 +1047,7 @@ fn project_build_reports_real_workload_progress() {
     });
     let build = build_project_with_extensions_and_progress(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
@@ -777,8 +1088,74 @@ fn project_build_reports_real_workload_progress() {
         assert!(
             values
                 .windows(2)
-                .all(|pair| pair[0].completed <= pair[1].completed),
+                // Several analyzer substages intentionally share the public Analyzing stage;
+                // each substage starts a fresh real-work counter at zero.
+                .all(|pair| pair[1].completed == 0 || pair[0].completed <= pair[1].completed),
             "{stage:?} regressed"
         );
     }
+}
+
+#[test]
+fn experimental_profile_is_preserved_and_conflicting_configuration_is_rejected() {
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let manifest = ProjectManifest {
+        project_revision: 1,
+        compatibility: snake.clone(),
+        files: vec![
+            SubmittedFile {
+                relative_path: "reraconfig.toml".into(),
+                category: FileCategory::Configuration,
+                payload: FilePayload::Utf8("[meta]\nschema_version = 4\n[compatibility]\nprofile = \"emuera.skia.snake\"\n".into()),
+                content_hash: None,
+            },
+            SubmittedFile {
+                relative_path: "main.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8("@SYSTEM_TITLE\nRETURN\n".into()),
+                content_hash: None,
+            },
+        ],
+    };
+    let built = build_project(&manifest, None);
+    assert!(built.report.success, "{:?}", built.report.diagnostics);
+    assert_eq!(built.report.compatibility.as_ref(), Some(&snake));
+    assert_eq!(
+        built
+            .artifact
+            .as_ref()
+            .unwrap()
+            .artifact()
+            .manifest
+            .compatibility,
+        snake
+    );
+    assert!(built.report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "runtime.experimental_compatibility_profile"
+            && diagnostic.context.as_ref().unwrap().identity.as_ref() == Some(&snake)
+    }));
+    let compact = build_owned_project_with_extensions_and_progress(
+        manifest.clone(),
+        None,
+        None,
+        &[],
+        ConfigurationClientProfile::Reference,
+        false,
+        None,
+    );
+    let snapshot = compact.snapshot.unwrap();
+    assert!(
+        matches!(&snapshot.manifest.files[0].payload, FilePayload::Utf8(source) if source.contains("emuera.skia.snake"))
+    );
+    let mut conflicting = manifest;
+    conflicting.compatibility = era_runtime_protocol::CompatibilityIdentity::default();
+    let rejected = build_project(&conflicting, None);
+    assert!(!rejected.report.success);
+    assert!(rejected.artifact.is_none());
+    assert_eq!(
+        rejected.report.diagnostics[0].code,
+        "runtime.compatibility_identity_mismatch"
+    );
 }

@@ -15,3 +15,11 @@ mod variables;
 
 pub(super) use arrays::*;
 pub(super) use variables::*;
+
+pub(super) fn script_native_error(kind: crate::ScriptFaultKind, message: String) -> VmError {
+    VmError::ScriptFailure(crate::ExecutionFailure::script(
+        kind,
+        crate::VmFaultCode::TypeMismatch,
+        message,
+    ))
+}

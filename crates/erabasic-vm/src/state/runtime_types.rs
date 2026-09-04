@@ -26,12 +26,35 @@ pub(crate) struct Frame {
     pub locals: VariableMap,
     /// Dynamic statement calls discard method results without exposing them to Host code.
     pub return_value_to_caller: bool,
+    /// Origin-checked return policy for a dynamically bound user call.
+    pub user_call: Option<super::user_calls::UserCallFrame>,
     /// True for an event handler and every ordinary function called beneath it.
     pub event_context: bool,
     /// Nested CALLEVENT handlers are sequenced in the initiating caller frame.
     pub event_dispatch: Option<EventDispatch>,
     /// Late-bound STRFORM work owned by this frame and resumed by the scheduler.
     pub runtime_form: Option<crate::interpreter::dynamic_form::RuntimeFormContinuation>,
+    /// Opaque method resolution identities are separate from the scalar operand stack.
+    pub user_calls: Vec<super::user_calls::PendingUserCall>,
+    /// Catch boundaries for the second EXISTVAR source evaluation.
+    pub existvar_checks: Vec<crate::interpreter::existvar::ExistVarCheckpoint>,
+    pub map_calls: Vec<crate::interpreter::map_calls::PendingMapCall>,
+    pub bit_calls: Vec<super::bit_calls::PendingBitCall>,
+    pub match_calls: Vec<crate::interpreter::matching::PendingMatchCall>,
+}
+
+impl Frame {
+    pub(crate) fn operand_slots(&self) -> Option<usize> {
+        self.user_calls.iter().try_fold(
+            self.stack
+                .len()
+                .checked_add(self.existvar_checks.len())?
+                .checked_add(self.map_calls.len())?
+                .checked_add(self.bit_calls.len())?
+                .checked_add(self.match_calls.len().checked_mul(12)?)?,
+            |slots, call| slots.checked_add(1)?.checked_add(call.call.bindings.len()),
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -78,6 +101,8 @@ pub(crate) struct WaitingHost {
     pub stability: HostWaitStability,
     pub rebind_payload: Vec<u8>,
     pub origin: VmExecutionOrigin,
+    /// Present only for an authorized direct Host expression owned by a live form.
+    pub form_scope: Option<crate::RuntimeHostScope>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -97,6 +122,13 @@ pub(crate) struct Fiber {
     pub state: FiberState,
     pub backward_branches_without_progress: u64,
     pub consecutive_budget_exhaustions: u32,
+    pub fault_hook: Option<PendingFaultHook>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct PendingFaultHook {
+    pub original: VmFault,
+    pub original_frame_depth: usize,
 }
 
 impl Fiber {
@@ -119,6 +151,11 @@ impl Fiber {
     pub(crate) fn clear_runtime_forms(&mut self) {
         for frame in &mut self.frames {
             frame.runtime_form = None;
+            frame.user_calls.clear();
+            frame.existvar_checks.clear();
+            frame.map_calls.clear();
+            frame.bit_calls.clear();
+            frame.match_calls.clear();
         }
     }
 }
@@ -137,6 +174,9 @@ pub struct Vm {
     pub(crate) next_request: u64,
     pub(crate) next_generation: u64,
     pub(crate) pending_reload: Option<HotReloadPlan>,
+    pub(crate) compatibility_warning_sites: BTreeSet<(GenerationId, SymbolKey, usize, u8)>,
+    pub(crate) pending_compatibility_warnings:
+        Vec<crate::interpreter::compatibility_diagnostics::CompatibilityWarning>,
     pub(crate) debug: DebugState,
     pub(crate) regex_cache: RegexCache,
     pub(crate) find_element_cache: HashMap<FindElementCacheKey, i64>,

@@ -6,6 +6,8 @@ use crate::{ConfigValue, catalog, tui_default, web_default};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ConfigStore {
+    #[serde(default)]
+    pub(crate) compatibility_profile: erabasic_compat::CompatibilityProfileId,
     pub(crate) values: BTreeMap<String, ConfigValue>,
     pub(crate) fixed: BTreeMap<String, bool>,
     // Source tracking is derived from project configuration documents. It is intentionally
@@ -21,6 +23,7 @@ impl Default for ConfigStore {
             .map(|spec| (spec.code.to_ascii_uppercase(), spec.default))
             .collect();
         Self {
+            compatibility_profile: erabasic_compat::CompatibilityProfileId::default(),
             values,
             fixed: BTreeMap::new(),
             specified: BTreeSet::new(),
@@ -29,6 +32,12 @@ impl Default for ConfigStore {
 }
 
 impl ConfigStore {
+    /// Language profile is project state, never a client preference.
+    #[must_use]
+    pub const fn compatibility_profile(&self) -> erabasic_compat::CompatibilityProfileId {
+        self.compatibility_profile
+    }
+
     pub(crate) fn assign_explicit(&mut self, code: &str, value: ConfigValue) {
         let code = code.to_ascii_uppercase();
         self.values.insert(code.clone(), value);

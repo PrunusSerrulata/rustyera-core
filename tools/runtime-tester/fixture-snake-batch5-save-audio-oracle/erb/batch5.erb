@@ -1,0 +1,103 @@
+@SYSTEM_TITLE
+PRINTL BATCH5_READY
+INPUT
+RETURN
+
+@SYSTEM_LOADEND
+RETURN
+
+@EVENTLOAD
+PRINTL B5_LOAD_DONE
+INPUT
+RETURN
+
+@B5_WRITE_NORMAL
+ADDCHARA 0
+B5_INT = 505001
+B5_STR '= "normal-文字"
+B5_I1:0 = 101
+B5_I1:1 = -102
+B5_I1:2 = 103
+B5_I2:0:0 = 201
+B5_I2:0:1 = 202
+B5_I2:1:0 = 203
+B5_I2:1:1 = 204
+B5_I3:0:0:0 = 301
+B5_I3:1:1:1 = 308
+B5_S1:0 '= "s1-zero"
+B5_S1:2 '= "s1-two"
+B5_S2:0:1 '= "s2-zero-one"
+B5_S2:1:0 '= "s2-one-zero"
+B5_S3:0:0:1 '= "s3-a"
+B5_S3:1:1:0 '= "s3-b"
+B5_CINT:0:0 = 401
+B5_CINT:0:1 = 402
+B5_CSTR:0:0 '= "chara-zero"
+B5_CSTR:0:1 '= "角色-one"
+B5_DUMMY = MAP_CREATE("b5_map")
+B5_DUMMY = MAP_SET("b5_map", "key", "normal-map")
+B5_DUMMY = XML_DOCUMENT("b5_xml", "<root value='normal-xml'/>")
+B5_DUMMY = DT_CREATE("b5_dt")
+B5_DUMMY = DT_COLUMN_ADD("b5_dt", "n", "int64", 1)
+B5_DUMMY = DT_COLUMN_ADD("b5_dt", "s", "string", 1)
+B5_DUMMY = DT_ROW_ADD("b5_dt", "n", 505, "s", "normal-dt")
+SAVEDATA 0, "batch5-normal"
+RETURN RESULT
+
+@B5_WRITE_GLOBAL
+B5_GINT:0 = 601
+B5_GINT:1 = -602
+B5_GSTR:0 '= "global-zero"
+B5_GSTR:1 '= "全局-one"
+B5_GSCALAR = 603
+B5_GSSCALAR '= "global-scalar"
+B5_GI2:1:0 = 620
+B5_GI3:1:1:1 = 638
+B5_GS2:0:1 '= "global-s2"
+B5_GS3:1:0:1 '= "global-s3"
+B5_DUMMY = MAP_CREATE("b5_global_map")
+B5_DUMMY = MAP_SET("b5_global_map", "key", "global-map")
+B5_DUMMY = XML_DOCUMENT("b5_global_xml", "<root value='global-xml'/>")
+B5_DUMMY = DT_CREATE("b5_global_dt")
+B5_DUMMY = DT_COLUMN_ADD("b5_global_dt", "n", "int64", 1)
+B5_DUMMY = DT_COLUMN_ADD("b5_global_dt", "s", "string", 1)
+B5_DUMMY = DT_ROW_ADD("b5_global_dt", "n", 606, "s", "global-dt")
+SAVEGLOBAL
+RETURN RESULT
+
+@B5_READ_GLOBAL
+LOADGLOBAL
+RETURN RESULT
+
+@B5_AUDIO_HEADLESS
+RESULT:20 = GETSOUNDORBGMINFO(-2)
+RESULT:21 = ISPLAYINGSOUND(-1)
+RESULT:22 = SOUNDCONTROL(-1, 0)
+RESULT:23 = SOUNDCONTROL(0, 9)
+RESULT:24 = SOUNDCONTROL(0, 0)
+RESULT:25 = SOUNDCONTROL(0, 1)
+RESULT:26 = SOUNDCONTROL(0, 2)
+RESULT:27 = SOUNDCONTROL(0, 3, 250)
+RESULT:28 = SOUNDCONTROL(0, 3, 250, 1)
+RESULT:29 = ISPLAYINGBGM()
+RESULT:30 = BGMCONTROL(9)
+RESULT:31 = BGMCONTROL(0)
+RESULT:32 = BGMCONTROL(1)
+RESULT:33 = BGMCONTROL(2)
+RESULT:34 = BGMCONTROL(3, 250)
+RESULT:35 = BGMCONTROL(3, 250, 1)
+RETURN RESULT:20
+
+@B5_SENTINEL
+ADDCHARA 0
+B5_INT = 909001
+B5_STR '= "sentinel"
+B5_I3:1:1:1 = 909003
+B5_CINT:0:1 = 909004
+B5_DUMMY = MAP_CREATE("b5_map")
+B5_DUMMY = MAP_SET("b5_map", "key", "sentinel-map")
+B5_DUMMY = XML_DOCUMENT("b5_xml", "<root value='sentinel-xml'/>")
+B5_DUMMY = DT_CREATE("b5_dt")
+B5_DUMMY = DT_COLUMN_ADD("b5_dt", "n", "int64", 1)
+B5_DUMMY = DT_ROW_ADD("b5_dt", "n", 909005)
+RETURN RESULT

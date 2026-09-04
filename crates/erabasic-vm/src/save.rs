@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use erabasic_bytecode::{BytecodePersistence, BytecodeStorage, BytecodeType, SymbolKey};
 use serde::{Deserialize, Serialize};
@@ -144,6 +144,11 @@ impl Vm {
     ///
     /// Returns an error when the save's game code or version is incompatible.
     pub fn reset_with_era_state(&mut self, state: &EraState) -> Result<EraStateReport, VmError> {
+        if !self.memory.array_leases.protected.is_empty() {
+            return Err(VmError::InvalidState(
+                "cannot reset an isolated candidate with protected parent array leases".into(),
+            ));
+        }
         let artifact = self.artifact().clone();
         let (memory, report) = prepare_ordinary_memory(&artifact, &self.memory, state)?;
         self.memory = memory;
@@ -156,6 +161,7 @@ impl Vm {
             fiber.state = FiberState::Cancelled;
         }
         self.fibers.clear();
+        self.memory.array_leases.retain(&BTreeSet::new());
         self.runnable.clear();
         self.primary_fiber = None;
         self.next_fiber = 1;
@@ -544,6 +550,20 @@ mod tests {
         let artifact = BytecodeArtifact {
             manifest: ArtifactManifest::new(Digest::default()),
             call_compatibility: erabasic_bytecode::BytecodeCallCompatibility::default(),
+            runtime_builtins: Vec::new(),
+            runtime_native_authorizations: Vec::new(),
+            runtime_host_authorizations: Vec::new(),
+            runtime_staged_authorizations: Vec::new(),
+            runtime_variables: vec![erabasic_bytecode::RuntimeVariableSymbol {
+                match_name_rejection: None,
+                character_disposal: erabasic_bytecode::CharacterArrayDisposal::Preserve,
+                key: definition.key,
+                reference: false,
+                reference_semantics: erabasic_bytecode::RuntimeReferenceSemantics {
+                    is_const: false,
+                    can_restructure: false,
+                },
+            }],
             project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
                 .data
                 .unwrap(),

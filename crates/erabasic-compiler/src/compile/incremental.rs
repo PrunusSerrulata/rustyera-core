@@ -24,6 +24,31 @@ pub(super) fn create_incremental_patch(
         base_artifact_id: metadata.manifest.artifact_id,
         base_execution_id: metadata.manifest.program_version.execution_id,
         target_manifest: target.manifest.clone(),
+        runtime_builtins: exact_base
+            .map(|artifact| &artifact.runtime_builtins)
+            .or_else(|| compact_metadata.map(|metadata| &metadata.runtime_builtins))
+            .is_none_or(|base| base != &target.runtime_builtins)
+            .then(|| target.runtime_builtins.clone()),
+        runtime_variables: exact_base
+            .map(|artifact| &artifact.runtime_variables)
+            .or_else(|| compact_metadata.map(|metadata| &metadata.runtime_variables))
+            .is_none_or(|base| base != &target.runtime_variables)
+            .then(|| target.runtime_variables.clone()),
+        runtime_native_authorizations: exact_base
+            .map(|artifact| &artifact.runtime_native_authorizations)
+            .or_else(|| compact_metadata.map(|metadata| &metadata.runtime_native_authorizations))
+            .is_none_or(|base| base != &target.runtime_native_authorizations)
+            .then(|| target.runtime_native_authorizations.clone()),
+        runtime_host_authorizations: exact_base
+            .map(|artifact| &artifact.runtime_host_authorizations)
+            .or_else(|| compact_metadata.map(|metadata| &metadata.runtime_host_authorizations))
+            .is_none_or(|base| base != &target.runtime_host_authorizations)
+            .then(|| target.runtime_host_authorizations.clone()),
+        runtime_staged_authorizations: exact_base
+            .map(|artifact| &artifact.runtime_staged_authorizations)
+            .or_else(|| compact_metadata.map(|metadata| &metadata.runtime_staged_authorizations))
+            .is_none_or(|base| base != &target.runtime_staged_authorizations)
+            .then(|| target.runtime_staged_authorizations.clone()),
         call_compatibility: exact_base
             .map(|artifact| artifact.call_compatibility)
             .or_else(|| compact_metadata.map(|metadata| metadata.call_compatibility))

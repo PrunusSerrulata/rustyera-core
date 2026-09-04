@@ -63,150 +63,45 @@ impl Vm {
                         "CALLEVENT is not allowed inside an event dispatch",
                     ));
                 }
-                let frame_id = self.allocate_frame_id();
-                let generation = self
+                let non_event_target = self
                     .generations
                     .get(&position.generation)
-                    .expect("validated frame generation exists");
-                let artifact = &generation.artifact;
-                let Some(group) = artifact
-                    .event_groups
+                    .expect("validated frame generation exists")
+                    .artifact
+                    .functions
                     .iter()
-                    .find(|group| group.name.eq_ignore_ascii_case(&name))
-                else {
-                    if artifact.functions.iter().any(|function| {
+                    .any(|function| {
                         function.name.eq_ignore_ascii_case(&name)
                             && function.kind != BytecodeFunctionKind::Event
-                    }) {
+                    });
+                if !self.start_event_dispatch(fiber, position.generation, &name)? {
+                    if non_event_target {
                         return Err(StepError::new(
                             VmFaultCode::TypeMismatch,
                             format!("CALLEVENT target {name} is not an event"),
                         ));
                     }
                     return Ok(Some(StepOutcome::Continue));
-                };
-                let mut pending = std::collections::VecDeque::new();
-                let groups: &[(&[erabasic_bytecode::BytecodeEventEntry], u8)] =
-                    if group.only.is_empty() {
-                        &[(&group.priority, 1), (&group.normal, 2), (&group.later, 3)]
-                    } else {
-                        &[(&group.only, 0)]
-                    };
-                for (entries, group_id) in groups {
-                    pending.extend(entries.iter().map(|entry| EventDispatchEntry {
-                        function: entry.function,
-                        single: entry.single,
-                        group: *group_id,
-                    }));
                 }
-                let Some(active) = pending.pop_front() else {
-                    return Ok(Some(StepOutcome::Continue));
-                };
-                if fiber.frames.len() >= self.config.maximum_call_depth {
-                    return Err(StepError::new(
-                        VmFaultCode::ResourceLimit,
-                        "maximum call depth exceeded",
-                    ));
-                }
-                let target = generation.function(active.function).ok_or_else(|| {
-                    StepError::new(VmFaultCode::MissingSymbol, "event function is missing")
-                })?;
-                self.memory.ensure_function_statics(
-                    position.generation,
-                    target.key,
-                    generation.function_statics(target.key),
-                );
-                fiber
-                    .frames
-                    .last_mut()
-                    .expect("frame exists")
-                    .event_dispatch = Some(EventDispatch { active, pending });
-                fiber.frames.push(make_frame(
-                    frame_id,
-                    position.generation,
-                    target,
-                    generation.function_locals(target.key),
-                    Vec::new(),
-                    false,
-                    true,
-                ));
             }
             Opcode::Return => {
                 let has_value = position.encoded.payload.first().copied().unwrap_or(0) != 0;
                 let value = has_value
                     .then(|| pop(&mut fiber.frames.last_mut().expect("frame exists").stack))
                     .transpose()?;
-                let returned_frame = fiber.frames.pop().expect("returning frame exists");
-                self.confirm_path_memo_result_read(
-                    fiber.id,
-                    returned_frame.id,
-                    position.instruction,
-                );
-                if !fiber.frames.is_empty() {
-                    // Completing a function call is finite forward progress even when the
-                    // enclosing calculation needs more than one caller-visible run budget.
-                    // Keep the backward-branch counter intact so a loop that repeatedly calls
-                    // a helper is still covered by the dedicated control-flow watchdog.
-                    fiber.consecutive_budget_exhaustions = 0;
-                }
-                if let Some(key) = self.active_function_memos.remove(&returned_frame.id)
-                    && policy.allow_function_memo
-                    && let Some(value) = value.as_ref()
-                    && let Some(entry) = self.capture_function_memo_entry(&key, value.clone())
+                match self
+                    .return_frame(
+                        fiber,
+                        value,
+                        Some(position.instruction),
+                        policy.allow_function_memo,
+                    )
+                    .map_err(map_vm_error)?
                 {
-                    self.cache_function_memo(key, entry);
-                }
-                self.complete_path_memo(fiber, returned_frame.id, value.as_ref());
-                if let Some(caller) = fiber.frames.last_mut() {
-                    if returned_frame.return_value_to_caller
-                        && let Some(value) = value.clone()
-                    {
-                        caller.stack.push(value);
+                    crate::state::FrameReturn::Continue => {}
+                    crate::state::FrameReturn::Completed(value) => {
+                        return Ok(Some(StepOutcome::Completed(value)));
                     }
-                    let next_event = caller.event_dispatch.as_mut().and_then(|dispatch| {
-                        if dispatch.active.single && value == Some(VmValue::Integer(1)) {
-                            while dispatch
-                                .pending
-                                .front()
-                                .is_some_and(|entry| entry.group == dispatch.active.group)
-                            {
-                                dispatch.pending.pop_front();
-                            }
-                        }
-                        dispatch.pending.pop_front().inspect(|next| {
-                            dispatch.active = next.clone();
-                        })
-                    });
-                    if let Some(next) = next_event {
-                        let generation = caller.generation;
-                        let frame_id = self.allocate_frame_id();
-                        let program = self
-                            .generations
-                            .get(&generation)
-                            .expect("validated frame generation exists");
-                        let target = program.function(next.function).ok_or_else(|| {
-                            StepError::new(VmFaultCode::MissingSymbol, "event function is missing")
-                        })?;
-                        self.memory.ensure_function_statics(
-                            generation,
-                            target.key,
-                            program.function_statics(target.key),
-                        );
-                        fiber.frames.push(make_frame(
-                            frame_id,
-                            generation,
-                            target,
-                            program.function_locals(target.key),
-                            Vec::new(),
-                            false,
-                            true,
-                        ));
-                    } else if caller.event_dispatch.is_some() {
-                        caller.event_dispatch = None;
-                    }
-                } else {
-                    fiber.state = FiberState::Completed(value.clone());
-                    return Ok(Some(StepOutcome::Completed(value)));
                 }
             }
             Opcode::Yield => return Ok(Some(StepOutcome::Yielded)),

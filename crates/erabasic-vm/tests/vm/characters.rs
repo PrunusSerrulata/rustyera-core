@@ -1,6 +1,97 @@
 use super::*;
 
 #[test]
+fn getcsvno_methods_query_raw_loaded_names_in_snake_profile() {
+    for profile in [erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake] {
+        let files = ProjectFiles {
+            csv: [
+                (
+                    "CHARA90.CSV",
+                    "NO,9\nNAME,Shared\nCALLNAME,Call\nNICKNAME,Nick\nMASTERNAME,Master\n",
+                ),
+                (
+                    "CHARA20.CSV",
+                    "NO,2\nNAME,Shared\nCALLNAME,Call\nNICKNAME,Nick\nMASTERNAME,Master\n",
+                ),
+                ("CHARA1.CSV", "NO,1\nNAME,OnlyName\n"),
+                (
+                    "CHARA30.CSV",
+                    "NO,3\nNAME,\nCALLNAME,\nNICKNAME,\nMASTERNAME,\n",
+                ),
+            ]
+            .into_iter()
+            .map(|(path, content)| FrontendFile {
+                source_path: None,
+                relative_path: path.into(),
+                payload: CsvFilePayload::Utf8(content.into()),
+            })
+            .collect(),
+            erb: Vec::new(),
+        };
+        let identity = erabasic_compat::CompatibilityIdentity::for_profile(profile);
+        let data = load_project(
+            &files,
+            &CsvLoadOptions {
+                compatibility: identity.clone(),
+                compatible_call_name: true,
+                ..CsvLoadOptions::default()
+            },
+        )
+        .data
+        .unwrap();
+        let artifact = compile_source_with_data_and_options(
+            concat!(
+                "@SYSTEM_TITLE\n",
+                "RESULT:0 = GETCSVNOBYNAME(\"Shared\")\n",
+                "RESULT:1 = GETCSVNOBYCALLNAME(\"Call\")\n",
+                "RESULT:2 = GETCSVNOBYNICKNAME(\"Nick\")\n",
+                "RESULT:3 = GETCSVNOBYMASTERNAME(\"Master\")\n",
+                "RESULT:4 = GETCSVNOBYNAME(\"shared\")\n",
+                "RESULT:5 = GETCSVNOBYNAME(\"\")\n",
+                "RESULT:6 = GETCSVNOBYCALLNAME(\"OnlyName\")\n",
+                "RESULT:7 = CSVCALLNAME(1) == \"OnlyName\"\n",
+                "RESULT:8 = GETCSVNOBYCALLNAME(\"\")\n",
+                "RESULT:9 = GETCSVNOBYNICKNAME(\"\")\n",
+                "RESULT:10 = GETCSVNOBYMASTERNAME(\"\")\n",
+                "RETURN RESULT\n",
+            ),
+            data,
+            &AnalyzerOptions {
+                compatibility: identity,
+                ..AnalyzerOptions::default()
+            },
+        );
+        let result = artifact
+            .globals
+            .iter()
+            .find(|global| global.name == "RESULT")
+            .unwrap()
+            .key;
+        let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+        let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+        let fiber = vm
+            .spawn_entry(artifact.functions[0].key, Vec::new())
+            .unwrap();
+        let report = vm.run_slice(
+            &mut ReadyHost::default(),
+            &mut natives,
+            RunBudget::default(),
+        );
+        assert!(
+            matches!(vm.fiber_status(fiber), Some(FiberStatus::Completed(_))),
+            "{profile}: {report:?}"
+        );
+        for (index, expected) in [2, 2, 2, 2, -1, 3, -1, 1, 3, 3, 3].into_iter().enumerate() {
+            assert_eq!(
+                vm.read_variable(result, &[index as u64], None),
+                Ok(VmValue::Integer(expected)),
+                "{profile}: RESULT:{index}"
+            );
+        }
+    }
+}
+
+#[test]
 fn direct_runtime_fills_validate_the_complete_batch_before_mutation() {
     let artifact = compile_source("@SYSTEM_TITLE\nRETURN RESULT\n");
     let flag = artifact
@@ -378,6 +469,7 @@ fn character_csv_queries_use_loaded_templates_and_character_lookup() {
     let loaded = load_project(
         &ProjectFiles {
             csv: vec![FrontendFile {
+                source_path: None,
                 relative_path: "CHARA0.CSV".into(),
                 payload: CsvFilePayload::Utf8("NO,10\nNAME,Alice\nBASE,0,100\nCFLAG,1,7\n".into()),
             }],
@@ -488,6 +580,7 @@ fn normal_addchara_accepts_nonzero_cflag_zero_when_sp_compatibility_is_disabled(
     let loaded = load_project(
         &ProjectFiles {
             csv: vec![FrontendFile {
+                source_path: None,
                 relative_path: "CHARA0.CSV".into(),
                 payload: CsvFilePayload::Utf8("NO,0\nNAME,Player\nCFLAG,0,1900\n".into()),
             }],
@@ -510,6 +603,7 @@ fn resetdata_clears_initial_characters_before_script_insertion() {
     let loaded = load_project(
         &ProjectFiles {
             csv: vec![FrontendFile {
+                source_path: None,
                 relative_path: "Chara/CHARA0.CSV".into(),
                 payload: CsvFilePayload::Utf8("NO,0\nNAME,Master\n".into()),
             }],
@@ -629,28 +723,161 @@ fn regexpmatch_writes_reference_capture_outputs_atomically() {
 
 #[test]
 fn initrand_and_dumprand_exchange_all_randdata_state_atomically() {
-    let artifact = compile_source(
-        "@SYSTEM_TITLE\nDUMPRAND\nRESULT:0 = RAND:1000000\nINITRAND\nRESULT:1 = RAND:1000000\nRETURN RESULT\n",
-    );
-    let entry = artifact.functions[0].key;
-    let result = artifact
-        .globals
-        .iter()
-        .find(|global| global.name == "RESULT")
-        .expect("RESULT")
-        .key;
-    let mut natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 1234);
-    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
-    vm.spawn_entry(entry, Vec::new()).unwrap();
-    vm.run_slice(
-        &mut ReadyHost::default(),
-        &mut natives,
-        RunBudget::default(),
-    );
-    assert_eq!(
-        vm.read_variable(result, &[0], None),
-        vm.read_variable(result, &[1], None)
-    );
+    for profile in [
+        erabasic_compat::CompatibilityProfileId::EmueraEm,
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    ] {
+        let artifact = compile_source_with_options(
+            "@SYSTEM_TITLE\nDUMPRAND\nRESULT:0 = RAND:1000000\nRANDOMIZE 4321\nINITRAND\nRESULT:1 = RAND:1000000\nRETURN RESULT\n",
+            &AnalyzerOptions {
+                compatibility: erabasic_compat::CompatibilityIdentity::for_profile(profile),
+                ..AnalyzerOptions::default()
+            },
+        );
+        let entry = artifact.functions[0].key;
+        let global_key = |name| {
+            artifact
+                .globals
+                .iter()
+                .find(|global| global.name == name)
+                .unwrap()
+                .key
+        };
+        let result = global_key("RESULT");
+        let randdata = global_key("RANDDATA");
+        let mut natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 1234);
+        let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+        let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+        let report = vm.run_slice(
+            &mut ReadyHost::default(),
+            &mut natives,
+            RunBudget::default(),
+        );
+        assert!(
+            matches!(vm.fiber_status(fiber), Some(FiberStatus::Completed(_))),
+            "{report:?}"
+        );
+        assert!(matches!(
+            vm.read_variable(randdata, &[0], None),
+            Ok(VmValue::Integer(value)) if value != 0
+        ));
+        assert_eq!(
+            vm.read_variable(randdata, &[624], None),
+            Ok(VmValue::Integer(624))
+        );
+        assert_eq!(
+            vm.read_variable(result, &[0], None),
+            vm.read_variable(result, &[1], None),
+            "{profile}",
+        );
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn rand_stream_survives_stable_snapshot_and_temporary_reseed_replay() {
+    for profile in [
+        erabasic_compat::CompatibilityProfileId::EmueraEm,
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    ] {
+        let artifact = compile_source_with_options(
+            concat!(
+                "@SYSTEM_TITLE\nRESULT:10 = RAND:1000000000\nDUMPRAND\nWAIT\n",
+                "IF FLAG:0\nRANDOMIZE 4321\nRESULT:9 = RAND:1000000000\nINITRAND\nENDIF\n",
+                "RESULT:11 = RAND:1000000000\nRESULT:12 = RAND:1000000000\n",
+                "RESULT:13 = RAND:1000000000\nDUMPRAND\nWAIT\nRETURN RESULT\n",
+            ),
+            &AnalyzerOptions {
+                compatibility: erabasic_compat::CompatibilityIdentity::for_profile(profile),
+                ..AnalyzerOptions::default()
+            },
+        );
+        let key = |name| {
+            artifact
+                .globals
+                .iter()
+                .find(|global| global.name == name)
+                .unwrap()
+                .key
+        };
+        let observed = |vm: &Vm| {
+            let samples = (11..14)
+                .map(|index| vm.read_variable(key("RESULT"), &[index], None).unwrap())
+                .collect::<Vec<_>>();
+            let state = (0..625)
+                .map(|index| vm.read_variable(key("RANDDATA"), &[index], None).unwrap())
+                .collect::<Vec<_>>();
+            (samples, state)
+        };
+        let mut host = PendingHost {
+            stability: HostWaitStability::StableInput,
+            rebound: Vec::new(),
+        };
+        let mut natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 1234);
+        let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+        let fiber = vm
+            .spawn_entry(artifact.functions[0].key, Vec::new())
+            .unwrap();
+        let report = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+        let Some(FiberStatus::WaitingHost(request)) = vm.fiber_status(fiber) else {
+            panic!("{profile}: expected first stable wait: {report:?}");
+        };
+        let saved = vm.encode_snapshot(&natives).unwrap();
+        vm.resume_host(request, HostReady::empty()).unwrap();
+        let report = vm.run_slice(&mut host, &mut natives, RunBudget::default());
+        assert!(
+            matches!(vm.fiber_status(fiber), Some(FiberStatus::WaitingHost(_))),
+            "{report:?}"
+        );
+        let expected = observed(&vm);
+
+        for temporary_replay in [false, true] {
+            let mut restored_natives =
+                NativeServiceRegistry::for_artifact_with_seed(&artifact, 9876);
+            let mut restore_host = PendingHost {
+                stability: HostWaitStability::StableInput,
+                rebound: Vec::new(),
+            };
+            let mut restored = Vm::restore_snapshot(
+                validated(&artifact),
+                VmConfig::default(),
+                VmSnapshot::decode(&saved, VmConfig::default().maximum_snapshot_bytes).unwrap(),
+                &mut restore_host,
+                &mut restored_natives,
+            )
+            .unwrap();
+            assert_eq!(restore_host.rebound.len(), 1);
+            restored
+                .write_variable(
+                    key("FLAG"),
+                    &[0],
+                    None,
+                    VmValue::Integer(i64::from(temporary_replay)),
+                )
+                .unwrap();
+            let Some(FiberStatus::WaitingHost(request)) = restored.fiber_status(fiber) else {
+                panic!("restored RAND artifact must retain the stable wait");
+            };
+            restored.resume_host(request, HostReady::empty()).unwrap();
+            let report = restored.run_slice(
+                &mut restore_host,
+                &mut restored_natives,
+                RunBudget::default(),
+            );
+            assert!(
+                matches!(
+                    restored.fiber_status(fiber),
+                    Some(FiberStatus::WaitingHost(_))
+                ),
+                "{report:?}"
+            );
+            assert_eq!(
+                observed(&restored),
+                expected,
+                "{profile}: temporary replay={temporary_replay}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -805,4 +1032,115 @@ fn cancelled_host_wait_rejects_late_completion_before_reusing_id() {
     ));
     assert_eq!(vm.retire_terminal_fibers(), 1);
     assert_eq!(vm.spawn_entry(entry, Vec::new()).unwrap(), fiber);
+}
+
+#[test]
+fn getcsvno_form_calls_use_loaded_raw_names_without_native_imports() {
+    let identity = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let data = load_project(
+        &ProjectFiles {
+            csv: vec![FrontendFile {
+                source_path: None,
+                relative_path: "CHARA90.CSV".into(),
+                payload: CsvFilePayload::Utf8(
+                    "NO,7\nNAME,Raw\nCALLNAME,Call\nNICKNAME,Nick\nMASTERNAME,Master\n".into(),
+                ),
+            }],
+            erb: Vec::new(),
+        },
+        &CsvLoadOptions {
+            compatibility: identity.clone(),
+            ..CsvLoadOptions::default()
+        },
+    )
+    .data
+    .unwrap();
+    let artifact = compile_source_with_data_and_options(
+        r#"@SYSTEM_TITLE
+RESULTS:0 '= STRFORM("{GETCSVNOBYNAME(\"Raw\")}:{GETCSVNOBYCALLNAME(\"Call\")}:{GETCSVNOBYNICKNAME(\"Nick\")}:{GETCSVNOBYMASTERNAME(\"Master\")}")
+RETURN
+"#,
+        data,
+        &AnalyzerOptions {
+            compatibility: identity,
+            ..AnalyzerOptions::analysis_mode()
+        },
+    );
+    assert!(
+        !artifact
+            .native_imports
+            .iter()
+            .any(|native| native.import.name.starts_with("getcsvno"))
+    );
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let fiber = vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        matches!(vm.fiber_status(fiber), Some(FiberStatus::Completed(_))),
+        "{report:?}"
+    );
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .unwrap()
+        .key;
+    assert_eq!(
+        vm.read_variable(result, &[0], None),
+        Ok(VmValue::String("7:7:7:7".into()))
+    );
+}
+
+#[test]
+fn raw_character_name_presence_changes_compiled_artifact_identity() {
+    let identity = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let compile = |callname: &str| {
+        let data = load_project(
+            &ProjectFiles {
+                csv: vec![FrontendFile {
+                    source_path: None,
+                    relative_path: "CHARA7.CSV".into(),
+                    payload: CsvFilePayload::Utf8(format!("NO,7\nNAME,Alice\n{callname}")),
+                }],
+                erb: Vec::new(),
+            },
+            &CsvLoadOptions {
+                compatibility: identity.clone(),
+                compatible_call_name: true,
+                ..CsvLoadOptions::default()
+            },
+        )
+        .data
+        .unwrap();
+        compile_source_with_data_and_options(
+            "@SYSTEM_TITLE\nRESULT = GETCSVNOBYCALLNAME(\"\")\nRETURN\n",
+            data,
+            &AnalyzerOptions {
+                compatibility: identity.clone(),
+                ..AnalyzerOptions::analysis_mode()
+            },
+        )
+    };
+    let missing = compile("");
+    let explicit = compile("CALLNAME,\n");
+    assert_eq!(
+        missing.project_data.static_data.characters,
+        explicit.project_data.static_data.characters
+    );
+    assert_ne!(missing.manifest.artifact_id, explicit.manifest.artifact_id);
 }

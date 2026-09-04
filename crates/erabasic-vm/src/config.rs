@@ -118,6 +118,7 @@ pub struct VmRunReport {
     pub events: Vec<VmEvent>,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FiberStatus {
     Runnable,
@@ -144,4 +145,16 @@ pub struct VmExecutionOrigin {
     pub instruction: u32,
     pub command: String,
     pub source: Option<ResolvedSourceLocation>,
+}
+
+/// VM-owned occurrence of a direct Host expression. This identity is never supplied
+/// by a frontend; runtime uses it only to retain or discard its own staged resources.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeHostScope {
+    pub fiber: crate::FiberId,
+    pub frame: crate::FrameId,
+    pub generation: GenerationId,
+    pub function: erabasic_bytecode::SymbolKey,
+    pub instruction: u32,
+    pub occurrence: u64,
 }

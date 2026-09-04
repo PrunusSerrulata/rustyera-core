@@ -27,8 +27,7 @@ impl Builder<'_> {
             }
             HirArgument::Omitted => {
                 // EraBasic can distinguish an omitted operand from an explicit zero. The
-                // internal call ABI reserves i64::MIN until bytecode gains a first-class
-                // omitted value.
+                // physical call ABI pairs this sentinel with explicit omission metadata.
                 self.emit(opcode::push_integer(i64::MIN), location);
                 BytecodeType::Integer
             }
@@ -68,7 +67,48 @@ impl Builder<'_> {
                 }
             }
             HirExprKind::Call { target, arguments } => {
+                // These built-ins must resolve the method before evaluating fallback or actuals.
+                if let CallTarget::Builtin { name } = target {
+                    if let Some(result) = self.lower_key_query(name, arguments, location) {
+                        return result;
+                    }
+                    if let Some(result) = self.lower_map_call(name, arguments, location) {
+                        return result;
+                    }
+                    if let Some(result) = self.lower_bit_call(name, arguments, location) {
+                        return result;
+                    }
+                    if let Some(result) = self.lower_match(name, arguments, location) {
+                        return result;
+                    }
+                    if let Some(result) = self.lower_existvar(name, arguments, location) {
+                        return result;
+                    }
+                    if let Some(result) = self.lower_html_query(name, arguments, location) {
+                        return result;
+                    }
+                    let method_result = match name.as_str() {
+                        "GETMETH" => Some(erabasic_bytecode::MethodResult::Integer),
+                        "GETMETHS" => Some(erabasic_bytecode::MethodResult::String),
+                        _ => None,
+                    };
+                    if let Some(method_result) = method_result {
+                        self.lower_expression_method(arguments, method_result, location);
+                        return method_result.bytecode_type();
+                    }
+                }
                 let builtin = matches!(target, CallTarget::Builtin { .. });
+                let omitted_arguments = if builtin {
+                    arguments
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, argument)| {
+                            matches!(argument, HirCallArgument::Omitted).then_some(index)
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
                 let parameter_types: Vec<_> = if matches!(target, CallTarget::User { .. }) {
                     Vec::new()
                 } else {
@@ -105,15 +145,36 @@ impl Builder<'_> {
                                     ),
                                 ));
                             }
-                            if arguments.len() > target_function.parameters.len() {
-                                self.diagnostics.push(CompilerDiagnostic::at(
-                                    CompilerDiagnosticCode::InvalidHir,
-                                    location,
+                            self.reject_excess_user_arguments(
+                                arguments.len(),
+                                target_function.parameters.len(),
+                                location,
+                                || {
                                     format!(
                                         "method {} receives too many arguments",
                                         target_function.name
-                                    ),
-                                ));
+                                    )
+                                },
+                            );
+                            if target_function.parameters.iter().any(|parameter| {
+                                self.context
+                                    .program
+                                    .variables
+                                    .get(parameter.target.variable.0 as usize)
+                                    .is_some_and(|variable| variable.reference)
+                            }) {
+                                let result = match target_function.return_type {
+                                    SemanticType::String => erabasic_bytecode::MethodResult::String,
+                                    _ => erabasic_bytecode::MethodResult::Integer,
+                                };
+                                self.emit(opcode::push_string(&target_function.name), location);
+                                self.lower_user_call_actuals(
+                                    arguments,
+                                    result.into(),
+                                    false,
+                                    location,
+                                );
+                                return result.bytecode_type();
                             }
                             let mut user_parameter_types = Vec::new();
                             for (index, parameter) in target_function.parameters.iter().enumerate()
@@ -235,20 +296,22 @@ impl Builder<'_> {
                         }
                     }
                     CallTarget::Builtin { name } => {
-                        self.emit_runtime_call(
+                        self.emit_runtime_call_with_omissions(
                             name,
                             &parameter_types,
                             Some(result),
                             false,
+                            &omitted_arguments,
                             location,
                         );
                     }
                     CallTarget::Extension { name } => {
-                        self.emit_runtime_call(
+                        self.emit_runtime_call_with_omissions(
                             name,
                             &parameter_types,
                             Some(result),
                             true,
+                            &omitted_arguments,
                             location,
                         );
                     }

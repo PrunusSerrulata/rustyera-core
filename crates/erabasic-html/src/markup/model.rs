@@ -129,6 +129,97 @@ pub enum HtmlAlignment {
     Right,
 }
 
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum HtmlDisplayMode {
+    #[n(0)]
+    Relative,
+    #[n(1)]
+    Absolute,
+    #[n(2)]
+    AbsoluteLeftTop,
+    #[n(3)]
+    AbsoluteLeftBottom,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum HtmlVerticalAlignment {
+    #[n(0)]
+    Top,
+    #[n(1)]
+    Middle,
+    #[n(2)]
+    Bottom,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum HtmlTextRenderer {
+    #[n(0)]
+    Gdi,
+    #[n(1)]
+    Skia,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum HtmlFontEdging {
+    #[n(0)]
+    Alias,
+    #[n(1)]
+    AntiAlias,
+    #[n(2)]
+    SubpixelAntiAlias,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(index_only)]
+#[serde(rename_all = "snake_case")]
+pub enum HtmlFontHinting {
+    #[n(0)]
+    None,
+    #[n(1)]
+    Slight,
+    #[n(2)]
+    Normal,
+    #[n(3)]
+    Full,
+}
+
+#[derive(Clone, Copy, Debug, Default, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct HtmlTextRenderIntent {
+    #[n(0)]
+    pub renderer: Option<HtmlTextRenderer>,
+    #[n(1)]
+    pub edging: Option<HtmlFontEdging>,
+    #[n(2)]
+    pub hinting: Option<HtmlFontHinting>,
+}
+
+/// Canonical color-matrix intent carried by an image node.
+///
+/// Parsing produces a validated variable address. The runtime replaces it with
+/// fixed 1/256 values before the document crosses the presentation boundary.
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum HtmlColorMatrix {
+    #[n(0)]
+    Variable {
+        #[n(0)]
+        name: String,
+        #[n(1)]
+        indices: [u64; 3],
+    },
+    #[n(1)]
+    Fixed(#[n(0)] Box<[i64; 25]>),
+}
+
 #[derive(Clone, Debug, Default, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct HtmlBoxModel {
@@ -158,6 +249,13 @@ pub enum HtmlElementSemantic {
         color: Option<u32>,
         #[n(2)]
         button_color: Option<u32>,
+        /// Requested size in 1/1000 logical pixel units.
+        #[n(3)]
+        size_millipixels: Option<u32>,
+        #[n(4)]
+        vertical_alignment: Option<HtmlVerticalAlignment>,
+        #[n(5)]
+        render_intent: HtmlTextRenderIntent,
     },
     #[n(2)]
     Paragraph {
@@ -201,6 +299,13 @@ pub enum HtmlElementSemantic {
         width: Option<HtmlLength>,
         #[n(5)]
         y: Option<HtmlLength>,
+        #[n(6)]
+        x: Option<HtmlLength>,
+        #[n(7)]
+        display: HtmlDisplayMode,
+        /// Canonical variable address or runtime-resolved fixed-point matrix.
+        #[n(8)]
+        color_matrix: Option<HtmlColorMatrix>,
     },
     #[n(8)]
     Shape {
@@ -222,13 +327,13 @@ pub enum HtmlElementSemantic {
         #[n(2)]
         width: HtmlLength,
         #[n(3)]
-        height: HtmlLength,
+        height: Option<HtmlLength>,
         #[n(4)]
         depth: i32,
         #[n(5)]
         color: Option<u32>,
         #[n(6)]
-        relative: bool,
+        display: HtmlDisplayMode,
         #[n(7)]
         box_model: HtmlBoxModel,
     },
@@ -291,11 +396,43 @@ pub enum HtmlErrorKind {
     InvalidNesting,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct HtmlError {
     pub kind: HtmlErrorKind,
     pub start: usize,
     pub end: usize,
+    pub(crate) origin: super::query::HtmlQueryErrorOrigin,
+}
+
+// Provenance is routing metadata, not a change to existing debug diagnostics.
+#[allow(clippy::missing_fields_in_debug)] // Preserve existing public diagnostic text.
+impl std::fmt::Debug for HtmlError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HtmlError")
+            .field("kind", &self.kind)
+            .field("start", &self.start)
+            .field("end", &self.end)
+            .finish()
+    }
+}
+
+impl HtmlError {
+    /// Unclassified callers cannot assert trusted source-input provenance.
+    #[must_use]
+    pub const fn new(kind: HtmlErrorKind, start: usize, end: usize) -> Self {
+        Self {
+            kind,
+            start,
+            end,
+            origin: super::query::HtmlQueryErrorOrigin::NonScript,
+        }
+    }
+
+    #[must_use]
+    pub const fn origin(&self) -> super::query::HtmlQueryErrorOrigin {
+        self.origin
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

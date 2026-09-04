@@ -1,5 +1,8 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
+use erabasic_compat::{
+    CompatibilityIdentity, IntegerArithmeticPolicy, IntegerArithmeticWarning, IntegerOperation,
+};
 
 pub(super) fn console_diagnostic(code: &str, message: &str) -> DebugDiagnostic {
     DebugDiagnostic {
@@ -9,9 +12,24 @@ pub(super) fn console_diagnostic(code: &str, message: &str) -> DebugDiagnostic {
     }
 }
 
+#[cfg(test)]
 pub(super) fn parse_console_expression(
     source: &str,
     variables: &[VmDebugVariable],
+) -> Result<VmValue, (&'static str, String)> {
+    parse_console_expression_with_compatibility(
+        source,
+        variables,
+        &CompatibilityIdentity::reference(),
+        &mut Vec::new(),
+    )
+}
+
+pub(super) fn parse_console_expression_with_compatibility(
+    source: &str,
+    variables: &[VmDebugVariable],
+    compatibility: &CompatibilityIdentity,
+    diagnostics: &mut Vec<DebugDiagnostic>,
 ) -> Result<VmValue, (&'static str, String)> {
     let mut context = DefaultParserContext::default();
     for variable in variables {
@@ -36,47 +54,42 @@ pub(super) fn parse_console_expression(
             "expression parser produced no value".into(),
         )
     })?;
-    evaluate_console_expression(&expression, variables)
+    evaluate_console_expression(&expression, variables, compatibility, diagnostics)
 }
 
-pub(super) fn evaluate_console_expression(
+fn evaluate_console_expression(
     expression: &Expr,
     variables: &[VmDebugVariable],
+    compatibility: &CompatibilityIdentity,
+    diagnostics: &mut Vec<DebugDiagnostic>,
 ) -> Result<VmValue, (&'static str, String)> {
     match &expression.kind {
         ExprKind::Integer(value) => Ok(VmValue::Integer(*value)),
         ExprKind::String(value) => Ok(VmValue::String(value.clone())),
-        ExprKind::Identifier(name) => variables
-            .iter()
-            .find(|item| item.name.eq_ignore_ascii_case(name))
-            .map(|item| item.value.clone())
-            .ok_or_else(|| {
-                (
-                    "debug.console.unknown_variable",
-                    format!("{name} is not a visible scalar variable"),
-                )
-            }),
-        ExprKind::Variable { name, indices } if indices.is_empty() => variables
-            .iter()
-            .find(|item| item.name.eq_ignore_ascii_case(name))
-            .map(|item| item.value.clone())
-            .ok_or_else(|| {
-                (
-                    "debug.console.unknown_variable",
-                    format!("{name} is not a visible scalar variable"),
-                )
-            }),
+        ExprKind::Identifier(name) => console_variable(name, variables),
+        ExprKind::Variable { name, indices } if indices.is_empty() => {
+            console_variable(name, variables)
+        }
         ExprKind::Variable { .. } => Err((
             "debug.console.unsupported_expression",
             "indexed variable reads are not in the safe console subset".into(),
         )),
-        ExprKind::Group(inner) => evaluate_console_expression(inner, variables),
+        ExprKind::Group(inner) => {
+            evaluate_console_expression(inner, variables, compatibility, diagnostics)
+        }
         ExprKind::Unary { op, operand } => {
-            let evaluated = evaluate_console_expression(operand, variables)?;
+            let evaluated =
+                evaluate_console_expression(operand, variables, compatibility, diagnostics)?;
             let value = console_integer(&evaluated)?;
             match op {
                 UnaryOp::Plus => Ok(VmValue::Integer(value)),
-                UnaryOp::Minus => Ok(VmValue::Integer(value.wrapping_neg())),
+                UnaryOp::Minus => evaluate_console_arithmetic(
+                    IntegerOperation::Negate,
+                    value,
+                    None,
+                    compatibility.integer_arithmetic_policy(),
+                    diagnostics,
+                ),
                 UnaryOp::LogicalNot => Ok(VmValue::Integer(i64::from(value == 0))),
                 UnaryOp::BitNot => Ok(VmValue::Integer(!value)),
                 UnaryOp::PreIncrement | UnaryOp::PreDecrement => Err((
@@ -90,38 +103,32 @@ pub(super) fn evaluate_console_expression(
             "increment and decrement are not allowed in the transactional console".into(),
         )),
         ExprKind::Binary { op, left, right } => {
-            let left = evaluate_console_expression(left, variables)?;
-            let right = evaluate_console_expression(right, variables)?;
-            evaluate_console_binary(*op, &left, &right)
+            let left = evaluate_console_expression(left, variables, compatibility, diagnostics)?;
+            if let Some(value) =
+                console_short_circuit(*op, &left, compatibility.integer_arithmetic_policy())?
+            {
+                return Ok(value);
+            }
+            let right = evaluate_console_expression(right, variables, compatibility, diagnostics)?;
+            evaluate_console_binary(*op, &left, &right, compatibility, diagnostics)
         }
         ExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
         } => {
-            let evaluated = evaluate_console_expression(condition, variables)?;
+            let evaluated =
+                evaluate_console_expression(condition, variables, compatibility, diagnostics)?;
             let condition = console_integer(&evaluated)?;
             evaluate_console_expression(
                 if condition != 0 { then_expr } else { else_expr },
                 variables,
+                compatibility,
+                diagnostics,
             )
         }
         ExprKind::Call { name, args } => {
-            let values = args
-                .iter()
-                .map(|argument| {
-                    argument
-                        .as_ref()
-                        .ok_or_else(|| {
-                            (
-                                "debug.console.unsupported_expression",
-                                "omitted method arguments are not supported".into(),
-                            )
-                        })
-                        .and_then(|argument| evaluate_console_expression(argument, variables))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            evaluate_console_method(name, &values)
+            evaluate_console_method(name, args, variables, compatibility, diagnostics)
         }
         ExprKind::Formatted(_) => Err((
             "debug.console.unsupported_expression",
@@ -131,10 +138,52 @@ pub(super) fn evaluate_console_expression(
     }
 }
 
-pub(super) fn evaluate_console_binary(
+fn console_short_circuit(
+    op: BinaryOp,
+    left: &VmValue,
+    policy: IntegerArithmeticPolicy,
+) -> Result<Option<VmValue>, (&'static str, String)> {
+    // Retain the reference console's eager evaluation, but snake queries must
+    // not execute or diagnose a branch skipped by the compiled expression.
+    if policy == IntegerArithmeticPolicy::ReferenceWrappingV1
+        || !matches!(
+            op,
+            BinaryOp::LogicalAnd | BinaryOp::LogicalOr | BinaryOp::Nand | BinaryOp::Nor
+        )
+    {
+        return Ok(None);
+    }
+    let truthy = console_integer(left)? != 0;
+    let value = match (op, truthy) {
+        (BinaryOp::LogicalAnd, false) | (BinaryOp::Nor, true) => Some(0),
+        (BinaryOp::LogicalOr, true) | (BinaryOp::Nand, false) => Some(1),
+        _ => None,
+    };
+    Ok(value.map(VmValue::Integer))
+}
+
+fn console_variable(
+    name: &str,
+    variables: &[VmDebugVariable],
+) -> Result<VmValue, (&'static str, String)> {
+    variables
+        .iter()
+        .find(|item| item.name.eq_ignore_ascii_case(name))
+        .map(|item| item.value.clone())
+        .ok_or_else(|| {
+            (
+                "debug.console.unknown_variable",
+                format!("{name} is not a visible scalar variable"),
+            )
+        })
+}
+
+fn evaluate_console_binary(
     op: BinaryOp,
     left: &VmValue,
     right: &VmValue,
+    compatibility: &CompatibilityIdentity,
+    diagnostics: &mut Vec<DebugDiagnostic>,
 ) -> Result<VmValue, (&'static str, String)> {
     if matches!(op, BinaryOp::Equal | BinaryOp::NotEqual) {
         let equal = left == right;
@@ -146,17 +195,26 @@ pub(super) fn evaluate_console_binary(
     }
     let left = console_integer(left)?;
     let right = console_integer(right)?;
+    let arithmetic = match op {
+        BinaryOp::Multiply => Some(IntegerOperation::Multiply),
+        BinaryOp::Divide => Some(IntegerOperation::Divide),
+        BinaryOp::Modulo => Some(IntegerOperation::Modulo),
+        BinaryOp::Add => Some(IntegerOperation::Add),
+        BinaryOp::Subtract => Some(IntegerOperation::Subtract),
+        _ => None,
+    };
+    if let Some(operation) = arithmetic {
+        return evaluate_console_arithmetic(
+            operation,
+            left,
+            Some(right),
+            compatibility.integer_arithmetic_policy(),
+            diagnostics,
+        );
+    }
     // EraBasic follows the CLR's masked 64-bit shift-count behavior.
     let shift = u32::try_from(right & 63).expect("masked shift count fits u32");
     let value = match op {
-        BinaryOp::Multiply => left.wrapping_mul(right),
-        BinaryOp::Divide if right != 0 => left.wrapping_div(right),
-        BinaryOp::Modulo if right != 0 => left.wrapping_rem(right),
-        BinaryOp::Divide | BinaryOp::Modulo => {
-            return Err(("debug.console.execution_error", "division by zero".into()));
-        }
-        BinaryOp::Add => left.wrapping_add(right),
-        BinaryOp::Subtract => left.wrapping_sub(right),
         BinaryOp::ShiftLeft => left.wrapping_shl(shift),
         BinaryOp::ShiftRight => left.wrapping_shr(shift),
         BinaryOp::Less => i64::from(left < right),
@@ -171,15 +229,85 @@ pub(super) fn evaluate_console_binary(
         BinaryOp::LogicalOr => i64::from(left != 0 || right != 0),
         BinaryOp::Nand => i64::from(!(left != 0 && right != 0)),
         BinaryOp::Nor => i64::from(!(left != 0 || right != 0)),
-        BinaryOp::Equal | BinaryOp::NotEqual => unreachable!("handled above"),
+        BinaryOp::Equal
+        | BinaryOp::NotEqual
+        | BinaryOp::Multiply
+        | BinaryOp::Divide
+        | BinaryOp::Modulo
+        | BinaryOp::Add
+        | BinaryOp::Subtract => unreachable!("handled above"),
     };
     Ok(VmValue::Integer(value))
 }
 
-pub(super) fn evaluate_console_method(
-    name: &str,
-    values: &[VmValue],
+fn evaluate_console_arithmetic(
+    operation: IntegerOperation,
+    left: i64,
+    right: Option<i64>,
+    policy: IntegerArithmeticPolicy,
+    diagnostics: &mut Vec<DebugDiagnostic>,
 ) -> Result<VmValue, (&'static str, String)> {
+    // The reference console historically wraps even MIN / -1 and MIN % -1.
+    // Preserve that debugger behavior while snake uses the VM's exact policy.
+    if policy == IntegerArithmeticPolicy::ReferenceWrappingV1
+        && let Some(right) = right
+    {
+        match operation {
+            IntegerOperation::Divide if right != 0 => {
+                return Ok(VmValue::Integer(left.wrapping_div(right)));
+            }
+            IntegerOperation::Modulo if right != 0 => {
+                return Ok(VmValue::Integer(left.wrapping_rem(right)));
+            }
+            IntegerOperation::Divide | IntegerOperation::Modulo => {
+                return Err(("debug.console.execution_error", "division by zero".into()));
+            }
+            _ => {}
+        }
+    }
+    let outcome = policy
+        .evaluate(operation, left, right)
+        .map_err(|error| ("debug.console.execution_error", error.to_string()))?;
+    if let Some(warning) = outcome.warning {
+        let (code, message) = match warning {
+            IntegerArithmeticWarning::Overflow => (
+                "compat.arithmetic.overflow",
+                "integer arithmetic overflowed; snake saturation policy applied",
+            ),
+            IntegerArithmeticWarning::DivideByZero => (
+                "compat.arithmetic.divide_by_zero",
+                "integer division or remainder by zero returned zero under snake policy",
+            ),
+        };
+        // Console diagnostics belong to this request, not the VM's warning history.
+        diagnostics.push(console_diagnostic(code, message));
+    }
+    Ok(VmValue::Integer(outcome.value))
+}
+
+fn evaluate_console_method(
+    name: &str,
+    arguments: &[Option<Expr>],
+    variables: &[VmDebugVariable],
+    compatibility: &CompatibilityIdentity,
+    diagnostics: &mut Vec<DebugDiagnostic>,
+) -> Result<VmValue, (&'static str, String)> {
+    let values = arguments
+        .iter()
+        .map(|argument| {
+            argument
+                .as_ref()
+                .ok_or_else(|| {
+                    (
+                        "debug.console.unsupported_expression",
+                        "omitted method arguments are not supported".into(),
+                    )
+                })
+                .and_then(|argument| {
+                    evaluate_console_expression(argument, variables, compatibility, diagnostics)
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let upper = name.to_ascii_uppercase();
     if !PURE_CONSOLE_METHODS.contains(&upper.as_str()) {
         return Err((
@@ -187,11 +315,11 @@ pub(super) fn evaluate_console_method(
             format!("{name} is not in the debugger's pure method whitelist"),
         ));
     }
-    evaluate_pure_native(&upper, values.to_vec())
+    evaluate_pure_native_with_compatibility(&upper, values, compatibility)
         .map_err(|message| ("debug.console.execution_error", message))
 }
 
-const PURE_CONSOLE_METHODS: [&str; 35] = [
+const PURE_CONSOLE_METHODS: [&str; 39] = [
     "ABS",
     "SIGN",
     "SQRT",
@@ -206,6 +334,10 @@ const PURE_CONSOLE_METHODS: [&str; 35] = [
     "STRLENU",
     "TOINT",
     "ISNUMERIC",
+    "UNCHECKED_ADD",
+    "UNCHECKED_SUB",
+    "UNCHECKED_MUL",
+    "UNCHECKED_NEG",
     "UNICODE",
     "CONVERT",
     "COLOR_FROMRGB",

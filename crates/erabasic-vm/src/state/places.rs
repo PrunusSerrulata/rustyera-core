@@ -1,5 +1,6 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
+use crate::HostWrite;
 
 #[derive(Clone, Copy)]
 struct ResolvedPlaceWrite {
@@ -221,10 +222,12 @@ impl Vm {
     }
 
     pub(crate) fn reclaim_generations(&mut self) {
+        self.prune_bit_leases();
         if self.generations.len() <= 1 {
             return;
         }
-        let active = self.active_generations();
+        let mut active = self.active_generations();
+        active.extend(self.memory.array_leases.retained_generations());
         let obsolete: Vec<_> = self
             .generations
             .keys()
@@ -237,6 +240,8 @@ impl Vm {
         for generation in obsolete {
             self.generations.remove(&generation);
             self.memory.reclaim_generation(generation);
+            self.compatibility_warning_sites
+                .retain(|site| site.0 != generation);
             self.path_memo_cache
                 .retain(|head, _| head.generation != generation);
         }
@@ -253,23 +258,151 @@ impl Vm {
         expected: Option<BytecodeType>,
         ready: HostReady,
     ) -> Result<(), VmError> {
-        match (expected, ready.value) {
-            (None, None) => {}
-            (Some(expected), Some(value)) if value.value_type() == expected => fiber
-                .frames
-                .last_mut()
-                .ok_or_else(|| VmError::InvalidState("host fiber has no frame".into()))?
-                .stack
-                .push(value),
+        let result = match (expected, ready.value) {
+            (None, None) => None,
+            (Some(expected), Some(value)) if value.value_type() == expected => Some(value),
             (expected, value) => {
                 return Err(VmError::InvalidArguments(format!(
                     "host result mismatch: expected {expected:?}, found {:?}",
                     value.as_ref().map(VmValue::value_type)
                 )));
             }
+        };
+        if result.is_some() && fiber.frames.is_empty() {
+            return Err(VmError::InvalidState("host fiber has no frame".into()));
         }
-        for write in ready.writes {
-            self.write_place_internal(fiber, &write.target, write.value, true)?;
+
+        let writes = ready
+            .writes
+            .into_iter()
+            .map(|write| self.prepare_host_write(fiber, write))
+            .collect::<Result<Vec<_>, _>>()?;
+        for write in writes {
+            self.write_place_internal(fiber, &write.target, write.value, true)
+                .expect("the complete Host write batch was validated before mutation");
+        }
+        if let Some(value) = result {
+            fiber
+                .frames
+                .last_mut()
+                .expect("the Host result frame was validated before mutation")
+                .stack
+                .push(value);
+        }
+        Ok(())
+    }
+
+    fn prepare_host_write(&self, fiber: &Fiber, write: HostWrite) -> Result<HostWrite, VmError> {
+        if write.target.backing.is_some() {
+            return Err(VmError::InvalidState(
+                "Host cannot inject an array backing identity".into(),
+            ));
+        }
+        self.prepare_resolved_host_write(fiber, write)
+    }
+
+    /// Follow only VM-owned REF descriptors after the external Host boundary has
+    /// rejected caller-supplied backing identities.
+    fn prepare_resolved_host_write(
+        &self,
+        fiber: &Fiber,
+        write: HostWrite,
+    ) -> Result<HostWrite, VmError> {
+        if write.target.fiber.is_some_and(|owner| owner != fiber.id) {
+            return Err(VmError::InvalidState(
+                "place belongs to another fiber".into(),
+            ));
+        }
+        if write.target.backing.is_some() {
+            let (_, cell) = self.checked_array_backing(fiber, &write.target)?;
+            let mut staged = cell.clone();
+            staged
+                .write_execution(&write.target.indices, write.value.clone())
+                .map_err(VmError::ScriptFailure)?;
+            return Ok(write);
+        }
+        let definition = self.resolve_place_write(fiber, &write.target)?;
+        if definition.storage == BytecodeStorage::FunctionLocal {
+            let frame = find_frame(fiber, write.target.frame, definition.owner)?;
+            let cell = frame
+                .locals
+                .get(&definition.key)
+                .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?;
+            if let Some(VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound)) = cell.first() {
+                let mut target = (*bound).clone();
+                target.indices.extend_from_slice(&write.target.indices);
+                return self.prepare_resolved_host_write(
+                    fiber,
+                    HostWrite {
+                        target,
+                        value: write.value,
+                    },
+                );
+            }
+            let mut staged = cell.clone();
+            staged
+                .write_execution(&write.target.indices, write.value.clone())
+                .map_err(VmError::ScriptFailure)?;
+            let mut target = write.target;
+            target.fiber = Some(fiber.id);
+            target.frame = Some(frame.id);
+            return Ok(HostWrite {
+                target,
+                value: write.value,
+            });
+        }
+
+        let character = if definition.storage == BytecodeStorage::Character {
+            write.target.character.map_or_else(
+                || self.target_character_for_generation(definition.generation),
+                |index| usize::try_from(index).unwrap_or(usize::MAX),
+            )
+        } else {
+            0
+        };
+        self.validate_script_character(definition.storage, character)?;
+        let cell = self
+            .memory
+            .cell(
+                definition.generation,
+                self.generations
+                    .get(&definition.generation)
+                    .and_then(|program| program.global(definition.key))
+                    .ok_or_else(|| {
+                        VmError::InvalidState("place definition is unavailable".into())
+                    })?,
+                character,
+            )
+            .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))?;
+        let mut staged = cell.clone();
+        staged
+            .write_execution(&write.target.indices, write.value.clone())
+            .map_err(VmError::ScriptFailure)?;
+        let mut target = write.target;
+        target.fiber = Some(fiber.id);
+        if definition.storage == BytecodeStorage::Character {
+            target.character = Some(u64::try_from(character).unwrap_or(u64::MAX));
+        }
+        Ok(HostWrite {
+            target,
+            value: write.value,
+        })
+    }
+
+    pub(crate) fn validate_script_character(
+        &self,
+        storage: BytecodeStorage,
+        character: usize,
+    ) -> Result<(), VmError> {
+        if storage == BytecodeStorage::Character && character >= self.memory.characters.len() {
+            return Err(VmError::ScriptFailure(crate::ExecutionFailure::script(
+                crate::ScriptFaultKind::Bounds,
+                crate::VmFaultCode::Bounds,
+                format!(
+                    "character index {character} is outside {} characters",
+                    self.memory.characters.len()
+                ),
+            )));
         }
         Ok(())
     }
@@ -279,6 +412,13 @@ impl Vm {
         fiber: &Fiber,
         place: &PlaceDescriptor,
     ) -> Result<VmValue, VmError> {
+        if place.backing.is_some() {
+            return self
+                .checked_array_backing(fiber, place)?
+                .1
+                .read_execution(&place.indices)
+                .map_err(VmError::ScriptFailure);
+        }
         let (generation, definition) = self.place_definition(fiber, place)?;
         self.read_place_resolved(fiber, place, generation, definition)
     }
@@ -290,6 +430,13 @@ impl Vm {
         generation: GenerationId,
         definition: &erabasic_bytecode::BytecodeGlobal,
     ) -> Result<VmValue, VmError> {
+        if place.backing.is_some() {
+            return self
+                .checked_array_backing(fiber, place)?
+                .1
+                .read_execution(&place.indices)
+                .map_err(VmError::ScriptFailure);
+        }
         if definition.storage == BytecodeStorage::FunctionLocal {
             let frame = find_frame(fiber, place.frame, definition.owner)?;
             let cell = frame
@@ -301,7 +448,9 @@ impl Vm {
                 target.indices.extend_from_slice(&place.indices);
                 return self.read_place(fiber, &target);
             }
-            return cell.read(&place.indices).map_err(VmError::InvalidState);
+            return cell
+                .read_execution(&place.indices)
+                .map_err(VmError::ScriptFailure);
         }
         let character = if definition.storage == BytecodeStorage::Character {
             place.character.map_or_else(
@@ -315,14 +464,15 @@ impl Vm {
         // a selector equal to the current TARGET as target-dependent. This is conservative for an
         // explicit selector with the same value, but prevents an unsafe memo hit after TARGET
         // changes without altering captured-place semantics.
+        self.validate_script_character(definition.storage, character)?;
         let implicit_target = definition.storage == BytecodeStorage::Character
             && character == self.target_character_for_generation(generation);
         let value = self
             .memory
             .cell(generation, definition, character)
             .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))?
-            .read(&place.indices)
-            .map_err(VmError::InvalidState)?;
+            .read_execution(&place.indices)
+            .map_err(VmError::ScriptFailure)?;
         self.observe_path_memo_read(
             fiber.id,
             generation,
@@ -344,6 +494,7 @@ impl Vm {
         character: Option<u64>,
         frame: Option<FrameId>,
     ) -> Result<VmValue, VmError> {
+        self.require_bound_local_reference(fiber, generation, definition, frame)?;
         if definition.storage == BytecodeStorage::FunctionLocal {
             let frame = find_frame(fiber, frame, definition.owner)?;
             let cell = frame
@@ -355,7 +506,7 @@ impl Vm {
                 target.indices.extend_from_slice(indices);
                 return self.read_place(fiber, &target);
             }
-            return cell.read(indices).map_err(VmError::InvalidState);
+            return cell.read_execution(indices).map_err(VmError::ScriptFailure);
         }
         let character = if definition.storage == BytecodeStorage::Character {
             character.map_or_else(
@@ -365,14 +516,15 @@ impl Vm {
         } else {
             0
         };
+        self.validate_script_character(definition.storage, character)?;
         let implicit_target = definition.storage == BytecodeStorage::Character
             && character == self.target_character_for_generation(generation);
         let value = self
             .memory
             .cell(generation, definition, character)
             .ok_or_else(|| VmError::InvalidState("variable storage is unavailable".into()))?
-            .read(indices)
-            .map_err(VmError::InvalidState)?;
+            .read_execution(indices)
+            .map_err(VmError::ScriptFailure)?;
         self.observe_path_memo_read(
             fiber.id,
             generation,
@@ -399,6 +551,7 @@ impl Vm {
         frame: Option<FrameId>,
         value: VmValue,
     ) -> Result<(), VmError> {
+        self.require_bound_local_reference(fiber, generation, definition, frame)?;
         if !definition.mutable {
             return Err(VmError::InvalidState("place is immutable".into()));
         }
@@ -459,6 +612,9 @@ impl Vm {
                 "array place must be unindexed".into(),
             ));
         }
+        if place.backing.is_some() {
+            return Ok(self.checked_array_backing(fiber, place)?.1.to_values());
+        }
         let (generation, definition) = self.place_definition(fiber, place)?;
         if definition.storage == BytecodeStorage::FunctionLocal {
             let frame = find_frame(fiber, place.frame, definition.owner)?;
@@ -479,6 +635,7 @@ impl Vm {
         } else {
             0
         };
+        self.validate_script_character(definition.storage, character)?;
         self.memory
             .cell(generation, definition, character)
             .map(VariableCell::to_values)
@@ -494,6 +651,9 @@ impl Vm {
             return Err(VmError::InvalidArguments(
                 "array place must be unindexed".into(),
             ));
+        }
+        if place.backing.is_some() {
+            return Ok(self.checked_array_backing(fiber, place)?.1.len());
         }
         let (generation, definition) = self.place_definition(fiber, place)?;
         if definition.storage == BytecodeStorage::FunctionLocal {
@@ -515,6 +675,7 @@ impl Vm {
         } else {
             0
         };
+        self.validate_script_character(definition.storage, character)?;
         self.memory
             .cell(generation, definition, character)
             .map(VariableCell::len)
@@ -526,6 +687,10 @@ impl Vm {
         fiber: &Fiber,
         place: &PlaceDescriptor,
     ) -> Result<Option<(GenerationId, SymbolKey, u64)>, VmError> {
+        if place.backing.is_some() {
+            self.checked_array_backing(fiber, place)?;
+            return Ok(None);
+        }
         let (generation, definition) = self.place_definition(fiber, place)?;
         if matches!(
             definition.storage,
@@ -574,6 +739,15 @@ impl Vm {
                 "array place must be unindexed".into(),
             ));
         }
+        if place.backing.is_some() {
+            return self
+                .checked_array_backing(fiber, place)?
+                .1
+                .to_values_range(start, end)
+                .ok_or_else(|| {
+                    VmError::InvalidArguments("array range exceeds the variable".into())
+                });
+        }
         let (generation, definition) = self.place_definition(fiber, place)?;
         if definition.storage == BytecodeStorage::FunctionLocal {
             let frame = find_frame(fiber, place.frame, definition.owner)?;
@@ -602,6 +776,7 @@ impl Vm {
         } else {
             0
         };
+        self.validate_script_character(definition.storage, character)?;
         let implicit_target = definition.storage == BytecodeStorage::Character
             && character == self.target_character_for_generation(generation);
         let values = self
@@ -637,6 +812,21 @@ impl Vm {
                 "array place must be unindexed".into(),
             ));
         }
+        if place.backing.is_some() {
+            let (lease, cell) = self.checked_array_backing(fiber, place)?;
+            if start > end || end > cell.len() || value.value_type() != cell.value_type {
+                return Err(VmError::InvalidArguments(
+                    "array fill range or scalar type differs".into(),
+                ));
+            }
+            let location = lease.location;
+            self.invalidate_path_memo(fiber.id);
+            return self
+                .memory
+                .array_cell_mut(fiber, location)?
+                .fill_range(start, end, value)
+                .map_err(VmError::InvalidArguments);
+        }
         let definition = self.resolve_place_write(fiber, place)?;
         if !definition.mutable {
             return Err(VmError::InvalidState("place is immutable".into()));
@@ -668,6 +858,7 @@ impl Vm {
         } else {
             0
         };
+        self.validate_script_character(definition.storage, character)?;
         let implicit_target = definition.storage == BytecodeStorage::Character
             && character == self.target_character_for_generation(definition.generation);
         self.memory
@@ -718,6 +909,21 @@ impl Vm {
                 "array place must be unindexed".into(),
             ));
         }
+        if place.backing.is_some() {
+            let (lease, cell) = self.checked_array_backing(fiber, place)?;
+            if values.len() != cell.len()
+                || values
+                    .iter()
+                    .any(|value| value.value_type() != cell.value_type)
+            {
+                return Err(VmError::InvalidArguments(
+                    "array replacement length or scalar type differs".into(),
+                ));
+            }
+            let location = lease.location;
+            self.invalidate_path_memo(fiber.id);
+            return replace_cell_values(self.memory.array_cell_mut(fiber, location)?, values);
+        }
         let definition = self.resolve_place_write(fiber, place)?;
         if !definition.mutable {
             return Err(VmError::InvalidState("place is immutable".into()));
@@ -748,6 +954,7 @@ impl Vm {
         } else {
             0
         };
+        self.validate_script_character(definition.storage, character)?;
         let implicit_target = definition.storage == BytecodeStorage::Character
             && character == self.target_character_for_generation(definition.generation);
         let global = self
@@ -782,6 +989,9 @@ impl Vm {
         value: VmValue,
         trusted_runtime: bool,
     ) -> Result<(), VmError> {
+        if place.backing.is_some() {
+            return self.write_array_backing(fiber, place, value);
+        }
         if place.fiber.is_some_and(|owner| owner != fiber.id) {
             return Err(VmError::InvalidState(
                 "place belongs to another fiber".into(),
@@ -809,8 +1019,8 @@ impl Vm {
                 .locals
                 .get_mut(&definition.key)
                 .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?
-                .write(&place.indices, value)
-                .map_err(VmError::InvalidState);
+                .write_execution(&place.indices, value)
+                .map_err(VmError::ScriptFailure);
         }
         let character = if definition.storage == BytecodeStorage::Character {
             place.character.map_or_else(
@@ -820,6 +1030,7 @@ impl Vm {
         } else {
             0
         };
+        self.validate_script_character(definition.storage, character)?;
         let implicit_target = definition.storage == BytecodeStorage::Character
             && character == self.target_character_for_generation(definition.generation);
         self.memory
@@ -830,8 +1041,8 @@ impl Vm {
                 character,
             )
             .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))?
-            .write(&place.indices, value.clone())
-            .map_err(VmError::InvalidState)?;
+            .write_execution(&place.indices, value.clone())
+            .map_err(VmError::ScriptFailure)?;
         let global = self
             .generations
             .get(&definition.generation)
@@ -849,7 +1060,7 @@ impl Vm {
         Ok(())
     }
 
-    pub(super) fn place_definition<'a>(
+    pub(crate) fn place_definition<'a>(
         &'a self,
         fiber: &Fiber,
         place: &PlaceDescriptor,
@@ -869,12 +1080,13 @@ impl Vm {
             .generations
             .get(&generation)
             .ok_or_else(|| VmError::InvalidState("place generation was reclaimed".into()))?;
-        Ok((
-            generation,
-            program.global(place.variable).ok_or_else(|| {
-                VmError::InvalidState(format!("variable {:?} is not defined", place.variable))
-            })?,
-        ))
+        let definition = program
+            .global(place.variable)
+            .ok_or_else(|| VmError::InvalidState("place variable is not defined".into()))?;
+        if place.backing.is_none() {
+            self.require_bound_local_reference(fiber, generation, definition, place.frame)?;
+        }
+        Ok((generation, definition))
     }
 
     fn resolve_place_write(

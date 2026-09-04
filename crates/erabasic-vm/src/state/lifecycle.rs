@@ -18,6 +18,9 @@ impl Vm {
             if let Some(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) = cell.first() {
                 return self.place_dimensions(fiber, &place).ok();
             }
+            if program.is_reference_variable(definition.key) {
+                return None;
+            }
             return Some(cell.dimensions.clone());
         }
         if let Some(definition) = program
@@ -47,6 +50,11 @@ impl Vm {
         fiber: FiberId,
         place: &PlaceDescriptor,
     ) -> Result<Vec<u64>, VmError> {
+        if place.backing.is_some() {
+            return Err(VmError::InvalidState(
+                "Host cannot inject an array backing identity".into(),
+            ));
+        }
         let fiber = self
             .fibers
             .get(&fiber)
@@ -54,13 +62,20 @@ impl Vm {
         self.place_dimensions(fiber, place)
     }
 
-    fn place_dimensions(
+    pub(crate) fn place_dimensions(
         &self,
         fiber: &Fiber,
         place: &PlaceDescriptor,
     ) -> Result<Vec<u64>, VmError> {
         let mut place = place.clone();
         for _ in 0..64 {
+            if place.backing.is_some() {
+                return Ok(self
+                    .checked_array_backing(fiber, &place)?
+                    .1
+                    .dimensions
+                    .clone());
+            }
             if place.fiber.is_some_and(|owner| owner != fiber.id) {
                 return Err(VmError::InvalidState(
                     "place belongs to another fiber".into(),
@@ -158,6 +173,8 @@ impl Vm {
             next_request: 1,
             next_generation: 2,
             pending_reload: None,
+            compatibility_warning_sites: BTreeSet::new(),
+            pending_compatibility_warnings: Vec::new(),
             debug: DebugState::default(),
             regex_cache: RegexCache::default(),
             find_element_cache: HashMap::new(),
@@ -181,7 +198,10 @@ impl Vm {
             .expect("the current generation is always retained")
     }
 
-    pub(crate) fn compile_regex(&mut self, pattern: &str) -> Result<regex::Regex, String> {
+    pub(crate) fn compile_regex(
+        &mut self,
+        pattern: &str,
+    ) -> Result<regex::Regex, crate::ExecutionFailure> {
         self.regex_cache.get_or_compile(pattern)
     }
 
@@ -298,6 +318,7 @@ impl Vm {
                 state: FiberState::Runnable,
                 backward_branches_without_progress: 0,
                 consecutive_budget_exhaustions: 0,
+                fault_hook: None,
             },
         );
         self.next_fiber = self.next_available_fiber_id().0;
@@ -327,15 +348,33 @@ impl Vm {
     ///
     /// Returns an error if the fiber does not exist.
     pub fn cancel_fiber(&mut self, fiber: FiberId) -> Result<(), VmError> {
-        let fiber = self
+        let mut state = self
             .fibers
-            .get_mut(&fiber)
+            .remove(&fiber)
             .ok_or(VmError::UnknownFiber(fiber))?;
-        for frame in &fiber.frames {
-            self.active_function_memos.remove(&frame.id);
+        if let Some(hook) = state.fault_hook.as_ref() {
+            let failure = crate::ExecutionFailure::classified(
+                crate::FaultCategory::Cancellation,
+                crate::VmFaultCode::Host,
+                "final-fault hook was cancelled",
+            );
+            let mut origin = hook.original.origin();
+            origin.command = "CANCEL".into();
+            let cancellation = crate::VmFault::from_origin(fiber, origin, failure);
+            let transition = self.transition_fault(&mut state, cancellation);
+            debug_assert!(matches!(
+                transition,
+                crate::interpreter::fault_hooks::FaultTransition::Published(_)
+            ));
+        } else {
+            for frame in &state.frames {
+                self.active_function_memos.remove(&frame.id);
+            }
+            state.frames.clear();
+            state.state = FiberState::Cancelled;
         }
-        fiber.frames.clear();
-        fiber.state = FiberState::Cancelled;
+        self.fibers.insert(fiber, state);
+        self.prune_bit_leases();
         Ok(())
     }
 
@@ -442,58 +481,21 @@ impl Vm {
                 "cannot return the root frame through a host completion".into(),
             ));
         }
-        let returned = fiber.frames.pop().expect("checked frame count");
-        let caller = fiber.frames.last_mut().expect("checked caller frame");
-        if returned.return_value_to_caller
-            && let Some(value) = value
-        {
-            caller.stack.push(value.clone());
-        }
-        let next_event = caller.event_dispatch.as_mut().and_then(|dispatch| {
-            if dispatch.active.single && value == Some(&VmValue::Integer(1)) {
-                while dispatch
-                    .pending
-                    .front()
-                    .is_some_and(|entry| entry.group == dispatch.active.group)
-                {
-                    dispatch.pending.pop_front();
-                }
+        let outcome = self.return_frame(&mut fiber, value.cloned(), None, false);
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.fibers.insert(fiber_id, fiber);
+                return Err(error);
             }
-            dispatch.pending.pop_front().inspect(|next| {
-                dispatch.active = next.clone();
-            })
-        });
-        if let Some(next) = next_event {
-            let generation = caller.generation;
-            let frame_id = self.allocate_frame_id();
-            let program = self
-                .generations
-                .get(&generation)
-                .ok_or_else(|| VmError::InvalidState("event generation is missing".into()))?;
-            let target = program
-                .function(next.function)
-                .ok_or_else(|| VmError::InvalidState("event function is missing".into()))?;
-            self.memory.ensure_function_statics(
-                generation,
-                target.key,
-                program.function_statics(target.key),
-            );
-            fiber.frames.push(make_frame(
-                frame_id,
-                generation,
-                target,
-                program.function_locals(target.key),
-                Vec::new(),
-                false,
-                true,
-            ));
-        } else if caller.event_dispatch.is_some() {
-            caller.event_dispatch = None;
-        }
+        };
         fiber.mark_progress();
-        fiber.state = FiberState::Runnable;
+        if matches!(outcome, super::FrameReturn::Continue) {
+            fiber.state = FiberState::Runnable;
+            self.runnable.push_back(fiber_id);
+        }
         self.fibers.insert(fiber_id, fiber);
-        self.runnable.push_back(fiber_id);
+        self.prune_bit_leases();
         Ok(fiber_id)
     }
 

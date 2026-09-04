@@ -1,8 +1,8 @@
 # RustyEra 跨客户端项目配置示例。所有字段都可以省略，省略时使用注释中的默认值。
 
 [meta]
-# 类型：整数；当前仅支持 3。
-schema_version = 3
+# 类型：整数；当前仅支持 5。
+schema_version = 5
 # 类型：字符串数组；列出的设置不可由客户端设置面板修改。
 locked_settings = []
 
@@ -25,6 +25,8 @@ selection = [255, 255, 0]
 history = [192, 192, 192]
 
 [compatibility]
+# 项目语言兼容 profile；蛇版为实验模式，变更必须完整重开项目。
+profile = "emuera.em"
 # 用途：CALLNAME 为空时回退到 NAME；类型：布尔
 callname_falls_back_to_name = false
 # 用途：使用 eramaker RAND 兼容语义；类型：布尔
@@ -53,6 +55,8 @@ rename_master = true
 [diagnostics]
 # 用途：过滤低于阈值的加载诊断；类型：整数；范围：0..=255
 minimum_warning_level = 1
+# 用途：将蛇版用户函数多余实参警告提升为错误；不改变内置函数参数规则；类型：布尔
+strict_user_call_arguments = false
 # 用途：忽略未调用函数的处理和警告；类型：布尔
 ignore_uncalled_functions = true
 # 用途：设置找不到函数时的警告策略；类型：字符串枚举；可选值："ignore"、"later"、"once"、"display"
@@ -159,6 +163,8 @@ default_relation = 0
 [runtime]
 # 用途：设置无限循环警告等待时间；类型：整数；范围：-2147483648..=2147483647
 infinite_loop_warning_ms = 5000
+# 用途：禁用蛇版 BEFORE_ERROR 与 BEFORE_THROW 最终故障钩子；类型：布尔
+disable_before_error_throw = false
 
 [save]
 # 用途：商店事件结束后执行自动保存；类型：布尔

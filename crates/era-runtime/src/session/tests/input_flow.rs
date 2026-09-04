@@ -359,6 +359,7 @@ fn one_input_normalization_is_scalar_default_and_activation_aware() {
             timeout_message: None,
             submission_token: submission,
             countdown_remaining_ms: None,
+            viewport_policy: era_runtime_protocol::InputViewportPolicy::FollowOutput,
         },
         result_name: Some("RESULTS".into()),
         choices: BTreeMap::from([
@@ -484,6 +485,7 @@ fn empty_string_input_without_a_default_remains_a_valid_string() {
             timeout_message: None,
             submission_token: submission,
             countdown_remaining_ms: None,
+            viewport_policy: era_runtime_protocol::InputViewportPolicy::FollowOutput,
         },
         result_name: Some("RESULTS".into()),
         choices: BTreeMap::from([(empty_button, VmValue::String(String::new()))]),
@@ -546,6 +548,7 @@ fn one_input_activation_uses_the_loaded_allow_long_configuration() {
             &mut session,
             1,
             RuntimeMessage::ProjectManifest(ProjectManifest {
+                compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
                 project_revision: 1,
                 files: vec![
                     SubmittedFile {
@@ -677,6 +680,7 @@ fn primitive_input_uses_runtime_selection_tokens_and_rejects_timeout_spoofing() 
             timeout_message: None,
             submission_token: submission,
             countdown_remaining_ms: None,
+            viewport_policy: era_runtime_protocol::InputViewportPolicy::FollowOutput,
         },
         result_name: Some("RESULT".into()),
         choices: BTreeMap::from([(selection, VmValue::Integer(42))]),
@@ -764,6 +768,7 @@ fn project_resource_metadata_is_frontend_decoded_before_load_commit() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -1026,6 +1031,7 @@ fn cold_project_metadata_is_transactional_and_low_memory_commit_is_sparse() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "old.erb".into(),
@@ -1045,7 +1051,10 @@ fn cold_project_metadata_is_transactional_and_low_memory_commit_is_sparse() {
     let old_payload = old_snapshot.manifest.files[0].payload.clone();
     let old_artifact = std::ptr::from_ref(session.artifact.as_ref().unwrap().artifact()).addr();
     session.compiled_project_cache = Some(Arc::new(vec![1, 2, 3]));
-    session.full_project_file = Some(Arc::new(vec![4, 5, 6]));
+    session.full_project_file = Some(Arc::new(crate::compiled_cache::ContainerBytes::new(
+        false,
+        vec![4, 5, 6],
+    )));
     session.client_preferences = Some(ClientPreferenceLayers {
         project_revision: 1,
         global: Vec::new(),
@@ -1053,6 +1062,7 @@ fn cold_project_metadata_is_transactional_and_low_memory_commit_is_sparse() {
     });
 
     let next_manifest = |project_revision| ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision,
         files: vec![
             SubmittedFile {
@@ -1100,7 +1110,13 @@ fn cold_project_metadata_is_transactional_and_low_memory_commit_is_sparse() {
         session.compiled_project_cache.as_deref(),
         Some(&vec![1, 2, 3])
     );
-    assert_eq!(session.full_project_file.as_deref(), Some(&vec![4, 5, 6]));
+    assert_eq!(
+        session
+            .full_project_file
+            .as_ref()
+            .map(|bytes| bytes.copy_range(0..bytes.len())),
+        Some(vec![4, 5, 6])
+    );
     submit(
         &mut session,
         3,
@@ -1131,7 +1147,13 @@ fn cold_project_metadata_is_transactional_and_low_memory_commit_is_sparse() {
         session.compiled_project_cache.as_deref(),
         Some(&vec![1, 2, 3])
     );
-    assert_eq!(session.full_project_file.as_deref(), Some(&vec![4, 5, 6]));
+    assert_eq!(
+        session
+            .full_project_file
+            .as_ref()
+            .map(|bytes| bytes.copy_range(0..bytes.len())),
+        Some(vec![4, 5, 6])
+    );
     assert_eq!(
         session
             .client_preferences

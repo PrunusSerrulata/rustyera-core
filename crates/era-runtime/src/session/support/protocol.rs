@@ -9,6 +9,7 @@ pub(in super::super) fn selected_capabilities(client: &ClientCapabilities) -> Cl
                 && capability.operation == GGET_TEXT_SIZE_OPERATION
         });
     ClientCapabilities {
+        environment: crate::environment::select_environment(&client.environment, &services),
         input_modalities: client.input_modalities.clone(),
         rich_text: client.rich_text,
         html: client.html,
@@ -41,8 +42,12 @@ pub(in super::super) fn selected_service_capabilities(
                     LOCAL_DATE_TIME_OPERATION_VERSION
                 }
                 (ServiceKind::Entropy, RANDOM_SEED_OPERATION) => RANDOM_SEED_OPERATION_VERSION,
+                (ServiceKind::InputState, DEVICE_PUMP_OPERATION) => DEVICE_PUMP_OPERATION_VERSION,
                 (ServiceKind::InputState, GET_KEY_STATE_OPERATION) => {
                     GET_KEY_STATE_OPERATION_VERSION
+                }
+                (ServiceKind::InputState, POINTER_STATE_OPERATION) => {
+                    POINTER_STATE_OPERATION_VERSION
                 }
                 (ServiceKind::Image, IMAGE_METADATA_OPERATION) => IMAGE_METADATA_OPERATION_VERSION,
                 (ServiceKind::Image, IMAGE_PIXEL_OPERATION) => IMAGE_PIXEL_OPERATION_VERSION,
@@ -50,6 +55,9 @@ pub(in super::super) fn selected_service_capabilities(
                 (ServiceKind::OpenUrl, OPEN_URL_OPERATION) => OPEN_URL_OPERATION_VERSION,
                 (ServiceKind::PresentationQuery, GET_DISPLAY_LINE_OPERATION) => {
                     GET_DISPLAY_LINE_OPERATION_VERSION
+                }
+                (ServiceKind::PresentationQuery, GET_LINE_GEOMETRY_OPERATION) => {
+                    GET_LINE_GEOMETRY_OPERATION_VERSION
                 }
                 (ServiceKind::PresentationQuery, HTML_GET_PRINTED_STR_OPERATION) => {
                     HTML_GET_PRINTED_STR_OPERATION_VERSION
@@ -78,6 +86,10 @@ pub(in super::super) fn selected_service_capabilities(
                 (ServiceKind::Canvas, ENCODE_CANVAS_PNG_OPERATION) => {
                     ENCODE_CANVAS_PNG_OPERATION_VERSION
                 }
+                (ServiceKind::Audio, AUDIO_OBSERVATION_OPERATION) => {
+                    AUDIO_OBSERVATION_OPERATION_VERSION
+                }
+                (ServiceKind::Sql, SQL_OPERATION) => SQL_OPERATION_VERSION,
                 // Extension operations are application-defined. Select the client's
                 // maximum now; a later registry declaration must bind that exact version.
                 (ServiceKind::Extension, _) => capability.versions.maximum,

@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "original": {
+      "semantic_version": 1,
+      "policy_version": 1
+    },
+    "snake": {
+      "semantic_version": 2,
+      "policy_version": 2
+    }
+  },
+  "loadExpect": {
+    "ok": true,
+    "result": {
+      "termination": "waitingInput"
+    }
+  },
+  "status": "prepared_not_executed_isolated_watchdog_hazard",
+  "cases": [
+    {
+      "id": "s04-lines-no-progress",
+      "group": "SERVICES_HAZARD",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "S04_CASE_NO_PROGRESS",
+            "watch": [
+              "RESULT:10"
+            ]
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "runtime.html_query_no_progress",
+      "snakeTargetStatus": "intentional_safety_difference_requires_real_capture",
+      "observation": true,
+      "observationNotes": "Pinned reference repeatedly calls HtmlSubString without progress protection when A is wider than zero budget. Actual wrapper timeout/watchdog termination is failure evidence, not completed or successful zero. Rust must fail explicitly; no fake provider width."
+    }
+  ]
+}

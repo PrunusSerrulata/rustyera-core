@@ -1,14 +1,19 @@
 mod replay;
+mod scene;
 mod text;
 
 use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use crate::{InputWait, InteractionToken};
+use crate::{AudioChannelV1, AudioPlaybackStateV1, InputWait, InteractionToken};
 
 pub use replay::{
     CanvasReplay, CanvasReplayCommand, PresentationSnapshot, ResourceReplay, SpriteFrameReplay,
     SpriteReplay,
+};
+pub use scene::{
+    SceneAnchorV1, SceneDeltaV1, SceneInteractionV1, SceneLayerV1, SceneOffsetV1, SceneOperationV1,
+    SceneReplayError, SceneScrollPolicyV1, SceneSizeV1, SceneSourceV1, SceneStateV1,
 };
 pub use text::{SystemTextArgument, SystemTextKey, SystemTextRef};
 
@@ -89,6 +94,15 @@ pub enum CellAlignment {
     Left,
     #[n(1)]
     Right,
+}
+
+#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum CellWidthIntent {
+    #[n(0)]
+    ProjectColumns(#[n(0)] u32),
+    #[n(1)]
+    LogicalPixels(#[n(0)] u32),
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -278,7 +292,7 @@ pub enum DisplayRun {
         #[n(1)]
         alignment: CellAlignment,
         #[n(2)]
-        preferred_columns: u32,
+        width: CellWidthIntent,
     },
     /// A width-independent DRAWLINE intent.
     #[n(6)]
@@ -314,6 +328,8 @@ pub enum DisplayRun {
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
+// These booleans are independent observable line properties in the wire contract.
+#[allow(clippy::struct_excessive_bools)]
 pub struct DisplayLine {
     #[n(0)]
     pub line_id: u64,
@@ -327,6 +343,9 @@ pub struct DisplayLine {
     pub alignment: LineAlignment,
     #[n(5)]
     pub runs: Vec<DisplayRun>,
+    /// Whether this row contains styled text eligible for the global whole-line background.
+    #[n(6)]
+    pub text_background_eligible: bool,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -349,6 +368,9 @@ pub struct PresentationSettings {
     pub legacy_nonbutton_wrap: bool,
     #[n(7)]
     pub drawable_height: LogicalLength,
+    /// Snake-compatible whole-line text background, independent of run and console backgrounds.
+    #[n(8)]
+    pub text_line_background: Option<Color>,
 }
 
 /// Ordered semantic edits from which a frontend derives physical console rows.
@@ -407,7 +429,7 @@ pub struct RedrawState {
 #[cbor(map)]
 pub struct AudioState {
     #[n(0)]
-    pub channel_id: u64,
+    pub channel: AudioChannelV1,
     #[n(1)]
     pub resource_id: String,
     #[n(2)]
@@ -415,9 +437,13 @@ pub struct AudioState {
     #[n(3)]
     pub volume_millionths: u32,
     #[n(4)]
-    pub playing: bool,
+    pub state: AudioPlaybackStateV1,
     #[n(5)]
     pub revision: u64,
+    #[n(6)]
+    pub rate_millionths: u32,
+    #[n(7)]
+    pub preserve_pitch: bool,
 }
 
 /// Canonical tooltip policy. A frontend may project the font and timing to its
@@ -583,9 +609,9 @@ pub enum PresentationOperation {
         title: String,
     },
     #[n(4)]
-    SetBackgrounds {
+    ApplySceneDelta {
         #[n(0)]
-        backgrounds: Vec<MediaPlacement>,
+        delta: SceneDeltaV1,
     },
     #[n(5)]
     SetAudio {

@@ -7,11 +7,19 @@ use super::{
     HostImport, LineId, LoweringContext, NativeImport, Opcode, SourceLocation, SymbolKey, opcode,
 };
 
+mod bit_arrays;
 mod calls;
+mod column_options;
 mod data_blocks;
+mod existvar;
 mod expressions;
 mod formatted;
+mod html_queries;
 mod imports;
+mod input_queries;
+mod map_calls;
+mod matching;
+mod methods;
 mod statements;
 
 pub(super) struct Builder<'a> {
@@ -65,21 +73,6 @@ impl<'a> Builder<'a> {
     pub(super) fn patch_jump(&mut self, instruction: usize, target: usize) {
         self.code[instruction].payload =
             opcode::jump(Opcode::Jump, u32::try_from(target).unwrap_or(u32::MAX)).payload;
-    }
-
-    pub(super) fn patch_resolve_function(
-        &mut self,
-        instruction: usize,
-        target: usize,
-        allow_missing: bool,
-        method: bool,
-    ) {
-        self.code[instruction].payload = opcode::resolve_function(
-            u32::try_from(target).unwrap_or(u32::MAX),
-            allow_missing,
-            method,
-        )
-        .payload;
     }
 
     pub(super) fn take_control_flow(

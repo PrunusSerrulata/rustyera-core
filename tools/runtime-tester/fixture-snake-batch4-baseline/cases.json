@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "semanticBaseline": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+  "implementation": "emuera_lazyloading_selfmodified_version",
+  "seed": 123456,
+  "viewport": {"width": 320, "font": "BIZ UDGothic", "fontSize": 16, "lineHeight": 20},
+  "resourceDependencies": [
+    {
+      "source": "../fixture-snake-service-oracle/resources/service-pixels.png",
+      "destination": "service-pixels.png",
+      "sha256": "5a43ec1305804c9be3f99944cc19630ecb0839f0743c32deffd29357409efe54"
+    },
+    {
+      "source": "../../../../emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf",
+      "destination": "font/BIZUDGothic-Regular.ttf",
+      "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e"
+    }
+  ],
+  "cases": [
+    {"id": "html-columns", "entry": "B4_HTML_COLUMNS", "termination": "completed", "presentation": true, "watches": ["RESULT:0"]},
+    {"id": "extended-html", "entry": "B4_EXTENDED_HTML", "termination": "completed", "presentation": true, "watches": ["RESULT:0", "RESULT:1", "RESULT:2", "RESULT:3"]},
+    {"id": "sprite-overloads", "entry": "B4_SPRITE_OVERLOADS", "termination": "completed", "watches": ["RESULT:0", "RESULT:1", "RESULT:2", "RESULT:3", "RESULT:4", "RESULT:5", "RESULT:6", "RESULT:7", "RESULT:8", "RESULT:9", "RESULT:10", "RESULT:11", "RESULT:12", "RESULT:13"]},
+    {"id": "file-sprite", "entry": "B4_FILE_SPRITE", "termination": "completed", "watches": ["RESULT:0", "RESULT:1", "RESULT:2", "RESULT:3", "RESULT:4"]},
+    {"id": "polygon", "entry": "B4_POLYGON", "termination": "completed", "watches": ["RESULT:0", "RESULT:1", "RESULT:2", "RESULT:3", "RESULT:4", "RESULT:5", "RESULT:6"]},
+    {"id": "cbg", "entry": "B4_CBG", "termination": "completed", "watches": ["RESULT:0", "RESULT:1", "RESULT:2", "RESULT:3", "RESULT:4", "RESULT:5", "RESULT:6"]},
+    {"id": "error-image-layer-headless", "entry": "B4_ERROR_IMAGE_LAYER_HEADLESS", "termination": "error", "watches": ["RESULT:0", "RESULT:1"]},
+    {"id": "error-image-layer-line-headless", "entry": "B4_ERROR_IMAGE_LAYER_LINE_HEADLESS", "termination": "error", "watches": ["RESULT:0", "RESULT:1"]},
+    {"id": "error-cbg-zero", "entry": "B4_ERROR_CBG_ZERO", "termination": "error", "watches": []},
+    {"id": "error-polygon-empty", "entry": "B4_ERROR_POLYGON_EMPTY", "termination": "error", "watches": []}
+  ],
+  "routes": {
+    "title": ["SYSTEM_TITLE", "TITLE"],
+    "new_game": ["EVENTFIRST", "INIT_NG_OR_LOAD"],
+    "qol": ["QOL_DB_INIT", "GRAPH_DB_INIT", "QOL_USERCOM"],
+    "map": ["COM400", "COM604", "FIELDMAP", "DRAW_MAP"],
+    "save": ["EVENTSAVE", "EVENTLOAD", "SYSTEM_SAVEEND", "SYSTEM_LOADEND"]
+  },
+  "coverageReport": {
+    "kind": "snake_compatibility_static_coverage",
+    "project": "eratw-sub-modding",
+    "profile": "emuera.skia.snake",
+    "diagnostics": 8571,
+    "storedFile": {
+      "bytes": 150738721,
+      "sha256": "a4929fdfe8aa2f66a94821fd8f5d1c1fb14df3080de4320d0fe12cde039bd81b"
+    },
+    "rawJson": {
+      "bytes": 4668816198,
+      "sha256": "d92d8a04eb268b8776135cf7623f38ab2cc99b99dbdfd69b549675a32f3a468f"
+    },
+    "collection": {
+      "core": "eefd396359486b84b52823298bc3a4da250da58a",
+      "snakeTw": "667b9cd0b838211cd0f1db4a151b876aaea6fa2f"
+    }
+  }
+}

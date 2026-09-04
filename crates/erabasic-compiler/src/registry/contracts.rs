@@ -5,84 +5,7 @@ use erabasic_bytecode::{
 };
 
 pub(super) fn native_contract(name: &str) -> OperationContract {
-    let name = name.to_ascii_lowercase();
-    let structured =
-        name.starts_with("map_") || name.starts_with("xml_") || name.starts_with("dt_");
-    let random = matches!(
-        name.as_str(),
-        "rand" | "randomize" | "initrand" | "dumprand"
-    );
-    let variable_read = matches!(name.as_str(), "getvar" | "getvars");
-    let variable_mutation = matches!(
-        name.as_str(),
-        "swap"
-            | "swapvar"
-            | "arrayremove"
-            | "arrayshift"
-            | "arraysort"
-            | "arraycopy"
-            | "setvar"
-            | "varset"
-            | "cvarset"
-            | "arraymsort"
-            | "arraymsortex"
-            | "addchara"
-            | "addspchara"
-            | "adddefchara"
-            | "addvoidchara"
-            | "delchara"
-            | "delallchara"
-            | "swapchara"
-            | "copychara"
-            | "addcopychara"
-            | "pickupchara"
-            | "sortchara"
-            | "reset_stain"
-            | "setbit"
-            | "clearbit"
-            | "invertbit"
-            | "split"
-            | "__encodetouni_result"
-    );
-    let mutable = structured || random || variable_mutation;
-    OperationContract {
-        state: if structured || random {
-            OperationState::Native
-        } else if variable_mutation || variable_read {
-            OperationState::Vm
-        } else {
-            OperationState::Pure
-        },
-        transaction: if mutable {
-            TransactionPolicy::CloneCommit
-        } else {
-            TransactionPolicy::ReadOnly
-        },
-        candidate: if mutable {
-            CandidatePolicy::CloneCommit
-        } else {
-            CandidatePolicy::ReadOnly
-        },
-        persistence: if structured {
-            OperationPersistence::ExtensionScoped
-        } else if variable_mutation {
-            OperationPersistence::VariableScoped
-        } else if random {
-            OperationPersistence::RuntimeOnly
-        } else {
-            OperationPersistence::None
-        },
-        snapshot: OperationSnapshotPolicy::Included,
-        hot_reload: OperationHotReloadPolicy::Preserve,
-        wait: OperationWaitPolicy::Immediate,
-        capability_fallback: CapabilityFallback::NotApplicable,
-        debug: if mutable {
-            OperationDebugPolicy::Transactional
-        } else {
-            OperationDebugPolicy::Pure
-        },
-        portability: erabasic_bytecode::OperationPortability::Portable,
-    }
+    erabasic_bytecode::canonical_native_contract(name)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -129,6 +52,31 @@ pub(super) fn host_contract(namespace: &str, name: &str) -> OperationContract {
             OperationHotReloadPolicy::Preserve,
             OperationWaitPolicy::Immediate,
             CapabilityFallback::CanonicalProjection,
+        ),
+        "rustyera.audio"
+            if matches!(
+                name,
+                "GETSOUNDORBGMINFO" | "ISPLAYINGSOUND" | "ISPLAYINGBGM"
+            ) =>
+        {
+            (
+                OperationState::External,
+                TransactionPolicy::Forbidden,
+                OperationPersistence::RuntimeOnly,
+                OperationSnapshotPolicy::PendingBlocks,
+                OperationHotReloadPolicy::ActiveBlocks,
+                OperationWaitPolicy::TransientExternal,
+                CapabilityFallback::Unsupported,
+            )
+        }
+        "rustyera.audio" if name == "PLAYSOUND" => (
+            OperationState::External,
+            TransactionPolicy::Forbidden,
+            OperationPersistence::RuntimeOnly,
+            OperationSnapshotPolicy::PendingBlocks,
+            OperationHotReloadPolicy::ActiveBlocks,
+            OperationWaitPolicy::TransientExternal,
+            CapabilityFallback::IntentNoOp,
         ),
         "rustyera.audio" => (
             OperationState::Presentation,
@@ -183,7 +131,13 @@ pub(super) fn host_contract(namespace: &str, name: &str) -> OperationContract {
         "rustyera.input"
             if matches!(
                 name,
-                "GETTEXTBOX"
+                "__GETKEY_ACTIVE"
+                    | "SEQUENCEINPUT"
+                    | "DISABLE_INPUT_MACRO"
+                    | "ENABLE_INPUT_MACRO"
+                    | "ENV_HAS_CAPABILITY"
+                    | "GETPLATFORM"
+                    | "GETTEXTBOX"
                     | "SETTEXTBOX"
                     | "CLEARTEXTBOX"
                     | "HOTKEY_STATE"
@@ -244,6 +198,15 @@ pub(super) fn host_contract(namespace: &str, name: &str) -> OperationContract {
             OperationState::External,
             TransactionPolicy::Forbidden,
             OperationPersistence::Ordinary,
+            OperationSnapshotPolicy::PendingBlocks,
+            OperationHotReloadPolicy::ActiveBlocks,
+            OperationWaitPolicy::TransientExternal,
+            CapabilityFallback::Unsupported,
+        ),
+        "rustyera.sql" => (
+            OperationState::External,
+            TransactionPolicy::Forbidden,
+            OperationPersistence::ProjectDerived,
             OperationSnapshotPolicy::PendingBlocks,
             OperationHotReloadPolicy::ActiveBlocks,
             OperationWaitPolicy::TransientExternal,

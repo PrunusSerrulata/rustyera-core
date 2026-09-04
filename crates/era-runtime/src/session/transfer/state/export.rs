@@ -24,7 +24,14 @@ impl RuntimeSession {
                 "snapshot purpose is only valid for VM snapshot exports",
             );
         }
-        if request.kind == StateExportKind::VmSnapshot && !self.queued_input.is_empty() {
+        if request.kind == StateExportKind::VmSnapshot
+            && (!self.queued_input.is_empty()
+                || self.input_controller.pending_sequence.is_some()
+                || self.undo_checkpoint.as_ref().is_some_and(|checkpoint| {
+                    checkpoint.input_controller.pending_sequence.is_some()
+                })
+                || self.operations.has_device_pump())
+        {
             return self.emit(
                 RuntimeMessage::StateExportReady(StateExportReady {
                     kind: request.kind,
@@ -99,7 +106,7 @@ impl RuntimeSession {
             };
             self.outbound_transfer = Some(OutboundStateTransfer {
                 descriptor: descriptor.clone(),
-                bytes,
+                bytes: OutboundBytes::Contiguous(bytes),
                 next_offset: 0,
             });
             return self.emit(
@@ -158,12 +165,18 @@ impl RuntimeSession {
                 transfer_id,
                 kind: request.kind,
                 total_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
-                digest: ProtocolBytes::new(blake3::hash(&bytes).as_bytes().to_vec()),
+                digest: ProtocolBytes::new({
+                    let mut hasher = blake3::Hasher::new();
+                    bytes
+                        .hash_range(0..bytes.len(), &mut hasher)
+                        .map_err(RuntimeError::Internal)?;
+                    hasher.finalize().as_bytes().to_vec()
+                }),
                 artifact_id: None,
             };
             self.outbound_transfer = Some(OutboundStateTransfer {
                 descriptor: descriptor.clone(),
-                bytes,
+                bytes: OutboundBytes::Container(bytes),
                 next_offset: 0,
             });
             return self.emit(
@@ -207,7 +220,7 @@ impl RuntimeSession {
             };
             self.outbound_transfer = Some(OutboundStateTransfer {
                 descriptor: descriptor.clone(),
-                bytes: Arc::new(bytes),
+                bytes: OutboundBytes::Contiguous(Arc::new(bytes)),
                 next_offset: 0,
             });
             return self.emit(
@@ -227,6 +240,20 @@ impl RuntimeSession {
                 && pending.wait.deadline_ns.is_none()
         });
         let mut reasons = Vec::new();
+        if request.kind == StateExportKind::VmSnapshot
+            && let Err(blocker) = self.sql.snapshot()
+        {
+            reasons.push(match blocker {
+                crate::sql::SqlSnapshotBlocker::Inflight => {
+                    SnapshotIneligibleReason::ExternalOperationPending
+                }
+                crate::sql::SqlSnapshotBlocker::Reader
+                | crate::sql::SqlSnapshotBlocker::Transaction
+                | crate::sql::SqlSnapshotBlocker::RevisionMissing => {
+                    SnapshotIneligibleReason::SnapshotStateUnavailable
+                }
+            });
+        }
         if !unrestricted_snapshot {
             if self.phase != RuntimePhase::WaitingInput || !stable_wait {
                 reasons.push(SnapshotIneligibleReason::StableWaitRequired);
@@ -261,19 +288,22 @@ impl RuntimeSession {
                 .as_ref()
                 .ok_or_else(|| RuntimeError::Internal("save export has no VM".into()))?;
             let bytes = match request.kind {
-                StateExportKind::TraditionalSave => encode_era_save(
-                    &vm.export_era_state(),
-                    vm.vm().artifact(),
-                    String::new(),
-                    merge_structured_extensions(
+                StateExportKind::TraditionalSave => {
+                    let extensions = merge_structured_extensions(
                         &self.save_extensions,
                         vm.structured_extensions(StructuredScope::Ordinary)
                             .map_err(|error| RuntimeError::Internal(error.to_string()))?,
                     )
-                    .map_err(|error| RuntimeError::Internal(error.to_string()))?,
-                    self.traditional_save_format(),
-                )
-                .map_err(|error| RuntimeError::Internal(error.to_string()))?,
+                    .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+                    encode_era_save(
+                        &vm.export_era_state(),
+                        vm.vm().artifact(),
+                        String::new(),
+                        extensions,
+                        self.traditional_save_format(),
+                    )
+                    .map_err(|error| RuntimeError::Internal(error.to_string()))?
+                }
                 StateExportKind::VmSnapshot => {
                     if !unrestricted_snapshot
                         && !matches!(vm.snapshot_eligibility(), SnapshotEligibility::Eligible)
@@ -313,6 +343,7 @@ impl RuntimeSession {
                             SnapshotExportPurpose::Diagnosis => RuntimeSnapshotOrigin::Diagnosis,
                         },
                         artifact_id: vm.artifact_id(),
+                        compatibility: vm.vm().artifact().manifest.compatibility.clone(),
                         project_identity: project.project_identity,
                         resource_count: u64::try_from(project.resources.len()).unwrap_or(u64::MAX),
                         resource_graph: project.resource_graph.compact_snapshot(),
@@ -320,6 +351,11 @@ impl RuntimeSession {
                         vm_snapshot,
                         presentation: self.presentation.clone(),
                         operations: self.operations.clone(),
+                        sql: self.sql.snapshot().map_err(|_| {
+                            RuntimeError::Internal(
+                                "SQL snapshot state changed after eligibility check".into(),
+                            )
+                        })?,
                         controller: self.controller.clone(),
                         logical_time_ns: self.logical_time_ns,
                         random_seed: self.random_seed,
@@ -332,6 +368,7 @@ impl RuntimeSession {
                         force_kana_mode: self.force_kana_mode,
                         hotkey_state: self.hotkey_state.clone(),
                         key_macros: self.key_macros.clone(),
+                        input_controller: self.input_controller.clone(),
                         text_box: self.text_box.clone(),
                         text_box_layout: self.text_box_layout,
                         flow_input_enabled: self.flow_input_enabled,
@@ -393,7 +430,7 @@ impl RuntimeSession {
             };
             self.outbound_transfer = Some(OutboundStateTransfer {
                 descriptor: descriptor.clone(),
-                bytes: Arc::new(bytes),
+                bytes: OutboundBytes::Contiguous(Arc::new(bytes)),
                 next_offset: 0,
             });
             StateExportResult::Ready {

@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "original": {
+      "semantic_version": 1,
+      "policy_version": 1
+    },
+    "snake": {
+      "semantic_version": 5,
+      "policy_version": 5
+    }
+  },
+  "evidenceStatus": "pending_not_golden_not_executed",
+  "loadExpect": {
+    "ok": true,
+    "result": {
+      "termination": "waitingInput"
+    }
+  },
+  "allowedOracles": [
+    "snake"
+  ],
+  "cases": [
+    {
+      "id": "nearest-existvar-form",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "pending_real_oracle_capture",
+      "observation": true,
+      "expectationStatus": "pending_not_golden",
+      "sourceBasis": "Pinned snake Creator.Method.cs:387-436 and 6660-6688 locate try scopes; concrete nested evaluation must still be captured. Rust accepts only typed Script faults.",
+      "candidateRustContract": {
+        "terminal": "completed",
+        "watches": {
+          "RESULT:10": 73,
+          "RESULT:20": 1,
+          "RESULT:21": 1,
+          "FLAG:0": 2,
+          "FLAG:1": 1,
+          "FLAG:2": 1,
+          "FLAG:9": 1,
+          "RESULTS:1": "0"
+        }
+      },
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_NEAREST_EXISTVAR_FORM",
+            "watch": [
+              "RESULT:10",
+              "RESULT:20",
+              "RESULT:21",
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:9",
+              "RESULTS:1"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

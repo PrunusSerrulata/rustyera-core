@@ -4,32 +4,38 @@ use super::{
     Event, NativeCallRequest, Reader, XmlChild, XmlDocument, XmlElement, XmlMutation, XmlSelection,
     optional_integer, optional_string, resolve_predefined_entity, string_argument,
 };
+use crate::ExecutionFailure;
+use crate::structured::{argument_failure, parse_failure};
 
 mod xpath;
 
 #[allow(clippy::too_many_lines)]
-pub(super) fn parse_xml(input: &str) -> Result<XmlDocument, String> {
+pub(super) fn parse_xml(input: &str) -> Result<XmlDocument, ExecutionFailure> {
     let mut reader = Reader::from_str(input);
     reader.config_mut().trim_text(false);
     let mut stack = Vec::<XmlElement>::new();
     let mut root = None;
     loop {
-        match reader.read_event().map_err(|error| error.to_string())? {
+        match reader
+            .read_event()
+            .map_err(|error| parse_failure(error.to_string()))?
+        {
             Event::Start(start) => {
                 let name = String::from_utf8_lossy(start.name().as_ref()).into_owned();
                 let attributes = start
                     .attributes()
                     .map(|attribute| {
-                        let attribute = attribute.map_err(|error| error.to_string())?;
+                        let attribute =
+                            attribute.map_err(|error| parse_failure(error.to_string()))?;
                         Ok((
                             String::from_utf8_lossy(attribute.key.as_ref()).into_owned(),
                             attribute
                                 .decode_and_unescape_value(reader.decoder())
-                                .map_err(|error| error.to_string())?
+                                .map_err(|error| parse_failure(error.to_string()))?
                                 .into_owned(),
                         ))
                     })
-                    .collect::<Result<Vec<_>, String>>()?;
+                    .collect::<Result<Vec<_>, ExecutionFailure>>()?;
                 stack.push(XmlElement {
                     name,
                     attributes,
@@ -43,28 +49,31 @@ pub(super) fn parse_xml(input: &str) -> Result<XmlDocument, String> {
                     attributes: start
                         .attributes()
                         .map(|attribute| {
-                            let attribute = attribute.map_err(|error| error.to_string())?;
+                            let attribute =
+                                attribute.map_err(|error| parse_failure(error.to_string()))?;
                             Ok((
                                 String::from_utf8_lossy(attribute.key.as_ref()).into_owned(),
                                 attribute
                                     .decode_and_unescape_value(reader.decoder())
-                                    .map_err(|error| error.to_string())?
+                                    .map_err(|error| parse_failure(error.to_string()))?
                                     .into_owned(),
                             ))
                         })
-                        .collect::<Result<Vec<_>, String>>()?,
+                        .collect::<Result<Vec<_>, ExecutionFailure>>()?,
                     children: Vec::new(),
                 };
                 if let Some(parent) = stack.last_mut() {
                     parent.children.push(XmlChild::Element(element));
                 } else if root.replace(element).is_some() {
-                    return Err("XML contains more than one root element".into());
+                    return Err(parse_failure("XML contains more than one root element"));
                 }
             }
             Event::Text(text) => {
-                let value = text.decode().map_err(|error| error.to_string())?;
+                let value = text
+                    .decode()
+                    .map_err(|error| parse_failure(error.to_string()))?;
                 let value = quick_xml::escape::unescape(&value)
-                    .map_err(|error| error.to_string())?
+                    .map_err(|error| parse_failure(error.to_string()))?
                     .into_owned();
                 if let Some(parent) = stack.last_mut() {
                     // XmlDocument.PreserveWhitespace defaults to false in the
@@ -75,21 +84,23 @@ pub(super) fn parse_xml(input: &str) -> Result<XmlDocument, String> {
                         parent.children.push(XmlChild::Text(value));
                     }
                 } else if !value.trim().is_empty() {
-                    return Err("XML text appears outside the root element".into());
+                    return Err(parse_failure("XML text appears outside the root element"));
                 }
             }
             Event::CData(text) => {
                 let value = text
                     .decode()
-                    .map_err(|error| error.to_string())?
+                    .map_err(|error| parse_failure(error.to_string()))?
                     .into_owned();
                 let parent = stack
                     .last_mut()
-                    .ok_or("XML CDATA appears outside the root element")?;
+                    .ok_or_else(|| parse_failure("XML CDATA appears outside the root element"))?;
                 parent.children.push(XmlChild::Text(value));
             }
             Event::GeneralRef(reference) => {
-                let reference = reference.decode().map_err(|error| error.to_string())?;
+                let reference = reference
+                    .decode()
+                    .map_err(|error| parse_failure(error.to_string()))?;
                 let value = if let Some(number) = reference.strip_prefix("#x") {
                     u32::from_str_radix(number, 16)
                         .ok()
@@ -104,18 +115,22 @@ pub(super) fn parse_xml(input: &str) -> Result<XmlDocument, String> {
                 } else {
                     resolve_predefined_entity(&reference).map(ToOwned::to_owned)
                 }
-                .ok_or_else(|| format!("XML contains unknown entity &{reference};"))?;
+                .ok_or_else(|| {
+                    parse_failure(format!("XML contains unknown entity &{reference};"))
+                })?;
                 let parent = stack
                     .last_mut()
-                    .ok_or("XML entity appears outside the root element")?;
+                    .ok_or_else(|| parse_failure("XML entity appears outside the root element"))?;
                 parent.children.push(XmlChild::Text(value));
             }
             Event::End(_) => {
-                let element = stack.pop().ok_or("XML contains an unmatched close tag")?;
+                let element = stack
+                    .pop()
+                    .ok_or_else(|| parse_failure("XML contains an unmatched close tag"))?;
                 if let Some(parent) = stack.last_mut() {
                     parent.children.push(XmlChild::Element(element));
                 } else if root.replace(element).is_some() {
-                    return Err("XML contains more than one root element".into());
+                    return Err(parse_failure("XML contains more than one root element"));
                 }
             }
             Event::Decl(_) | Event::Comment(_) | Event::PI(_) | Event::DocType(_) => {}
@@ -123,10 +138,12 @@ pub(super) fn parse_xml(input: &str) -> Result<XmlDocument, String> {
         }
     }
     if !stack.is_empty() {
-        return Err("XML document ended before all elements were closed".into());
+        return Err(parse_failure(
+            "XML document ended before all elements were closed",
+        ));
     }
     Ok(XmlDocument {
-        root: root.ok_or("XML document has no root element")?,
+        root: root.ok_or_else(|| parse_failure("XML document has no root element"))?,
     })
 }
 
@@ -158,7 +175,7 @@ impl XmlDocument {
         }
     }
 
-    pub(super) fn element(&self, path: &[usize]) -> Result<&XmlElement, String> {
+    pub(super) fn element(&self, path: &[usize]) -> Result<&XmlElement, ExecutionFailure> {
         let mut element = &self.root;
         for index in path {
             element = match element.children.get(*index) {
@@ -169,7 +186,10 @@ impl XmlDocument {
         Ok(element)
     }
 
-    pub(super) fn element_mut(&mut self, path: &[usize]) -> Result<&mut XmlElement, String> {
+    pub(super) fn element_mut(
+        &mut self,
+        path: &[usize],
+    ) -> Result<&mut XmlElement, ExecutionFailure> {
         let mut element = &mut self.root;
         for index in path {
             element = match element.children.get_mut(*index) {
@@ -185,7 +205,7 @@ impl XmlDocument {
         start: &[usize],
         name: &str,
         output: &mut Vec<Vec<usize>>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecutionFailure> {
         let element = self.element(start)?;
         for (index, child) in element.children.iter().enumerate() {
             if matches!(child, XmlChild::Element(_)) {
@@ -202,7 +222,7 @@ impl XmlDocument {
         start: &[usize],
         name: &str,
         output: &mut Vec<Vec<usize>>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecutionFailure> {
         let element = self.element(start)?;
         if name == "*" || element.name == name {
             output.push(start.to_vec());
@@ -223,7 +243,7 @@ impl XmlDocument {
         mutation: XmlMutation,
         request: &NativeCallRequest,
         selections: &[XmlSelection],
-    ) -> Result<bool, String> {
+    ) -> Result<bool, ExecutionFailure> {
         let mut applied = true;
         match mutation {
             XmlMutation::Set => {
@@ -243,7 +263,9 @@ impl XmlDocument {
                         element.children = parse_xml_fragment(&value)?;
                     } else {
                         // XmlElement.Value cannot be assigned in System.Xml.
-                        return Err("XML_SET style 0 requires an attribute or text node".into());
+                        return Err(argument_failure(
+                            "XML_SET style 0 requires an attribute or text node",
+                        ));
                     }
                 }
             }
@@ -272,7 +294,7 @@ impl XmlDocument {
             XmlMutation::AddAttribute => {
                 let name = string_argument(request, 2)?.to_owned();
                 if name.is_empty() || name.contains(['<', '>', '=', '/', ':']) {
-                    return Err("XML attribute name is invalid".into());
+                    return Err(argument_failure("XML attribute name is invalid"));
                 }
                 let value = optional_string(request, 3).unwrap_or_default().to_owned();
                 let method = optional_integer(request, 4)
@@ -355,7 +377,7 @@ pub(super) fn insert_sibling(
     path: &[usize],
     child: XmlElement,
     after: bool,
-) -> Result<bool, String> {
+) -> Result<bool, ExecutionFailure> {
     let Some((index, parent)) = path.split_last() else {
         return Ok(false);
     };
@@ -366,7 +388,10 @@ pub(super) fn insert_sibling(
     Ok(true)
 }
 
-pub(super) fn remove_element(document: &mut XmlDocument, path: &[usize]) -> Result<bool, String> {
+pub(super) fn remove_element(
+    document: &mut XmlDocument,
+    path: &[usize],
+) -> Result<bool, ExecutionFailure> {
     let Some((index, parent)) = path.split_last() else {
         return Ok(false);
     };
@@ -381,7 +406,7 @@ pub(super) fn replace_element(
     document: &mut XmlDocument,
     path: &[usize],
     replacement: XmlElement,
-) -> Result<bool, String> {
+) -> Result<bool, ExecutionFailure> {
     let Some((index, parent)) = path.split_last() else {
         return Ok(false);
     };
@@ -393,7 +418,7 @@ pub(super) fn replace_element(
     Ok(true)
 }
 
-pub(super) fn parse_xml_fragment(value: &str) -> Result<Vec<XmlChild>, String> {
+pub(super) fn parse_xml_fragment(value: &str) -> Result<Vec<XmlChild>, ExecutionFailure> {
     Ok(parse_xml(&format!(
         "<__rustyera_fragment>{value}</__rustyera_fragment>"
     ))?
@@ -427,6 +452,13 @@ impl XmlElement {
                 XmlChild::Element(_) | XmlChild::Text(_) => None,
             })
             .collect()
+    }
+
+    pub(super) fn element_named(&self, name: &str) -> Option<&Self> {
+        self.children.iter().find_map(|child| match child {
+            XmlChild::Element(element) if element.name == name => Some(element),
+            XmlChild::Element(_) | XmlChild::Text(_) => None,
+        })
     }
 
     pub(super) fn inner_text(&self) -> String {

@@ -14,6 +14,7 @@ pub enum HostCapability {
     Network,
     System,
     Extension,
+    Sql,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

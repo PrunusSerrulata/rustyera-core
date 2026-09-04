@@ -2,6 +2,7 @@
 fn configuration_update_is_validated_and_serialized_by_the_runtime() {
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 7,
             files: vec![
                 SubmittedFile {
@@ -170,6 +171,7 @@ fn debugger_pause_freezes_frontend_time_until_resume() {
 fn revoking_the_active_debugger_resumes_a_debug_paused_runtime() {
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
@@ -248,6 +250,7 @@ fn ready_project_reload_stages_and_commits_a_normalized_delta() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
@@ -348,6 +351,7 @@ fn incompatible_low_memory_hot_reload_keeps_the_sparse_live_project() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -390,8 +394,7 @@ fn incompatible_low_memory_hot_reload_keeps_the_sparse_live_project() {
         .iter()
         .map(|file| file.payload.clone())
         .collect::<Vec<_>>();
-    let before_artifact =
-        std::ptr::from_ref(session.vm.as_ref().unwrap().vm().artifact()).addr();
+    let before_artifact = std::ptr::from_ref(session.vm.as_ref().unwrap().vm().artifact()).addr();
 
     submit(
         &mut session,
@@ -533,6 +536,7 @@ fn state_import_rejects_out_of_order_chunks_and_bad_digests() {
 fn full_project_manifest_import_accepts_commit_digest() {
     let mut session = negotiated_session();
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 7,
         files: Vec::new(),
     };
@@ -599,10 +603,11 @@ fn full_project_manifest_import_accepts_commit_digest() {
         RuntimeMessage::StateTransferCancel(StateTransferCancel { transfer_id }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
-    assert!(drain(&mut session).iter().all(|message| !matches!(
-        message,
-        RuntimeMessage::CommandRejected(_)
-    )));
+    assert!(
+        drain(&mut session)
+            .iter()
+            .all(|message| !matches!(message, RuntimeMessage::CommandRejected(_)))
+    );
     assert!(session.staged_full_project_manifest.is_none());
 }
 
@@ -700,7 +705,9 @@ fn state_import_commit_enforces_digest_placement() {
         3,
         RuntimeMessage::StateImportCommit(StateImportCommit {
             transfer_id,
-            digest: Some(ProtocolBytes::new(blake3::hash(&ordinary).as_bytes().to_vec())),
+            digest: Some(ProtocolBytes::new(
+                blake3::hash(&ordinary).as_bytes().to_vec(),
+            )),
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -738,7 +745,9 @@ fn full_project_manifest_import_cleans_up_malformed_cbor() {
         3,
         RuntimeMessage::StateImportCommit(StateImportCommit {
             transfer_id,
-            digest: Some(ProtocolBytes::new(blake3::hash(&malformed).as_bytes().to_vec())),
+            digest: Some(ProtocolBytes::new(
+                blake3::hash(&malformed).as_bytes().to_vec(),
+            )),
         }),
     );
     session.drive(RuntimeDriveBudget::default()).unwrap();
@@ -756,6 +765,7 @@ fn full_project_manifest_import_cleans_up_malformed_cbor() {
 fn full_project_manifest_busy_commit_is_retryable() {
     let mut session = negotiated_session();
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 9,
         files: Vec::new(),
     };
@@ -790,6 +800,7 @@ fn full_project_manifest_busy_commit_is_retryable() {
     session.staged_full_project_manifest = Some(StagedFullProjectManifest {
         source_transfer_id: None,
         manifest: ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 8,
             files: Vec::new(),
         },
@@ -814,11 +825,7 @@ fn full_project_manifest_busy_commit_is_retryable() {
     assert!(session.inbound_transfer.is_some());
 
     session.staged_full_project_manifest = None;
-    submit(
-        &mut session,
-        4,
-        RuntimeMessage::StateImportCommit(commit),
-    );
+    submit(&mut session, 4, RuntimeMessage::StateImportCommit(commit));
     session.drive(RuntimeDriveBudget::default()).unwrap();
     assert!(drain(&mut session).iter().any(|message| matches!(
         message,
@@ -858,6 +865,7 @@ fn host_staged_compiled_cache_reuses_the_owned_payload() {
 fn training_reset_updates_shared_and_all_character_state_atomically() {
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
@@ -928,6 +936,7 @@ fn training_reset_updates_shared_and_all_character_state_atomically() {
 fn show_user_reset_clears_shared_and_character_deltas() {
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
@@ -972,6 +981,7 @@ fn show_user_reset_clears_shared_and_character_deltas() {
 fn shop_purchase_validates_stock_and_commits_money_item_and_bought_together() {
     let build = build_project(
         &ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -1057,6 +1067,7 @@ fn train_controller_consumes_runtime_button_intent_and_loops_after_eventcomend()
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {

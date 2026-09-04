@@ -8,6 +8,7 @@ pub(super) fn parse_resource_manifest(
     diagnostics: &mut Vec<ResourceDiagnostic>,
     path: &str,
     text: &str,
+    missing_images_are_warnings: bool,
 ) {
     let directory = path.rsplit_once('/').map_or("", |(directory, _)| directory);
     let mut current_animation: Option<String> = None;
@@ -47,6 +48,7 @@ pub(super) fn parse_resource_manifest(
                 name.clone(),
                 SpriteDefinition {
                     name: name.clone(),
+                    revision: graph.static_sprite_revision,
                     width: width.cast_unsigned(),
                     height: height.cast_unsigned(),
                     frames: Vec::new(),
@@ -54,6 +56,7 @@ pub(super) fn parse_resource_manifest(
                     position_x: 0,
                     position_y: 0,
                     canvas_id: None,
+                    canvas_revision: None,
                     canvas_rectangle: None,
                 },
             );
@@ -76,12 +79,12 @@ pub(super) fn parse_resource_manifest(
             continue;
         };
         if !graph.images.contains_key(&image_path.to_ascii_lowercase()) {
-            diagnostics.push(resource_error(
-                path,
-                line_index,
-                "runtime.missing_resource_image",
-                format!("resource image {image_path} was not submitted by the frontend"),
-            ));
+            let message = format!("resource image {image_path} was not submitted by the frontend");
+            diagnostics.push(if missing_images_are_warnings {
+                resource_warning(path, line_index, "runtime.missing_resource_image", message)
+            } else {
+                resource_error(path, line_index, "runtime.missing_resource_image", message)
+            });
             current_animation = None;
             continue;
         }
@@ -97,7 +100,9 @@ pub(super) fn parse_resource_manifest(
             .map(|(width, height)| (width.cast_unsigned(), height.cast_unsigned()));
         let frame = SpriteFrame {
             image_path,
+            content_digest: None,
             canvas_id: None,
+            canvas_revision: None,
             source_x: rect.map_or(0, |value| value.0),
             source_y: rect.map_or(0, |value| value.1),
             source_width: rect.and_then(|value| u32::try_from(value.2).ok()),
@@ -128,6 +133,7 @@ pub(super) fn parse_resource_manifest(
             name.clone(),
             SpriteDefinition {
                 name,
+                revision: graph.static_sprite_revision,
                 width: destination.map_or(0, |value| value.0),
                 height: destination.map_or(0, |value| value.1),
                 frames: vec![frame],
@@ -135,6 +141,7 @@ pub(super) fn parse_resource_manifest(
                 position_x: 0,
                 position_y: 0,
                 canvas_id: None,
+                canvas_revision: None,
                 canvas_rectangle: None,
             },
         );

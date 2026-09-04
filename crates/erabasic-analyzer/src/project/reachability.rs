@@ -1,25 +1,28 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use erabasic_ast::{Argument, Expr, ExprKind, Function as AstFunction, Statement, StatementKind};
+use erabasic_ast::Function as AstFunction;
 use erabasic_hir::{
     EventAttributes, Function, FunctionId, FunctionKind, SemanticType, SourceLocation,
 };
 
 use crate::{
     AnalyzerDiagnostic, AnalyzerDiagnosticCode, AnalyzerDiagnosticSeverity, AnalyzerOptions,
-    WarningPolicy, symbols::Symbols,
+    WarningPolicy, context::AnalysisParserContext, expression::IndexResolver, symbols::Symbols,
 };
 
-use super::{
-    ParsedProjectSource, lowering_support::static_target_source,
-    statement_analysis::FunctionDefinition,
-};
+use super::{ParsedProjectSource, statement_analysis::FunctionDefinition};
+
+mod dynamic;
+
+use dynamic::{CandidateIndex, collect_calls};
 
 pub(super) fn reachable_functions(
     sources: &[ParsedProjectSource],
     definitions: &[FunctionDefinition],
     symbols: &Symbols,
     options: &AnalyzerOptions,
+    context: &AnalysisParserContext,
+    index_resolver: &IndexResolver,
 ) -> BTreeSet<FunctionId> {
     if options.analysis_mode || !options.ignore_uncalled_functions {
         return definitions.iter().map(|definition| definition.id).collect();
@@ -33,6 +36,7 @@ pub(super) fn reachable_functions(
         .iter()
         .map(|definition| (definition.id, definition))
         .collect();
+    let mut candidates = CandidateIndex::new(definitions, sources, options.ignore_case);
     let mut queue: VecDeque<_> = reachable.iter().copied().collect();
     while let Some(id) = queue.pop_front() {
         let Some(definition) = by_id.get(&id) else {
@@ -40,119 +44,34 @@ pub(super) fn reachable_functions(
         };
         let function =
             &sources[definition.source_index].script.functions[definition.function_index];
-        if function.body.iter().any(uses_dynamic_call) {
-            reachable.extend(definitions.iter().map(|definition| definition.id));
-            break;
-        }
-        let mut calls = Vec::new();
-        for statement in &function.body {
-            collect_statement_calls(statement, &mut calls);
-        }
-        for call in calls {
+        let calls = collect_calls(function, symbols, id, context, index_resolver);
+        for call in calls.direct {
             if let Some(target) = symbols.function(&call)
                 && reachable.insert(target.id)
             {
                 queue.push_back(target.id);
             }
         }
+        for pattern in calls.dynamic {
+            if !pattern.is_bounded() {
+                return definitions.iter().map(|definition| definition.id).collect();
+            }
+            if let Some(exact) = pattern.exact() {
+                if let Some(target) = symbols.function(&exact)
+                    && reachable.insert(target.id)
+                {
+                    queue.push_back(target.id);
+                }
+                continue;
+            }
+            for target in candidates.resolve(&pattern) {
+                if reachable.insert(*target) {
+                    queue.push_back(*target);
+                }
+            }
+        }
     }
     reachable
-}
-
-fn collect_statement_calls(statement: &Statement, calls: &mut Vec<String>) {
-    match &statement.kind {
-        StatementKind::Instruction {
-            name,
-            raw_arguments,
-            arguments,
-        } => {
-            if matches!(
-                name.as_str(),
-                "CALL" | "CALLF" | "JUMP" | "BEGIN" | "TRYCALL" | "TRYJUMP"
-            ) {
-                let target = static_target_source(raw_arguments).trim().trim_matches('"');
-                if !target.is_empty() {
-                    calls.push(target.to_owned());
-                }
-            }
-            for argument in arguments {
-                if let Argument::Expression(expression)
-                | Argument::MixedExpression { expression, .. } = argument
-                {
-                    collect_expression_calls(expression, calls);
-                }
-            }
-        }
-        StatementKind::Assignment { value, target, .. } => {
-            collect_expression_calls(value, calls);
-            for index in &target.indices {
-                collect_expression_calls(index, calls);
-            }
-        }
-        StatementKind::GotoLabel { .. } | StatementKind::Directive(_) | StatementKind::Invalid => {}
-    }
-}
-
-fn collect_expression_calls(expression: &Expr, calls: &mut Vec<String>) {
-    match &expression.kind {
-        ExprKind::Call { name, args } => {
-            calls.push(name.clone());
-            for argument in args.iter().flatten() {
-                collect_expression_calls(argument, calls);
-            }
-        }
-        ExprKind::Variable { indices, .. } => {
-            for index in indices {
-                collect_expression_calls(index, calls);
-            }
-        }
-        ExprKind::Unary { operand, .. }
-        | ExprKind::Postfix { operand, .. }
-        | ExprKind::Group(operand) => {
-            collect_expression_calls(operand, calls);
-        }
-        ExprKind::Binary { left, right, .. } => {
-            collect_expression_calls(left, calls);
-            collect_expression_calls(right, calls);
-        }
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            collect_expression_calls(condition, calls);
-            collect_expression_calls(then_expr, calls);
-            collect_expression_calls(else_expr, calls);
-        }
-        ExprKind::Integer(_)
-        | ExprKind::String(_)
-        | ExprKind::Identifier(_)
-        | ExprKind::Formatted(_)
-        | ExprKind::Error => {}
-    }
-}
-
-fn uses_dynamic_call(statement: &Statement) -> bool {
-    // Emuera parses every function once a runtime-resolved call target is reachable.
-    // Keep this list aligned with the cross-function dynamic lowering paths so the
-    // IgnoreUncalledFunction optimization cannot discard a possible target body.
-    matches!(
-        &statement.kind,
-        StatementKind::Instruction { name, .. }
-            if matches!(
-                name.as_str(),
-                "CALLFORM"
-                    | "CALLFORMF"
-                    | "JUMPFORM"
-                    | "TRYCALLFORM"
-                    | "TRYCALLFORMF"
-                    | "TRYJUMPFORM"
-                    | "TRYCCALL"
-                    | "TRYCCALLFORM"
-                    | "TRYCJUMP"
-                    | "TRYCJUMPFORM"
-            )
-    )
 }
 
 pub(super) fn uncalled_function(
@@ -224,7 +143,10 @@ pub(super) fn report_uncalled(
     ));
 }
 
-pub(super) fn function_semantics(function: &AstFunction) -> (FunctionKind, SemanticType) {
+pub(super) fn function_semantics(
+    function: &AstFunction,
+    compatibility: &erabasic_compat::CompatibilityIdentity,
+) -> (FunctionKind, SemanticType) {
     if function
         .attributes
         .iter()
@@ -240,7 +162,10 @@ pub(super) fn function_semantics(function: &AstFunction) -> (FunctionKind, Seman
         return (FunctionKind::Method, SemanticType::Integer);
     }
     let upper = function.name.to_ascii_uppercase();
-    if is_event_name(&upper) {
+    if is_event_name(&upper)
+        || (compatibility.supports_fault_hooks()
+            && matches!(upper.as_str(), "BEFORE_ERROR" | "BEFORE_THROW"))
+    {
         (FunctionKind::Event, SemanticType::Void)
     } else if is_system_name(&upper) {
         (FunctionKind::System, SemanticType::Void)

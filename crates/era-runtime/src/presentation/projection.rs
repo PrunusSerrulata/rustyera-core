@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use era_runtime_protocol::{
-    CellAlignment, Color, DisplayLine, DisplayRun, InteractionToken, ProtocolValue, TextStyle,
+    CellAlignment, CellWidthIntent, Color, DisplayLine, DisplayRun, InteractionToken,
+    ProtocolValue, TextStyle,
 };
 use erabasic_vm::{CharacterWidthMode, VmValue, display_width, emuera_display_width};
 use unicode_segmentation::UnicodeSegmentation as _;
@@ -560,13 +561,8 @@ pub(super) fn project_runs(
             DisplayRun::ColumnCell {
                 content,
                 alignment,
-                preferred_columns,
-            } => projected.extend(project_column_cell(
-                content,
-                alignment,
-                preferred_columns,
-                options,
-            )),
+                width,
+            } => projected.extend(project_column_cell(content, alignment, width, options)),
             DisplayRun::Separator { pattern, style, .. } if !separators => {
                 projected.push(project_separator(&pattern, style, character_width_mode));
             }
@@ -608,7 +604,7 @@ fn project_separator(
 fn project_column_cell(
     content: Vec<DisplayRun>,
     alignment: CellAlignment,
-    preferred_columns: u32,
+    width: CellWidthIntent,
     options: ProjectionOptions,
 ) -> Vec<DisplayRun> {
     let content = project_runs(
@@ -624,9 +620,14 @@ fn project_column_cell(
         return vec![DisplayRun::ColumnCell {
             content,
             alignment,
-            preferred_columns,
+            width,
         }];
     }
+    let CellWidthIntent::ProjectColumns(preferred_columns) = width else {
+        // A text-only projection has no authoritative font metrics. Keeping the
+        // content unpadded is deterministic and does not invent pixel equivalence.
+        return content;
+    };
     let width = projected_text_width(&content, options.character_width_mode);
     let padding = " ".repeat(
         usize::try_from(preferred_columns)

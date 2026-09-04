@@ -8,9 +8,17 @@ use quick_xml::escape::resolve_predefined_entity;
 use quick_xml::events::Event;
 use serde::{Deserialize, Serialize};
 
-use crate::{HostWrite, NativeCallRequest, NativePlaceView, NativeReady, PlaceDescriptor, VmValue};
+use crate::{
+    ExecutionFailure, FaultCategory, HostWrite, NativeCallRequest, NativePlaceView, NativeReady,
+    PlaceDescriptor, ScriptFaultKind, VmFaultCode, VmValue,
+};
 
+mod column_identity;
+mod column_options;
 mod data_table;
+mod legacy;
+mod map_calls;
+mod map_leases;
 mod xml;
 
 use data_table::{
@@ -22,10 +30,12 @@ use data_table::{
 };
 use xml::{parse_xml, xml_attribute_escape, xml_text_escape};
 
-pub(crate) const STRUCTURED_BUNDLE_VERSION: u32 = 2;
+pub(crate) const STRUCTURED_BUNDLE_VERSION: u32 = 4;
 
 pub(crate) fn bundle_key() -> SymbolKey {
-    SymbolKey::derive("rustyera.native.bundle", b"structured-data-v2")
+    // Provider identity remains stable across compatible payload revisions; the
+    // explicit four-byte bundle header rejects older serialized state.
+    SymbolKey::derive("rustyera.native.bundle", b"structured-data-v3")
 }
 
 pub(crate) fn is_structured_name(name: &str) -> bool {
@@ -33,12 +43,33 @@ pub(crate) fn is_structured_name(name: &str) -> bool {
     name.starts_with("map_") || name.starts_with("xml_") || name.starts_with("dt_")
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct StructuredState {
     maps: BTreeMap<String, OrderedMap>,
+    map_leases: map_leases::MapLeaseBook,
     xml_documents: BTreeMap<String, XmlDocument>,
     data_tables: BTreeMap<String, DataTable>,
+    next_column_identity: u64,
+    column_identity_revision: u64,
 }
+
+impl Default for StructuredState {
+    fn default() -> Self {
+        Self {
+            maps: BTreeMap::new(),
+            map_leases: map_leases::MapLeaseBook::default(),
+            xml_documents: BTreeMap::new(),
+            data_tables: BTreeMap::new(),
+            next_column_identity: 1,
+            column_identity_revision: 0,
+        }
+    }
+}
+
+pub(crate) use column_identity::ColumnIdentityStamp;
+pub(crate) use column_options::is_internal_column_native;
+pub(crate) use map_calls::MapOperation;
+pub(crate) use map_leases::{MapLease, MapLeaseOrigin, MapLeaseOwner, MapLeaseStamp};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StructuredScope {
@@ -61,6 +92,39 @@ pub enum StructuredExtension {
         schema: String,
         data: String,
     },
+}
+
+/// Parse the deterministic MAP XML subset used by `SQL_IMPORT_MAP_XML`.
+///
+/// Only direct `/map/p` elements participate. Each row uses the first direct `k` and `v`
+/// child, skips entries missing either child, and preserves source order and duplicate keys.
+/// Values use the same `InnerXml` projection as the `EraBasic` XML operations.
+///
+/// # Errors
+///
+/// Returns a script parse failure when the XML is malformed or its root is not exactly `map`.
+pub fn parse_map_xml_rows(input: &str) -> Result<Vec<(String, String)>, ExecutionFailure> {
+    let document = parse_xml(input)?;
+    if document.root.name != "map" {
+        return Err(parse_failure("MAP XML root element must be map"));
+    }
+
+    Ok(document
+        .root
+        .children
+        .iter()
+        .filter_map(|child| {
+            let XmlChild::Element(row) = child else {
+                return None;
+            };
+            if row.name != "p" {
+                return None;
+            }
+            let key = row.element_named("k")?;
+            let value = row.element_named("v")?;
+            Some((key.inner_text(), value.inner_xml()))
+        })
+        .collect())
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -141,9 +205,11 @@ enum Cell {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct Column {
+    identity: u64,
     name: String,
     value_type: DataType,
     nullable: bool,
+    default_value: Cell,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -166,9 +232,11 @@ impl DataTable {
             case_sensitive: true,
             next_id: 1,
             columns: vec![Column {
+                identity: 0,
                 name: "id".into(),
                 value_type: DataType::Int64,
                 nullable: false,
+                default_value: Cell::Null,
             }],
             rows: Vec::new(),
         }
@@ -215,12 +283,16 @@ impl crate::NativeService for StructuredNative {
         &["RESULT", "RESULTS"]
     }
 
-    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "structured native state lock is poisoned".to_owned())?;
-        state.call(&self.name, &request)
+    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, crate::ExecutionFailure> {
+        let mut state = self.state.lock().map_err(|_| {
+            crate::host::native_contract_failure("structured native state lock is poisoned")
+        })?;
+        state.call(&self.name, &request).map_err(|mut failure| {
+            // All structured native errors historically used Native. Keep that legacy code
+            // without deriving or changing source-assigned catch permission.
+            failure.code = VmFaultCode::Native;
+            failure
+        })
     }
 
     fn requires_rollback_checkpoint(&self) -> bool {
@@ -235,6 +307,10 @@ impl crate::NativeService for StructuredNative {
 
 impl StructuredState {
     pub(crate) fn encode(&self) -> Result<Vec<u8>, String> {
+        self.validate_identity_state()
+            .map_err(|failure| failure.to_string())?;
+        self.validate_map_leases()
+            .map_err(|failure| failure.to_string())?;
         let payload = serde_json::to_vec(self).map_err(|error| error.to_string())?;
         let mut output = STRUCTURED_BUNDLE_VERSION.to_le_bytes().to_vec();
         output.extend(payload);
@@ -252,14 +328,21 @@ impl StructuredState {
                 "unsupported structured native bundle version {version}"
             ));
         }
-        serde_json::from_slice(&bytes[4..]).map_err(|error| error.to_string())
+        let state: Self = serde_json::from_slice(&bytes[4..]).map_err(|error| error.to_string())?;
+        state
+            .validate_identity_state()
+            .map_err(|failure| failure.to_string())?;
+        state
+            .validate_map_leases()
+            .map_err(|failure| failure.to_string())?;
+        Ok(state)
     }
 
     pub(crate) fn clear_for_transaction(
         &mut self,
         extensions: &ExtensionData,
         transaction: &crate::VmRuntimeStateTransaction,
-    ) {
+    ) -> Result<(), ExecutionFailure> {
         match transaction {
             crate::VmRuntimeStateTransaction::ResetNewGame
             | crate::VmRuntimeStateTransaction::ResetGameData
@@ -269,31 +352,32 @@ impl StructuredState {
                     &extensions.save_maps,
                     &extensions.save_xmls,
                     &extensions.save_data_tables,
-                );
+                )?;
             }
             crate::VmRuntimeStateTransaction::ResetGlobalData => {
                 self.clear_declared(
                     &extensions.global_maps,
                     &extensions.global_xmls,
                     &extensions.global_data_tables,
-                );
+                )?;
                 self.clear_declared(
                     &extensions.static_maps,
                     &extensions.static_xmls,
                     &extensions.static_data_tables,
-                );
+                )?;
             }
             crate::VmRuntimeStateTransaction::OverlayGlobal(_) => {
                 self.clear_declared(
                     &extensions.global_maps,
                     &extensions.global_xmls,
                     &extensions.global_data_tables,
-                );
+                )?;
             }
             crate::VmRuntimeStateTransaction::AppendCharacters(_)
             | crate::VmRuntimeStateTransaction::SetLastLoad { .. }
             | crate::VmRuntimeStateTransaction::Mutate { .. } => {}
         }
+        Ok(())
     }
 
     fn clear_declared(
@@ -301,10 +385,10 @@ impl StructuredState {
         maps: &BTreeSet<String>,
         xmls: &BTreeSet<String>,
         tables: &BTreeSet<String>,
-    ) {
+    ) -> Result<(), ExecutionFailure> {
         for key in maps {
-            if let Some(map) = self.maps.get_mut(key) {
-                map.entries.clear();
+            if self.maps.contains_key(key) {
+                self.replace_map_binding(key, OrderedMap::default())?;
             }
         }
         for key in xmls {
@@ -315,6 +399,7 @@ impl StructuredState {
                 table.rows.clear();
             }
         }
+        Ok(())
     }
 
     pub(crate) fn export_extensions(
@@ -389,16 +474,21 @@ impl StructuredState {
                     for (entry_key, value) in entries {
                         map.set(entry_key.clone(), value.clone());
                     }
-                    self.maps.insert(key.clone(), map);
+                    self.replace_map_binding(key, map)
+                        .map_err(|failure| failure.to_string())?;
                     imported.insert((0x20, key.clone()));
                 }
                 StructuredExtension::Xml { key, document } if xmls.contains(key) => {
-                    self.xml_documents.insert(key.clone(), parse_xml(document)?);
+                    self.xml_documents.insert(
+                        key.clone(),
+                        parse_xml(document).map_err(|failure| failure.to_string())?,
+                    );
                     imported.insert((0x21, key.clone()));
                 }
                 StructuredExtension::DataTable { key, schema, data } if tables.contains(key) => {
                     let table = decode_data_table_extension(key, schema, data)?;
-                    self.data_tables.insert(key.clone(), table);
+                    self.install_fresh_table(key.clone(), table)
+                        .map_err(|failure| failure.to_string())?;
                     imported.insert((0x22, key.clone()));
                 }
                 _ => {}
@@ -408,7 +498,11 @@ impl StructuredState {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn call(&mut self, name: &str, request: &NativeCallRequest) -> Result<NativeReady, String> {
+    pub(crate) fn call(
+        &mut self,
+        name: &str,
+        request: &NativeCallRequest,
+    ) -> Result<NativeReady, ExecutionFailure> {
         let name = name.to_ascii_lowercase();
         if name.starts_with("map_") {
             return self.call_map(&name, request);
@@ -416,14 +510,35 @@ impl StructuredState {
         if name.starts_with("xml_") {
             return self.call_xml(&name, request);
         }
+        if name.starts_with("dt__column_") {
+            return self.call_column_option(&name, request);
+        }
         if name.starts_with("dt_") {
             return self.call_data_table(&name, request);
         }
-        Err(format!("unknown structured native service {name}"))
+        Err(contract_failure(format!(
+            "unknown structured native service {name}"
+        )))
     }
 
     #[allow(clippy::too_many_lines)]
-    fn call_map(&mut self, name: &str, request: &NativeCallRequest) -> Result<NativeReady, String> {
+    fn call_map(
+        &mut self,
+        name: &str,
+        request: &NativeCallRequest,
+    ) -> Result<NativeReady, ExecutionFailure> {
+        if matches!(
+            name,
+            "map_create"
+                | "map_release"
+                | "map_set"
+                | "map_remove"
+                | "map_clear"
+                | "map_fromxml"
+                | "map_merge"
+        ) {
+            self.bump_map_revision()?;
+        }
         let map_name = string_argument(request, 0)?.to_owned();
         match name {
             "map_create" => {
@@ -437,7 +552,7 @@ impl StructuredState {
             }
             "map_exist" => ready_integer(i64::from(self.maps.contains_key(&map_name))),
             "map_release" => {
-                self.maps.remove(&map_name);
+                self.retire_map_binding(&map_name);
                 ready_integer(1)
             }
             "map_get" => {
@@ -562,26 +677,24 @@ impl StructuredState {
                 }
                 ready_integer(1)
             }
-            _ => Err(format!("unsupported map native {name}")),
+            "map_merge" => self.merge_maps(request),
+            name if MapOperation::from_name(name).is_some() => Err(contract_failure(
+                "MAP extension requires staged capture; eager dispatch is invalid",
+            )),
+            _ => Err(contract_failure(format!("unsupported map native {name}"))),
         }
     }
 }
 
 fn decode_data_table_extension(key: &str, schema: &str, data: &str) -> Result<DataTable, String> {
     let mut table = if schema.trim_start().starts_with('<') {
-        let schema = parse_data_table_schema(key, schema)?;
-        parse_data_table_xml(key, &schema, data)?
+        let schema = parse_data_table_schema(key, schema).map_err(|failure| failure.to_string())?;
+        parse_data_table_xml(key, &schema, data).map_err(|failure| failure.to_string())?
     } else {
         // RustyEra briefly wrote its internal serde representation before the
         // reference-compatible DataSet XML boundary was implemented. Keep those
         // saves loadable, but never emit this legacy representation again.
-        let columns: Vec<Column> =
-            serde_json::from_str(schema).map_err(|error| error.to_string())?;
-        let table: DataTable = serde_json::from_str(data).map_err(|error| error.to_string())?;
-        if table.columns != columns {
-            return Err(format!("DataTable extension {key} schema differs"));
-        }
-        table
+        legacy::decode_table(key, schema, data)?
     };
     table.next_id = table
         .rows
@@ -599,3 +712,19 @@ mod xml_calls;
 
 #[cfg(test)]
 mod tests;
+
+fn contract_failure(message: impl Into<String>) -> ExecutionFailure {
+    ExecutionFailure::classified(FaultCategory::HostContract, VmFaultCode::Native, message)
+}
+
+fn parse_failure(message: impl Into<String>) -> ExecutionFailure {
+    ExecutionFailure::script(ScriptFaultKind::Parse, VmFaultCode::Native, message)
+}
+
+fn argument_failure(message: impl Into<String>) -> ExecutionFailure {
+    ExecutionFailure::script(ScriptFaultKind::Argument, VmFaultCode::Native, message)
+}
+
+fn resource_failure(message: impl Into<String>) -> ExecutionFailure {
+    ExecutionFailure::classified(FaultCategory::ResourceLimit, VmFaultCode::Native, message)
+}

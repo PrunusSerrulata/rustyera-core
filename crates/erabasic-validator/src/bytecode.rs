@@ -1,5 +1,12 @@
+mod host_authorization;
 mod instructions;
+mod native_authorization;
+mod provenance;
+mod runtime_symbols;
 mod source_map;
+mod staged_authorization;
+
+pub use provenance::{ValidatedOperandStacks, ValidatedStackState, ValidatedStackToken};
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
@@ -25,6 +32,12 @@ pub struct ValidationContext {
     pub vm_abi: u32,
     pub supported_features: BTreeSet<String>,
     pub native_imports: BTreeMap<SymbolKey, NativeImport>,
+    pub runtime_native_authorizations:
+        BTreeMap<SymbolKey, erabasic_bytecode::RuntimeNativeAuthorization>,
+    pub runtime_host_authorizations:
+        BTreeMap<SymbolKey, erabasic_bytecode::RuntimeHostAuthorization>,
+    pub runtime_staged_authorizations:
+        BTreeMap<SymbolKey, erabasic_bytecode::RuntimeStagedAuthorization>,
     pub host_imports: BTreeMap<SymbolKey, HostImport>,
     pub host_capabilities: BTreeSet<HostCapability>,
     pub limits: ValidationLimits,
@@ -41,6 +54,9 @@ impl Default for ValidationContext {
             vm_abi: VM_ABI_VERSION,
             supported_features: BTreeSet::new(),
             native_imports: BTreeMap::new(),
+            runtime_native_authorizations: BTreeMap::new(),
+            runtime_host_authorizations: BTreeMap::new(),
+            runtime_staged_authorizations: BTreeMap::new(),
             host_imports: BTreeMap::new(),
             host_capabilities: BTreeSet::new(),
             limits: ValidationLimits::default(),
@@ -64,6 +80,24 @@ impl ValidationContext {
                 .cloned()
                 .map(|import| (import.import.key, import))
                 .collect(),
+            runtime_native_authorizations: artifact
+                .runtime_native_authorizations
+                .iter()
+                .cloned()
+                .map(|authorization| (authorization.key, authorization))
+                .collect(),
+            runtime_host_authorizations: artifact
+                .runtime_host_authorizations
+                .iter()
+                .cloned()
+                .map(|authorization| (authorization.key, authorization))
+                .collect(),
+            runtime_staged_authorizations: artifact
+                .runtime_staged_authorizations
+                .iter()
+                .cloned()
+                .map(|authorization| (authorization.key, authorization))
+                .collect(),
             host_imports: artifact
                 .host_imports
                 .iter()
@@ -74,6 +108,16 @@ impl ValidationContext {
                 .host_imports
                 .iter()
                 .map(|import| import.capability)
+                .chain(
+                    artifact
+                        .runtime_host_authorizations
+                        .iter()
+                        .flat_map(|family| {
+                            std::iter::once(&family.prototype)
+                                .chain(family.stages.iter().map(|(_, import)| import))
+                                .map(|import| import.capability)
+                        }),
+                )
                 .collect(),
             ..Self::default()
         }
@@ -81,9 +125,16 @@ impl ValidationContext {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ValidatedArtifact(Arc<BytecodeArtifact>);
+pub struct ValidatedArtifact(Arc<BytecodeArtifact>, Arc<ValidatedOperandStacks>);
 
 impl ValidatedArtifact {
+    /// Control-flow stack provenance produced by the same successful validation pass.
+    /// This data is never read from the artifact or snapshot payload.
+    #[must_use]
+    pub fn operand_stacks(&self) -> &ValidatedOperandStacks {
+        &self.1
+    }
+
     /// Refresh identities on a compiler artifact without losing its validation provenance.
     ///
     /// Identity refresh canonicalizes ordering and changes only manifest identities,
@@ -157,12 +208,28 @@ fn validate_artifact(
         validate_identities(&mut artifact, &mut diagnostics);
     }
     validate_symbols(&artifact, context, &mut diagnostics);
+    native_authorization::validate(&artifact, context, &mut diagnostics);
+    host_authorization::validate(&artifact, context, &mut diagnostics);
+    staged_authorization::validate(&artifact, context, &mut diagnostics);
+    if let Err(message) = runtime_symbols::validate_runtime_builtins(&artifact.runtime_builtins) {
+        diagnostics.push(ValidationDiagnostic::project(
+            ValidationCode::InvalidOperand,
+            message,
+        ));
+    }
+    if let Err(message) = runtime_symbols::validate_runtime_variables(&artifact) {
+        diagnostics.push(ValidationDiagnostic::project(
+            ValidationCode::InvalidOperand,
+            message,
+        ));
+    }
     validate_source_map(&artifact, &mut diagnostics);
-    validate_functions(&artifact, context, &mut diagnostics);
+    let operand_stacks = validate_functions(&artifact, context, &mut diagnostics);
     ValidationReport {
-        value: diagnostics
-            .is_empty()
-            .then_some(ValidatedArtifact(Arc::new(artifact))),
+        value: diagnostics.is_empty().then_some(ValidatedArtifact(
+            Arc::new(artifact),
+            Arc::new(operand_stacks),
+        )),
         diagnostics,
     }
 }
@@ -173,6 +240,12 @@ fn validate_versions(
     diagnostics: &mut Vec<ValidationDiagnostic>,
 ) {
     let manifest = &artifact.manifest;
+    if let Err(error) = manifest.compatibility.validate() {
+        diagnostics.push(ValidationDiagnostic::project(
+            ValidationCode::UnsupportedVersion,
+            format!("unsupported artifact compatibility: {error}"),
+        ));
+    }
     if manifest.container_version.major != context.container_version.major
         || manifest.container_version.minor > context.container_version.minor
         || manifest.isa_version.major != context.isa_version.major
@@ -395,14 +468,13 @@ fn validate_runtime_layout(
         );
         let unbound_reference = global.storage == BytecodeStorage::FunctionLocal
             && reference_parameters.contains(&global.key);
-        let disabled_builtin = global.dimensions.contains(&0)
+        let declared_zero_length = global.dimensions.contains(&0)
             && artifact
                 .project_data
                 .schema
                 .variable(&global.name)
                 .is_some_and(|schema| {
-                    schema.can_forbid
-                        && schema.dimensions.len() == global.dimensions.len()
+                    schema.dimensions.len() == global.dimensions.len()
                         && schema
                             .dimensions
                             .iter()
@@ -416,7 +488,7 @@ fn validate_runtime_layout(
             || (global.storage != BytecodeStorage::Calculated
                 && global.dimensions.contains(&0)
                 && !unbound_reference
-                && !disabled_builtin)
+                && !declared_zero_length)
         {
             diagnostics.push(ValidationDiagnostic::project(
                 ValidationCode::InvalidOperand,
@@ -578,7 +650,7 @@ fn validate_functions(
     artifact: &BytecodeArtifact,
     context: &ValidationContext,
     diagnostics: &mut Vec<ValidationDiagnostic>,
-) {
+) -> ValidatedOperandStacks {
     let globals: BTreeMap<_, _> = artifact
         .globals
         .iter()
@@ -599,44 +671,47 @@ fn validate_functions(
         .iter()
         .map(|import| (import.import.key, &import.import))
         .collect();
+    let staged: BTreeMap<_, _> = artifact
+        .runtime_staged_authorizations
+        .iter()
+        .map(|authorization| (authorization.key, authorization))
+        .collect();
     let function_diagnostics = artifact
         .functions
         .par_iter()
         .map(|function| {
             let mut diagnostics = Vec::new();
-            validate_function(
+            let stacks = validate_function(
                 function,
                 &globals,
                 &functions,
                 &native,
                 &host,
+                &staged,
                 context,
                 &mut diagnostics,
             );
-            diagnostics
+            (function.key, stacks, diagnostics)
         })
         .collect::<Vec<_>>();
-    for mut function in function_diagnostics {
-        diagnostics.append(&mut function);
+    let mut stacks = BTreeMap::new();
+    for (function, provenance, mut function_diagnostics) in function_diagnostics {
+        diagnostics.append(&mut function_diagnostics);
+        stacks.insert(function, provenance);
     }
+    ValidatedOperandStacks::new(stacks)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn validate_function(
+fn validate_function_header(
     function: &BytecodeFunction,
-    globals: &BTreeMap<SymbolKey, &erabasic_bytecode::BytecodeGlobal>,
-    functions: &BTreeMap<SymbolKey, &BytecodeFunction>,
-    native: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
-    host: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
-    _context: &ValidationContext,
     diagnostics: &mut Vec<ValidationDiagnostic>,
-) {
+) -> Option<instructions::ProbeIndex> {
     if function.code.is_empty() {
         diagnostics.push(ValidationDiagnostic::project(
             ValidationCode::InvalidControlFlow,
             format!("function {} has no instructions", function.name),
         ));
-        return;
+        return None;
     }
     let mut label_names = BTreeSet::new();
     if function.labels.iter().any(|label| {
@@ -651,18 +726,56 @@ fn validate_function(
                 function.name
             ),
         ));
-        return;
+        return None;
     }
+    match instructions::ProbeIndex::new(function) {
+        Ok(probes) => Some(probes),
+        Err((index, (code, message))) => {
+            diagnostics.push(ValidationDiagnostic::instruction(
+                code,
+                &function.name,
+                index,
+                message,
+            ));
+            None
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_function(
+    function: &BytecodeFunction,
+    globals: &BTreeMap<SymbolKey, &erabasic_bytecode::BytecodeGlobal>,
+    functions: &BTreeMap<SymbolKey, &BytecodeFunction>,
+    native: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
+    host: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
+    staged: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeStagedAuthorization>,
+    context: &ValidationContext,
+    diagnostics: &mut Vec<ValidationDiagnostic>,
+) -> provenance::FunctionStackProvenance {
+    let Some(probes) = validate_function_header(function, diagnostics) else {
+        return provenance::FunctionStackProvenance::default();
+    };
     let mut states = vec![None; function.code.len()];
-    states[0] = Some(Vec::<BytecodeType>::new());
+    states[0] = Some(Vec::<instructions::StackValue>::new());
     let mut work = VecDeque::from([0usize]);
     let mut observed_max = 0usize;
+    let mut terminal_user_calls = BTreeMap::new();
     while let Some(index) = work.pop_front() {
         let Some(mut stack) = states[index].clone() else {
             continue;
         };
         let successors = match apply_instruction(
-            function, index, &mut stack, globals, functions, native, host,
+            function,
+            index,
+            &mut stack,
+            globals,
+            functions,
+            native,
+            host,
+            staged,
+            &context.runtime_staged_authorizations,
+            &probes,
         ) {
             Ok(successors) => successors,
             Err((code, message)) => {
@@ -676,6 +789,11 @@ fn validate_function(
             }
         };
         observed_max = observed_max.max(stack.len());
+        if successors.is_empty()
+            && function.code[index].opcode == erabasic_bytecode::Opcode::InvokeUserCall as u16
+        {
+            terminal_user_calls.insert(index, ValidatedStackState::from_stack(&stack));
+        }
         for successor in successors {
             if successor >= function.code.len() {
                 diagnostics.push(ValidationDiagnostic::instruction(
@@ -709,6 +827,7 @@ fn validate_function(
             format!("function {} understates its maximum stack", function.name),
         ));
     }
+    provenance::FunctionStackProvenance::new(states, terminal_user_calls)
 }
 
 use instructions::apply_instruction;

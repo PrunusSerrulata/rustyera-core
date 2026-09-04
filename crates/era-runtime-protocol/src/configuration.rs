@@ -111,6 +111,8 @@ pub struct ClientPreferencesApplied {
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct ProjectConfigurationSnapshot {
+    #[n(5)]
+    pub compatibility: crate::CompatibilityIdentity,
     #[n(0)]
     pub project_revision: u64,
     /// BLAKE3 of the effective root reraconfig.toml after normalizing line endings to LF.

@@ -65,6 +65,9 @@ pub struct PreparedRuntimeState {
     pub(crate) memory: crate::Memory,
     pub(crate) reset_execution: bool,
     pub(crate) structured_state: Option<Vec<u8>>,
+    pub(crate) base_column_stamp: Option<crate::structured::ColumnIdentityStamp>,
+    pub(crate) base_map_stamp: Option<crate::structured::MapLeaseStamp>,
+    pub(crate) base_array_stamp: crate::state::array_leases::ArrayLeaseStamp,
 }
 
 /// Transactional state access used by the runtime's built-in system controller.
@@ -110,11 +113,25 @@ pub enum VmPortStop {
 /// dispatch stack. Runtime code must never be invoked from instruction execution.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VmHostRequest {
+    pub omitted_arguments: Vec<usize>,
     pub id: HostRequestId,
     pub fiber: FiberId,
     pub import: HostImport,
     pub arguments: Vec<VmValue>,
     pub origin: crate::VmExecutionOrigin,
+}
+
+impl VmHostRequest {
+    /// An explicit omitted argument has no value, while later source slots retain
+    /// their indices. Frontend service results never create this metadata.
+    #[must_use]
+    pub fn argument(&self, index: usize) -> Option<&VmValue> {
+        if self.omitted_arguments.binary_search(&index).is_ok() {
+            None
+        } else {
+            self.arguments.get(index)
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -126,7 +143,7 @@ pub enum VmHostCompletion {
         stability: HostWaitStability,
         rebind_payload: Vec<u8>,
     },
-    Error(String),
+    Error(crate::ExecutionFailure),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -164,6 +164,7 @@ pub(super) fn failed_with_incremental(
         artifact: None,
         incremental,
         report: ProjectLoadReport {
+            compatibility: None,
             project_revision: revision,
             success: false,
             diagnostics,

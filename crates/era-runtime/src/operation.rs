@@ -4,7 +4,76 @@ use era_runtime_save::SaveFileKind;
 use erabasic_vm::HostRequestId;
 use serde::{Deserialize, Serialize};
 
+use crate::audio::AudioObservationContinuation;
 use crate::host::{ExternalCompletion, PendingInput};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) enum SqlServiceContinuation {
+    Open {
+        request: HostRequestId,
+        epoch: u64,
+        logical_name: String,
+        connection: era_runtime_protocol::SqlConnectionHandleV1,
+        identity: era_runtime_protocol::SqlDatabaseIdentityV1,
+        resource_digest: Option<[u8; 32]>,
+    },
+    Execute {
+        request: HostRequestId,
+        epoch: u64,
+        connection_key: String,
+        connection: era_runtime_protocol::SqlConnectionHandleV1,
+        mode: era_runtime_protocol::SqlExecuteModeV1,
+        reader_id: Option<i64>,
+    },
+    ReaderRead {
+        request: HostRequestId,
+        epoch: u64,
+        reader_id: i64,
+        reader: era_runtime_protocol::SqlReaderHandleV1,
+    },
+    ReaderGet {
+        request: HostRequestId,
+        epoch: u64,
+        reader_id: i64,
+        reader: era_runtime_protocol::SqlReaderHandleV1,
+        string: bool,
+    },
+    ReaderIsNull {
+        request: HostRequestId,
+        epoch: u64,
+        reader_id: i64,
+        reader: era_runtime_protocol::SqlReaderHandleV1,
+    },
+    ReaderClose {
+        request: HostRequestId,
+        epoch: u64,
+        reader_id: i64,
+        reader: era_runtime_protocol::SqlReaderHandleV1,
+    },
+    ImportMap {
+        request: HostRequestId,
+        epoch: u64,
+        connection_key: String,
+        connection: era_runtime_protocol::SqlConnectionHandleV1,
+        expected_rows: u32,
+    },
+    Disconnect {
+        request: HostRequestId,
+        epoch: u64,
+        connection_key: String,
+        connection: era_runtime_protocol::SqlConnectionHandleV1,
+    },
+    RestoreOpen {
+        epoch: u64,
+        connection: era_runtime_protocol::SqlConnectionHandleV1,
+        snapshot: crate::runtime_snapshot::SqlConnectionSnapshot,
+    },
+    CleanupDisconnect {
+        epoch: u64,
+        provider: era_runtime_protocol::SqlProviderHandleV1,
+        connection: era_runtime_protocol::SqlConnectionHandleV1,
+    },
+}
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub(crate) enum CandidateSaveContinuation {
@@ -27,6 +96,8 @@ pub(crate) enum PendingService {
         continuation: CandidateSaveContinuation,
     },
     Host(ExternalCompletion),
+    Audio(AudioObservationContinuation),
+    Sql(SqlServiceContinuation),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -64,6 +135,7 @@ pub(crate) enum PendingStorage {
         request: HostRequestId,
     },
     HostLoadOrdinary {
+        request: HostRequestId,
         slot: u32,
     },
     HostLoadGlobal {
@@ -77,6 +149,9 @@ pub(crate) enum PendingStorage {
     HostCheck {
         request: HostRequestId,
         kind: SaveFileKind,
+        path: String,
+        data: Vec<u8>,
+        change_token: Option<String>,
     },
     HostFunctionWrite {
         request: HostRequestId,
@@ -92,6 +167,25 @@ pub(crate) enum PendingStorage {
         target: Option<erabasic_vm::PlaceDescriptor>,
         strip_character_dat: bool,
     },
+    HostResourceText {
+        request: HostRequestId,
+        path: String,
+        resource: bool,
+    },
+    HostResourceStat {
+        request: HostRequestId,
+        path: String,
+        resource: bool,
+    },
+    HostResourceList {
+        request: HostRequestId,
+        target: Option<erabasic_vm::PlaceDescriptor>,
+        directory: String,
+        pattern: Option<String>,
+        recursive: bool,
+        /// None awaits Data; Some awaits Resource after validating the Data response.
+        data_paths: Option<Vec<String>>,
+    },
     GraphicsImageRead {
         request: HostRequestId,
         canvas_id: i64,
@@ -105,6 +199,24 @@ pub(crate) enum PendingStorage {
     },
     CandidateSaveWrite {
         continuation: CandidateSaveContinuation,
+    },
+    SqlSeedRead {
+        request: HostRequestId,
+        epoch: u64,
+        connection_key: String,
+        logical_name: String,
+        connection: era_runtime_protocol::SqlConnectionHandleV1,
+        path: String,
+        expected_digest: [u8; 32],
+    },
+    SqlMapXmlRead {
+        request: HostRequestId,
+        epoch: u64,
+        connection_key: String,
+        connection: era_runtime_protocol::SqlConnectionHandleV1,
+        table: String,
+        path: String,
+        expected_digest: [u8; 32],
     },
 }
 
@@ -137,6 +249,7 @@ pub(crate) struct PendingOperations {
     entries: BTreeMap<u64, PendingOperation>,
     active_input: Option<u64>,
     queued_inputs: VecDeque<u64>,
+    pub(crate) html_lines: crate::session::html_query::HtmlLineFlows,
 }
 
 impl PendingOperations {
@@ -188,6 +301,7 @@ impl PendingOperations {
                 })
                 .collect();
         }
+        self.html_lines.rebind_epoch(epoch);
         self.epoch = epoch;
         (tokens, waits)
     }
@@ -200,7 +314,7 @@ impl PendingOperations {
     }
 
     pub(crate) fn total_count(&self) -> usize {
-        self.entries.len()
+        self.entries.len().saturating_add(self.html_lines.len())
     }
 
     pub(crate) fn has_transient_external(&self) -> bool {
@@ -361,6 +475,18 @@ impl PendingOperations {
         (services, storage)
     }
 
+    pub(crate) fn has_device_pump(&self) -> bool {
+        self.entries.values().any(|entry| {
+            matches!(
+                entry,
+                PendingOperation::Service {
+                    value: PendingService::Host(ExternalCompletion::DevicePump { .. }),
+                    ..
+                }
+            )
+        })
+    }
+
     pub(crate) fn has_candidate_write(&self) -> bool {
         self.entries.values().any(|operation| {
             matches!(
@@ -374,6 +500,7 @@ impl PendingOperations {
     }
 
     pub(crate) fn clear(&mut self) {
+        self.html_lines.clear();
         self.entries.clear();
         self.active_input = None;
         self.queued_inputs.clear();

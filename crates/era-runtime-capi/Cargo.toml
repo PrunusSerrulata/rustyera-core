@@ -12,3 +12,6 @@ era-protocol = { path = "../era-protocol" }
 era-runtime = { path = "../era-runtime" }
 era-runtime-ffi = { path = "../era-runtime-ffi" }
 minicbor.workspace = true
+
+[dev-dependencies]
+era-runtime-protocol = { path = "../era-runtime-protocol" }

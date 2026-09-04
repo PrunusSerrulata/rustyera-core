@@ -54,6 +54,12 @@ pub enum FileCategory {
     Resource,
     #[n(5)]
     Configuration,
+    /// Symbolic aliases for a neighboring built-in or user index table.
+    #[n(6)]
+    Als,
+    /// Deferred user index data; never parsed as `EraBasic` script source.
+    #[n(7)]
+    Erd,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -100,6 +106,8 @@ pub struct ProjectManifest {
     pub project_revision: u64,
     #[n(1)]
     pub files: Vec<SubmittedFile>,
+    #[n(2)]
+    pub compatibility: crate::CompatibilityIdentity,
 }
 
 /// Lightweight identity used to validate an opaque compiled-project cache before source
@@ -111,6 +119,10 @@ pub struct ProjectIdentity {
     pub project_revision: u64,
     #[n(1)]
     pub source_digest: ProtocolBytes,
+    #[n(2)]
+    pub compatibility: crate::CompatibilityIdentity,
+    #[n(3)]
+    pub configuration_digest: Option<ProtocolBytes>,
 }
 
 /// Load a project, optionally seeding the build from an opaque runtime-produced cache.
@@ -154,6 +166,8 @@ pub struct ProtocolDiagnostic {
     #[serde(default)]
     #[n(4)]
     pub notification: crate::DiagnosticNotification,
+    #[n(5)]
+    pub context: Option<Box<crate::CompatibilityDiagnosticContext>>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -187,6 +201,8 @@ pub struct ProjectLoadReport {
     pub configuration: Option<crate::ProjectConfigurationSnapshot>,
     #[n(5)]
     pub game_information: Option<Box<ProjectGameInformation>>,
+    #[n(6)]
+    pub compatibility: Option<crate::CompatibilityIdentity>,
 }
 
 /// One-shot project analysis that never replaces the active runtime project.
@@ -212,6 +228,8 @@ pub struct ProjectAnalysisReport {
     pub diagnostics: Vec<ProtocolDiagnostic>,
     #[n(3)]
     pub analyzed_erb_paths: Vec<String>,
+    #[n(4)]
+    pub compatibility: Option<crate::CompatibilityIdentity>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

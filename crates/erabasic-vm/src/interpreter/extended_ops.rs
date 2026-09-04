@@ -2,7 +2,11 @@
 
 use super::{
     BytecodeStorage, BytecodeType, Fiber, NativeServiceRegistry, PlaceDescriptor, Vm, VmError,
-    VmValue, array_place, array_snapshot, integer_argument,
+    VmValue, array_place, array_snapshot,
+};
+
+use super::native_ops::{
+    optional_integer_argument, script_native_error, validate_array_storage_values,
 };
 
 pub(super) fn execute_regex_match(
@@ -102,7 +106,7 @@ fn regex_captures(
     input: &str,
 ) -> Result<(usize, Vec<Vec<VmValue>>), VmError> {
     if let Some(captures) = crate::regex_compat::capture_positive_boundaries(pattern, input)
-        .map_err(VmError::InvalidArguments)?
+        .map_err(VmError::ScriptFailure)?
     {
         return Ok((
             captures.captures_len,
@@ -113,9 +117,7 @@ fn regex_captures(
                 .collect(),
         ));
     }
-    let regex = vm
-        .compile_regex(pattern)
-        .map_err(VmError::InvalidArguments)?;
+    let regex = vm.compile_regex(pattern).map_err(VmError::ScriptFailure)?;
     let captures = regex
         .captures_iter(input)
         .map(|captures| {
@@ -187,12 +189,14 @@ pub(super) fn execute_array_copy(
     let (destination, destination_type, destination_dimensions) =
         array_copy_place(vm, fiber, arguments.get(1), "destination", true)?;
     if source_type != destination_type {
-        return Err(VmError::InvalidArguments(
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
             "ARRAYCOPY array types differ".into(),
         ));
     }
     if source_dimensions.len() != destination_dimensions.len() {
-        return Err(VmError::InvalidArguments(
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
             "ARRAYCOPY dimensions differ".into(),
         ));
     }
@@ -303,10 +307,13 @@ pub(super) fn execute_array_multi_sort(
             || !(1..=3).contains(&definition.dimensions.len())
             || (index == 0 && definition.dimensions.len() != 1)
         {
-            return Err(VmError::InvalidArguments(format!(
-                "ARRAYMSORT argument {} is not a mutable non-character array of the required rank",
-                index + 1
-            )));
+            return Err(script_native_error(
+                crate::ScriptFaultKind::Argument,
+                format!(
+                    "ARRAYMSORT argument {} is not a mutable non-character array of the required rank",
+                    index + 1
+                ),
+            ));
         }
         let dimensions = definition.dimensions.clone();
         let values = array_snapshot_any_rank(vm, fiber, &place)?;
@@ -368,19 +375,20 @@ pub(super) fn execute_array_multi_sort_ex(
     }
     let (key, _, key_dimensions) = array_copy_place(vm, fiber, arguments.first(), "key", false)?;
     if key_dimensions.len() != 1 {
-        return Err(VmError::InvalidArguments(
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
             "ARRAYMSORTEX key must be one-dimensional".into(),
         ));
     }
     let key_values = array_snapshot_any_rank(vm, fiber, &key)?;
     let names_place = array_place(&arguments[1..])?;
     let names = array_snapshot(vm, fiber, names_place)?;
-    let ascending = !matches!(arguments.get(2), Some(VmValue::Integer(0)));
-    let fixed = match integer_argument(arguments, 3) {
-        Err(_) | Ok(i64::MIN) => None,
-        Ok(0) => return Ok(VmValue::Integer(0)),
-        Ok(value) if value > 0 => Some(usize::try_from(value).unwrap_or(usize::MAX)),
-        Ok(_) => None,
+    let ascending = optional_integer_argument(arguments, 2, 1)? != 0;
+    let fixed = match optional_integer_argument(arguments, 3, i64::MIN)? {
+        i64::MIN => None,
+        0 => return Ok(VmValue::Integer(0)),
+        value if value > 0 => Some(usize::try_from(value).unwrap_or(usize::MAX)),
+        _ => None,
     };
     if fixed.is_none()
         && key_values
@@ -412,7 +420,8 @@ pub(super) fn execute_array_multi_sort_ex(
     let mut candidates = Vec::new();
     for name in names {
         let VmValue::String(name) = name else {
-            return Err(VmError::InvalidArguments(
+            return Err(script_native_error(
+                crate::ScriptFaultKind::Argument,
                 "ARRAYMSORTEX variable-name array must contain strings".into(),
             ));
         };
@@ -427,7 +436,9 @@ pub(super) fn execute_array_multi_sort_ex(
         if first < key_count {
             return Ok(VmValue::Integer(0));
         }
-        let row_width = values.len() / first;
+        let row_width = values.len().checked_div(first).ok_or_else(|| {
+            VmError::InvalidState("ARRAYMSORTEX array has an invalid first dimension".into())
+        })?;
         let mut candidate = values.clone();
         for (destination, source) in order.iter().copied().enumerate() {
             candidate[destination * row_width..(destination + 1) * row_width]
@@ -471,9 +482,10 @@ pub(super) fn array_copy_place(
                     })
                 })
                 .ok_or_else(|| {
-                    VmError::InvalidArguments(format!(
-                        "ARRAYCOPY {role} variable {name:?} does not exist"
-                    ))
+                    script_native_error(
+                        crate::ScriptFaultKind::Resolve,
+                        format!("ARRAYCOPY {role} variable {name:?} does not exist"),
+                    )
                 })?;
             (
                 PlaceDescriptor {
@@ -495,20 +507,28 @@ pub(super) fn array_copy_place(
     let definition = program
         .global(place.variable)
         .ok_or_else(|| VmError::InvalidState("ARRAYCOPY variable is missing".into()))?;
+    if value_type != definition.value_type {
+        return Err(VmError::InvalidArguments(
+            "ARRAYCOPY place type differs from its variable".into(),
+        ));
+    }
     if definition.storage == BytecodeStorage::Character {
-        return Err(VmError::InvalidArguments(format!(
-            "ARRAYCOPY {role} cannot be a character variable"
-        )));
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
+            format!("ARRAYCOPY {role} cannot be a character variable"),
+        ));
     }
     if destination && !definition.mutable {
-        return Err(VmError::InvalidArguments(
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
             "ARRAYCOPY destination is read-only".into(),
         ));
     }
     if !(1..=3).contains(&definition.dimensions.len()) || !place.indices.is_empty() {
-        return Err(VmError::InvalidArguments(format!(
-            "ARRAYCOPY {role} must be an unindexed one to three dimensional array"
-        )));
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
+            format!("ARRAYCOPY {role} must be an unindexed one to three dimensional array"),
+        ));
     }
     Ok((place, value_type, definition.dimensions.clone()))
 }
@@ -530,11 +550,14 @@ pub(super) fn array_snapshot_any_rank(
         .and_then(|generation| generation.global(place.variable))
         .ok_or_else(|| VmError::InvalidState("array variable is missing".into()))?;
     if !(1..=3).contains(&definition.dimensions.len()) {
-        return Err(VmError::InvalidArguments(
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
             "ARRAYCOPY requires a one to three dimensional array".into(),
         ));
     }
-    vm.read_place_array(fiber, place)
+    let values = vm.read_place_array(fiber, place)?;
+    validate_array_storage_values(vm, fiber, place, &values)?;
+    Ok(values)
 }
 
 pub(super) fn commit_array_any_rank(
@@ -552,39 +575,53 @@ pub(super) fn execute_random_place_transaction(
     artifact: &erabasic_bytecode::BytecodeArtifact,
     natives: &mut NativeServiceRegistry,
     operation: &str,
-) -> Result<(), String> {
+) -> Result<(), crate::ExecutionFailure> {
+    let internal = |message: &str| {
+        crate::ExecutionFailure::classified(
+            crate::FaultCategory::InternalInvariant,
+            crate::VmFaultCode::Native,
+            message,
+        )
+    };
     let definition = artifact
         .globals
         .iter()
         .find(|definition| {
             definition.owner.is_none() && definition.name.eq_ignore_ascii_case("RANDDATA")
         })
-        .ok_or_else(|| "RANDDATA is not defined".to_owned())?;
+        .ok_or_else(|| internal("RANDDATA is not defined"))?;
     if definition.storage != BytecodeStorage::Project
         || definition.value_type != BytecodeType::Integer
         || definition.dimensions != [625]
     {
-        return Err("RANDDATA must be a mutable one-dimensional integer[625] variable".into());
+        return Err(internal(
+            "RANDDATA must be a mutable one-dimensional integer[625] variable",
+        ));
     }
     if operation == "initrand" {
         let cell = memory
             .cell(generation, definition, 0)
-            .ok_or_else(|| "RANDDATA storage is unavailable".to_owned())?;
+            .ok_or_else(|| internal("RANDDATA storage is unavailable"))?;
         let values = cell
             .integers()
-            .ok_or_else(|| "RANDDATA contains a non-integer value".to_owned())?;
+            .ok_or_else(|| internal("RANDDATA contains a non-integer value"))?;
+        if values.len() != 625 {
+            return Err(internal("RANDDATA must contain exactly 625 values"));
+        }
         // Native state is only replaced after the entire array and index validate.
-        natives.set_random_values(values)
+        natives.set_random_values_execution(values)
     } else {
-        let values = natives.random_values()?;
+        let values = natives
+            .random_values()
+            .map_err(|message| internal(&message))?;
         let cell = memory
             .cell_mut(generation, definition.key, definition.storage, 0)
-            .ok_or_else(|| "RANDDATA storage is unavailable".to_owned())?;
+            .ok_or_else(|| internal("RANDDATA storage is unavailable"))?;
         let targets = cell
             .integers_mut()
-            .ok_or_else(|| "RANDDATA contains a non-integer value".to_owned())?;
+            .ok_or_else(|| internal("RANDDATA contains a non-integer value"))?;
         if targets.len() != values.len() {
-            return Err("RANDDATA storage changed during DUMPRAND".into());
+            return Err(internal("RANDDATA storage changed during DUMPRAND"));
         }
         // Every target slot was validated above, so this commit cannot partially fail.
         targets.copy_from_slice(&values);

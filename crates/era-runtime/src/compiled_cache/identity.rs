@@ -5,10 +5,15 @@ pub(crate) fn project_key(
     identity: &ProjectIdentity,
     extensions: &[ExtensionDeclaration],
 ) -> [u8; 32] {
-    let mut writer = HashWriter::new("rustyera.compiled-project-key.v3");
+    let mut writer = HashWriter::new("rustyera.compiled-project-key.v4");
     serde_json::to_writer(
         &mut writer,
-        &(identity.source_digest.as_slice(), extensions),
+        &(
+            identity.source_digest.as_slice(),
+            &identity.compatibility,
+            &identity.configuration_digest,
+            extensions,
+        ),
     )
     .expect("project cache identity values are serializable");
     writer.finish()
@@ -53,6 +58,8 @@ pub(crate) fn project_identity(manifest: &ProjectManifest) -> ProjectIdentity {
     }
     ProjectIdentity {
         project_revision: manifest.project_revision,
+        compatibility: manifest.compatibility.clone(),
+        configuration_digest: crate::compatibility_configuration_digest(manifest),
         source_digest: ProtocolBytes::new(hasher.finalize().as_bytes().to_vec()),
     }
 }
@@ -142,7 +149,7 @@ pub(crate) fn encode_full_project_for_test(
     });
     loop {
         if let Some(bytes) = encoder.step()? {
-            return Ok(bytes);
+            return Ok(bytes.into_vec());
         }
     }
 }
@@ -169,7 +176,7 @@ pub(crate) fn encode_compiled_cache_for_test(
     );
     loop {
         if let Some(bytes) = encoder.step()? {
-            return Ok(bytes);
+            return Ok(bytes.into_vec());
         }
     }
 }

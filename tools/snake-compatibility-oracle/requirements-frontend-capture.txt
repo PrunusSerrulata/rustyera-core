@@ -1,0 +1,4 @@
+# Python >=3.10. Do not install as part of fixture preparation.
+# >=6.1 provides duplicate-key rejection; >=6.1.2 repairs streaming decoding.
+cbor2>=6.1.3,<7
+blake3>=1.0.5,<2

@@ -81,6 +81,11 @@ impl Vm {
         &mut self,
         target: ValidatedArtifact,
     ) -> Result<&HotReloadPlan, VmError> {
+        if self.fibers.values().any(|fiber| fiber.fault_hook.is_some()) {
+            return Err(VmError::HotReload(
+                "hot reload is unavailable while a final-fault hook is running".into(),
+            ));
+        }
         if self.pending_reload.is_some() {
             return Err(VmError::HotReload(
                 "another hot-reload plan is already pending".into(),
@@ -110,6 +115,11 @@ impl Vm {
     /// Returns an error if there is no current plan, its base changed, or retaining
     /// another program generation would exceed the configured limit.
     pub fn commit_hot_reload(&mut self) -> Result<HotReloadReport, VmError> {
+        if self.fibers.values().any(|fiber| fiber.fault_hook.is_some()) {
+            return Err(VmError::HotReload(
+                "hot reload is unavailable while a final-fault hook is running".into(),
+            ));
+        }
         self.reclaim_generations();
         let plan = self
             .pending_reload

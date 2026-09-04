@@ -56,6 +56,9 @@ pub struct AnalysisReport {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AnalysisProgressStage {
     Parsing,
+    DeclaringGlobals,
+    IndexingFunctions,
+    DeclaringLocals,
     Analyzing,
 }
 
@@ -102,17 +105,18 @@ pub fn compare_reference_file_paths(left: &str, right: &str) -> std::cmp::Orderi
     }
 }
 
-struct ProgressCounter<'a> {
+pub(crate) struct ProgressCounter<'a> {
     stage: AnalysisProgressStage,
     total: usize,
+    report_interval: usize,
     completed: AtomicUsize,
-    reported_percent: AtomicUsize,
+    reported_completed: AtomicUsize,
     callback_lock: Mutex<()>,
     callback: Option<&'a dyn AnalysisProgressCallback>,
 }
 
 impl<'a> ProgressCounter<'a> {
-    fn new(
+    pub(crate) fn new(
         stage: AnalysisProgressStage,
         total: usize,
         callback: Option<&'a dyn AnalysisProgressCallback>,
@@ -127,35 +131,56 @@ impl<'a> ProgressCounter<'a> {
         Self {
             stage,
             total,
+            report_interval: total.checked_div(64).unwrap_or(0).max(64),
             completed: AtomicUsize::new(0),
-            reported_percent: AtomicUsize::new(0),
+            reported_completed: AtomicUsize::new(0),
             callback_lock: Mutex::new(()),
             callback,
         }
     }
 
-    fn advance(&self) {
+    pub(crate) fn advance(&self) {
         let completed = self.completed.fetch_add(1, Ordering::Relaxed) + 1;
         let Some(callback) = self.callback else {
             return;
         };
-        let percent = completed
-            .saturating_mul(100)
-            .checked_div(self.total)
-            .unwrap_or(100);
+        let previous = self.reported_completed.load(Ordering::Relaxed);
+        if !self.should_report(completed, previous) {
+            return;
+        }
         let _guard = self
             .callback_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let previous = self.reported_percent.load(Ordering::Relaxed);
-        if percent > previous || completed == self.total {
-            self.reported_percent.store(percent, Ordering::Relaxed);
+        // Observe the latest completed count under the callback lock: parallel
+        // workers must never publish an older count after a newer one.
+        let completed = self.completed.load(Ordering::Relaxed);
+        let previous = self.reported_completed.load(Ordering::Relaxed);
+        // Percentage-only reporting can hide thousands of completed functions. Keep bounded
+        // sub-percent updates without flooding browser hosts when a large project advances fast.
+        if self.should_report(completed, previous) {
+            self.reported_completed.store(completed, Ordering::Relaxed);
             callback(AnalysisProgress {
                 stage: self.stage,
                 completed,
                 total: self.total,
             });
         }
+    }
+
+    fn should_report(&self, completed: usize, previous: usize) -> bool {
+        let percent = completed
+            .saturating_mul(100)
+            .checked_div(self.total)
+            .unwrap_or(100);
+        let previous_percent = previous
+            .saturating_mul(100)
+            .checked_div(self.total)
+            .unwrap_or(100);
+        completed > previous
+            && (percent > previous_percent
+                || completed - previous >= self.report_interval
+                || completed == self.total)
     }
 }
 
@@ -412,9 +437,11 @@ fn analyze_with_context(
         context,
         options,
         &mut diagnostics,
+        progress,
     );
     if options.use_erd {
         let csv_options = CsvLoadOptions {
+            compatibility: options.compatibility.clone(),
             ignore_case: options.ignore_case,
             use_erd: options.use_erd,
             debug_mode: options.debug_mode,
@@ -436,12 +463,21 @@ fn analyze_with_context(
     let mut symbols = Symbols::new(&project_data, &declaration_output.variables, options);
     drop(declaration_output);
     let mut definitions = Vec::new();
+    let indexing_progress = ProgressCounter::new(
+        AnalysisProgressStage::IndexingFunctions,
+        sources
+            .iter()
+            .filter(|source| source.source.kind == SourceKind::Erb)
+            .map(|source| source.script.functions.len())
+            .sum(),
+        progress,
+    );
     for (source_index, source) in sources.iter().enumerate() {
         if source.source.kind != SourceKind::Erb {
             continue;
         }
         for (function_index, function) in source.script.functions.iter().enumerate() {
-            let (kind, return_type) = function_semantics(function);
+            let (kind, return_type) = function_semantics(function, &options.compatibility);
             if is_reserved(&function.name) {
                 diagnostics.push(at_function(
                     source,
@@ -466,7 +502,12 @@ fn analyze_with_context(
                 ));
             }
             let previous = symbols.function(&function.name).cloned();
-            match symbols.register_function(&function.name, kind, return_type) {
+            match symbols.register_function(
+                &function.name,
+                kind,
+                return_type,
+                function.parameters.len(),
+            ) {
                 Ok(id) => {
                     if previous.is_some()
                         && kind != FunctionKind::Event
@@ -500,12 +541,26 @@ fn analyze_with_context(
                     format!("function {} is already declared", function.name),
                 )),
             }
+            indexing_progress.advance();
         }
     }
 
-    let reachable = reachable_functions(sources.as_ref(), &definitions, &symbols, options);
+    let reachable = reachable_functions(
+        sources.as_ref(),
+        &definitions,
+        &symbols,
+        options,
+        context,
+        &index_resolver,
+    );
+    let declaration_progress = ProgressCounter::new(
+        AnalysisProgressStage::DeclaringLocals,
+        definitions.len(),
+        progress,
+    );
     for definition in &definitions {
         if !should_analyze_function(definition, &reachable, options) {
+            declaration_progress.advance();
             continue;
         }
         let source = &sources[definition.source_index];
@@ -522,12 +577,13 @@ fn analyze_with_context(
             options,
             &mut diagnostics,
         );
+        declaration_progress.advance();
     }
     // Function bodies only read the completed symbol table. Indexed Rayon collection keeps
     // HIR ordering deterministic while large projects analyze independent bodies in parallel.
     let analyzing_progress = ProgressCounter::new(
         AnalysisProgressStage::Analyzing,
-        definitions.len(),
+        definitions.len().saturating_mul(3),
         progress,
     );
     let analyze_definition = |definition: &FunctionDefinition,
@@ -647,13 +703,22 @@ fn analyze_with_context(
     }
 
     let mut program = Program::new(sources.iter().map(|source| source.source.clone()).collect());
+    program.compatibility = options.compatibility.clone();
     program.call_compatibility = erabasic_hir::CallCompatibility {
+        user_argument_policy: options
+            .compatibility
+            .user_call_argument_policy(options.strict_user_call_arguments),
         allow_event_as_normal: options.compatible_call_event,
         allow_omitted_arguments: options.compatible_function_argument_optional,
         auto_convert_integer_to_string: options.compatible_function_argument_auto_convert,
         allow_full_width_space: options.allow_full_width_space,
         debug_semicolon: options.debug_semicolon,
         ignore_triple_symbols: options.ignore_triple_symbols,
+        compatible_rand: options.compatible_rand,
+        system_no_target: options.system_no_target,
+        ignore_case: options.ignore_case,
+        before_error_throw_hooks: options.compatibility.supports_fault_hooks()
+            && !options.disable_before_error_throw,
     };
     program.variables = symbols.variables;
     program.functions = functions;
@@ -664,7 +729,9 @@ fn analyze_with_context(
             text: &source.text,
         })
         .collect::<Vec<_>>();
-    crate::portability::analyze(&program, &diagnostic_sources, &mut diagnostics);
+    crate::portability::analyze(&program, &diagnostic_sources, &mut diagnostics, || {
+        analyzing_progress.advance();
+    });
     diagnostics.sort_by_key(|diagnostic| {
         diagnostic.source.as_ref().map_or(
             (u32::MAX, usize::MAX, diagnostic.reference_level),
@@ -692,6 +759,24 @@ mod source_lifecycle_tests {
     use crate::{ProjectSource, SourcePayload};
     use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
     use erabasic_hir::SourceId;
+
+    #[test]
+    fn large_workload_progress_reports_first_percent() {
+        let events = Mutex::new(Vec::new());
+        let callback = |event| events.lock().unwrap().push(event);
+        let progress = ProgressCounter::new(
+            AnalysisProgressStage::DeclaringLocals,
+            100_000,
+            Some(&callback),
+        );
+        for _ in 0..1_000 {
+            progress.advance();
+        }
+        let events = events.into_inner().unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].completed, 1_000);
+        assert_eq!(events[1].total, 100_000);
+    }
 
     fn input(sources: &[(&str, &str)]) -> AnalysisInput {
         AnalysisInput {

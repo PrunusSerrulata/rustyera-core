@@ -21,12 +21,20 @@ fn decode_sections_with_progress(
     sections: &CompiledCacheSections<'_>,
     progress: Option<&crate::ProjectProgressReporter>,
 ) -> Result<DecodedCompiledCache, String> {
+    if sections.version != VERSION {
+        return Err("legacy project bytecode requires a source rebuild".into());
+    }
     report_decode_stage(progress, crate::ProjectProgressStage::CacheDecoding, 0);
     let parts = decode_cache_parts(sections)?;
     report_decode_stage(progress, crate::ProjectProgressStage::CacheDecoding, 1);
     let artifact = BytecodeArtifact {
         manifest: parts.metadata.manifest,
         call_compatibility: parts.metadata.call_compatibility,
+        runtime_builtins: parts.metadata.runtime_builtins,
+        runtime_variables: parts.metadata.runtime_variables,
+        runtime_native_authorizations: parts.metadata.runtime_native_authorizations,
+        runtime_host_authorizations: parts.metadata.runtime_host_authorizations,
+        runtime_staged_authorizations: parts.metadata.runtime_staged_authorizations,
         project_data: parts.project_data,
         globals: parts.globals,
         native_imports: parts.metadata.native_imports,
@@ -39,9 +47,15 @@ fn decode_sections_with_progress(
             entries: parts.source_entries,
         },
     };
+    if artifact.manifest.compatibility != parts.snapshot.manifest.compatibility {
+        return Err("cached artifact compatibility differs from its project manifest".into());
+    }
     report_decode_stage(progress, crate::ProjectProgressStage::CacheValidating, 0);
     let unvalidated = artifact.into_unvalidated();
-    let context = ValidationContext::for_artifact(unvalidated.artifact());
+    let context = erabasic_compiler::runtime_native_validation_context(
+        unvalidated.artifact(),
+        &erabasic_compiler::default_host_registry(),
+    );
     let validation = validate_bytecode(unvalidated, &context);
     let artifact = validation.value.ok_or_else(|| {
         validation.diagnostics.first().map_or_else(
@@ -99,6 +113,10 @@ fn externalize_project_file_manifest(
                 }
                 payload => payload.clone(),
             }
+        } else if file.category == FileCategory::Configuration
+            && file.relative_path.eq_ignore_ascii_case("reraconfig.toml")
+        {
+            file.payload.clone()
         } else {
             let frontend = empty_payload(&file.payload);
             file.payload = empty_payload(&file.payload);
@@ -113,6 +131,7 @@ fn externalize_project_file_manifest(
     }
     let frontend = ProjectManifest {
         project_revision: runtime.project_revision,
+        compatibility: runtime.compatibility.clone(),
         files: frontend_files,
     };
     if project_identity(runtime) != identity || project_identity(&frontend) != identity {
@@ -185,11 +204,13 @@ pub fn decode_project_file(
 ) -> Result<DecodedProjectFile, ProjectFileError> {
     let sections = parse_cache_sections(bytes, maximum_bytes).map_err(ProjectFileError::from)?;
     require_full_project(&sections)?;
-    let mut manifest =
-        decode_manifest_section(&sections.manifest, sections.identity.project_revision)
-            .map_err(ProjectFileError::from)?;
-    let actual_identity = project_identity(&manifest);
-    if actual_identity != sections.identity {
+    let mut manifest = decode_manifest_section(
+        &sections.manifest,
+        sections.identity.project_revision,
+        sections.version,
+    )
+    .map_err(ProjectFileError::from)?;
+    if !sections.identity.matches(&manifest) {
         return Err(ProjectFileError::from(
             "project file identity does not match its embedded manifest".to_owned(),
         ));
@@ -218,11 +239,17 @@ pub fn decode_project_file_frontend_manifest(
     let sections = parse_cache_sections(bytes, maximum_bytes).map_err(ProjectFileError::from)?;
     require_full_project(&sections)?;
     let (manifest, diagnostics) = rayon::join(
-        || decode_manifest_section(&sections.manifest, sections.identity.project_revision),
+        || {
+            decode_manifest_section(
+                &sections.manifest,
+                sections.identity.project_revision,
+                sections.version,
+            )
+        },
         || decode_section::<Vec<ProtocolDiagnostic>>(&sections.diagnostics),
     );
     let mut manifest = manifest.map_err(ProjectFileError::from)?;
-    if project_identity(&manifest) != sections.identity {
+    if !sections.identity.matches(&manifest) {
         return Err(ProjectFileError::from(
             "project file identity does not match its embedded manifest".to_owned(),
         ));
@@ -254,10 +281,13 @@ pub fn prepare_project_configuration_update(
 ) -> Result<ProjectConfigurationUpdate, ProjectFileError> {
     let sections = parse_cache_sections(bytes, maximum_bytes).map_err(ProjectFileError::from)?;
     require_full_project(&sections)?;
-    let mut manifest =
-        decode_manifest_section(&sections.manifest, sections.identity.project_revision)
-            .map_err(ProjectFileError::from)?;
-    if project_identity(&manifest) != sections.identity {
+    let mut manifest = decode_manifest_section(
+        &sections.manifest,
+        sections.identity.project_revision,
+        sections.version,
+    )
+    .map_err(ProjectFileError::from)?;
+    if !sections.identity.matches(&manifest) {
         return Err(ProjectFileError::from(
             "project file identity does not match its embedded manifest".to_owned(),
         ));
@@ -265,6 +295,8 @@ pub fn prepare_project_configuration_update(
     apply_journal(&mut manifest, &sections.configuration_journal)
         .map_err(ProjectFileError::from)?;
     let current = configuration_digest(&manifest).map_err(ProjectFileError::from)?;
+    configuration_update::validate_configuration_profile(&manifest, contents)
+        .map_err(ProjectFileError::from)?;
     let requested_source = era_config::normalize_line_endings(contents);
     let requested_digest = *blake3::hash(requested_source.as_bytes()).as_bytes();
     let expected_matches = match current {
@@ -314,6 +346,8 @@ pub(super) fn compact_frontend_manifest(
         .collect::<BTreeSet<_>>();
     for file in &mut manifest.files {
         if file.category == FileCategory::Resource
+            || (file.category == FileCategory::Configuration
+                && file.relative_path.eq_ignore_ascii_case("reraconfig.toml"))
             || diagnostic_sources.contains(&file.relative_path.to_lowercase())
         {
             continue;
@@ -404,7 +438,7 @@ pub(super) fn parse_cache_sections(
 struct ParsedContainerHeader {
     kind: ProjectContainerKind,
     version: u8,
-    identity: ProjectIdentity,
+    identity: ProjectSourceIdentity,
     key: [u8; 32],
     function_section_count: usize,
     source_section_count: usize,
@@ -437,7 +471,14 @@ fn parse_container_header(
         (kind, version),
         (
             ProjectContainerKind::FullProject,
-            LEGACY_PROJECT_VERSION | PREVIOUS_PROJECT_VERSION | VERSION
+            LEGACY_PROJECT_VERSION
+                | PREVIOUS_PROJECT_VERSION
+                | PROFILELESS_PROJECT_VERSION
+                | PROFILED_PROJECT_VERSION
+                | ARITHMETIC_PROJECT_VERSION
+                | CALL_PROJECT_VERSION
+                | DATA_PROJECT_VERSION
+                | VERSION
         ) | (ProjectContainerKind::CompiledCache, VERSION)
     ) {
         return Err(format!("unsupported project file version {version:02x}"));
@@ -448,7 +489,7 @@ fn parse_container_header(
         .ok_or("project file source identity is truncated")?
         .to_vec();
     cursor += 32;
-    let identity = ProjectIdentity {
+    let identity = ProjectSourceIdentity {
         project_revision,
         source_digest: ProtocolBytes::new(source_digest),
     };
@@ -588,10 +629,13 @@ fn decode_manifest_and_sources(
     sections: &CompiledCacheSections<'_>,
     delay: std::time::Duration,
 ) -> Result<(ProjectManifest, Vec<SourceRecord>), String> {
-    let mut manifest =
-        decode_manifest_section(&sections.manifest, sections.identity.project_revision)
-            .map_err(|error| format!("manifest section: {error}"))?;
-    if project_identity(&manifest) != sections.identity {
+    let mut manifest = decode_manifest_section(
+        &sections.manifest,
+        sections.identity.project_revision,
+        sections.version,
+    )
+    .map_err(|error| format!("manifest section: {error}"))?;
+    if !sections.identity.matches(&manifest) {
         return Err("project file identity does not match its embedded manifest".into());
     }
     apply_journal(&mut manifest, &sections.configuration_journal)?;

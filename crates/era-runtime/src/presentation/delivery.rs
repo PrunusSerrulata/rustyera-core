@@ -12,8 +12,22 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
 impl PresentationModel {
-    pub(crate) fn display_line(&self, index: usize) -> String {
-        let Some(line) = self.projected_line(index) else {
+    pub(crate) fn line_id_at_display_index(&self, raw_index: i64) -> Option<u64> {
+        let index = usize::try_from(raw_index).ok()?;
+        self.lines.get(index).map(|line| line.line_id).or_else(|| {
+            // Emuera's current display index names the not-yet-committed line.
+            (index == self.lines.len()).then_some(self.next_line)
+        })
+    }
+
+    pub(crate) fn display_line(&self, raw_index: i64, from_end: bool) -> String {
+        let index = if from_end && raw_index < 0 {
+            let distance = usize::try_from(raw_index.unsigned_abs()).unwrap_or(usize::MAX);
+            self.lines.len().checked_sub(distance)
+        } else {
+            usize::try_from(raw_index).ok()
+        };
+        let Some(line) = index.and_then(|index| self.projected_line(index)) else {
             return String::new();
         };
         let mut output = String::new();
@@ -113,14 +127,11 @@ impl PresentationModel {
                 settings: self.settings.clone(),
             });
         }
-        if delivery.dirty.backgrounds {
-            operations.push(PresentationOperation::SetBackgrounds {
-                backgrounds: if self.project_graphics {
-                    self.projected_backgrounds()
-                } else {
-                    Vec::new()
-                },
+        if delivery.dirty.scene {
+            operations.push(PresentationOperation::ApplySceneDelta {
+                delta: self.projected_scene_delta(delivery.scene_revision),
             });
+            delivery.scene_revision = self.scene.revision;
         }
         if delivery.dirty.audio {
             operations.push(PresentationOperation::SetAudio {
@@ -143,11 +154,7 @@ impl PresentationModel {
         }
         if delivery.dirty.resources {
             operations.push(PresentationOperation::SetResources {
-                resources: if self.project_graphics {
-                    self.resources.clone()
-                } else {
-                    ResourceReplay::default()
-                },
+                resources: self.projected_resources(),
             });
         }
         if delivery.dirty.html_island {
@@ -270,6 +277,7 @@ impl PresentationModel {
         // same semantic edits in the presentation model made long sessions grow forever.
         self.history_operations.clear();
         self.history_edits.clear();
+        self.scene_operations.clear();
         delivery.history_index = 0;
         delivery.dirty = PresentationDirty::default();
         self.delivery = delivery;
@@ -285,11 +293,13 @@ impl PresentationModel {
         let snapshot = self.snapshot();
         self.history_operations.clear();
         self.history_edits.clear();
+        self.scene_operations.clear();
         self.delivery = PresentationDelivery {
             revision: Some(self.revision),
             history_index: 0,
             history_line_count: self.delivered_line_count(),
             pending_line_id: (!self.pending_runs.is_empty()).then_some(self.next_line),
+            scene_revision: self.scene.revision,
             dirty_lines: BTreeSet::new(),
             dirty: PresentationDirty::default(),
         };
@@ -311,6 +321,7 @@ impl PresentationModel {
                 line_end: false,
                 alignment: self.current_alignment,
                 runs: self.pending_runs.clone(),
+                text_background_eligible: super::line_has_text_background(&self.pending_runs),
             });
         }
         for line in &mut lines {
@@ -340,11 +351,7 @@ impl PresentationModel {
                 logical_lines: lines,
                 operations: history_operations,
             },
-            backgrounds: if self.project_graphics {
-                self.projected_backgrounds()
-            } else {
-                Vec::new()
-            },
+            scene: self.projected_scene(),
             audio: if self.project_audio {
                 self.audio.clone()
             } else {
@@ -353,11 +360,7 @@ impl PresentationModel {
             input_wait: self.input_wait.clone(),
             settings: self.settings.clone(),
             tooltip: self.tooltip.clone(),
-            resources: if self.project_graphics {
-                self.resources.clone()
-            } else {
-                ResourceReplay::default()
-            },
+            resources: self.projected_resources(),
             html_island: self.project_html_island(),
             redraw: RedrawState {
                 enabled: self.redraw_enabled,
@@ -369,6 +372,16 @@ impl PresentationModel {
         self.revision = self.revision.saturating_add(1);
     }
 
+    fn projected_resources(&self) -> ResourceReplay {
+        if self.project_graphics {
+            return self.resources.clone();
+        }
+        ResourceReplay {
+            animation_timer_ms: self.resources.animation_timer_ms,
+            ..ResourceReplay::default()
+        }
+    }
+
     fn pending_line(&self) -> Option<DisplayLine> {
         (!self.pending_runs.is_empty()).then(|| DisplayLine {
             line_id: self.next_line,
@@ -377,6 +390,7 @@ impl PresentationModel {
             line_end: false,
             alignment: self.current_alignment,
             runs: self.pending_runs.clone(),
+            text_background_eligible: super::line_has_text_background(&self.pending_runs),
         })
     }
 

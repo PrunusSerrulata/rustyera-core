@@ -1,0 +1,43 @@
+{
+  "formatVersion": 1,
+  "semanticBaseline": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+  "formats": ["binary", "gzip", "text"],
+  "ordinaryWatches": [
+    "B5_INT", "B5_STR", "B5_I1:1", "B5_I2:1:0", "B5_I3:1:1:1",
+    "B5_S1:2", "B5_S2:1:0", "B5_S3:1:1:0", "B5_CINT:0:1",
+    "B5_CSTR:0:1", "MAP_GET(\"b5_map\", \"key\")",
+    "XML_TOSTR(\"b5_xml\")", "DT_CELL_GET(\"b5_dt\", 0, \"n\")",
+    "DT_CELL_GETS(\"b5_dt\", 0, \"s\")"
+  ],
+  "globalWatches": [
+    "B5_GINT:0", "B5_GINT:1", "B5_GSTR:0", "B5_GSTR:1",
+    "B5_GSCALAR", "B5_GSSCALAR", "B5_GI2:1:0", "B5_GI3:1:1:1",
+    "B5_GS2:0:1", "B5_GS3:1:0:1",
+    "MAP_GET(\"b5_global_map\", \"key\")", "XML_TOSTR(\"b5_global_xml\")",
+    "DT_CELL_GET(\"b5_global_dt\", 0, \"n\")",
+    "DT_CELL_GETS(\"b5_global_dt\", 0, \"s\")"
+  ],
+  "textOrdinaryWatches": [
+    "FLAG:0", "SAVESTR:0", "CFLAG:0:0", "CSTR:0:0"
+  ],
+  "textGlobalWatches": [
+    "B5_GSCALAR", "B5_GSSCALAR", "B5_GINT:1", "B5_GSTR:1"
+  ],
+  "audioWatches": [
+    "RESULT:20", "RESULT:21", "RESULT:22", "RESULT:23", "RESULT:24",
+    "RESULT:25", "RESULT:26", "RESULT:27", "RESULT:28", "RESULT:29",
+    "RESULT:30", "RESULT:31", "RESULT:32", "RESULT:33", "RESULT:34", "RESULT:35"
+  ],
+  "sentinelWatches": [
+    "B5_INT", "B5_STR", "B5_I3:1:1:1", "B5_CINT:0:1",
+    "MAP_GET(\"b5_map\", \"key\")", "XML_TOSTR(\"b5_xml\")",
+    "DT_CELL_GET(\"b5_dt\", 0, \"n\")"
+  ],
+  "languageCases": [
+    "RESULT = GETSOUNDORBGMINFO()", "RESULT = GETSOUNDORBGMINFO(0, 1, 2)", "RESULT = GETSOUNDORBGMINFO(\"x\")",
+    "RESULT = ISPLAYINGSOUND()", "RESULT = ISPLAYINGSOUND(0, 1)", "RESULT = ISPLAYINGSOUND(\"x\")",
+    "RESULT = SOUNDCONTROL(0)", "RESULT = SOUNDCONTROL(0, 3, 100, 0, 1)", "RESULT = SOUNDCONTROL(\"x\", 0)",
+    "RESULT = ISPLAYINGBGM(0)", "RESULT = BGMCONTROL()", "RESULT = BGMCONTROL(3, 100, 0, 1)", "RESULT = BGMCONTROL(\"x\")",
+    "RESULT = GETSOUNDORBGMINFO(0, 99)", "RESULT = SOUNDCONTROL(0, 99)", "RESULT = BGMCONTROL(99)"
+  ]
+}

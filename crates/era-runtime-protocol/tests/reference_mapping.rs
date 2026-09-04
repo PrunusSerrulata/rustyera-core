@@ -76,6 +76,7 @@ fn pinned_reference_wait_and_output_are_losslessly_representable() {
         timeout_message: None,
         submission_token: era_runtime_protocol::InteractionToken { epoch: 1, id: 1 },
         countdown_remaining_ms: None,
+        viewport_policy: era_runtime_protocol::InputViewportPolicy::FollowOutput,
     };
     assert_eq!(input.kind, WaitKind::IntegerValue);
     assert_eq!(input.deadline_ns, None);
@@ -86,6 +87,7 @@ fn pinned_reference_wait_and_output_are_losslessly_representable() {
         logical_line_start: true,
         line_end: true,
         alignment: LineAlignment::Left,
+        text_background_eligible: true,
         runs: vec![DisplayRun::Text {
             text: observed.load.last_output,
             system_text: None,

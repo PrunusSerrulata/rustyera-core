@@ -12,7 +12,7 @@ use erabasic_compiler::{
     compile_project_with_artifact, compile_validated_project_with_artifact, default_host_registry,
 };
 use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
-use erabasic_validator::{ValidationContext, validate_bytecode};
+use erabasic_validator::validate_bytecode;
 
 fn analyze(text: &str) -> erabasic_analyzer::AnalyzedProject {
     let data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
@@ -38,6 +38,125 @@ fn analyze(text: &str) -> erabasic_analyzer::AnalyzedProject {
         report.diagnostics
     );
     report.project.expect("analysis should produce a project")
+}
+
+fn analyze_snake(text: &str) -> erabasic_analyzer::AnalyzedProject {
+    let data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+        .data
+        .expect("default project data should load");
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: data,
+            sources: vec![ProjectSource {
+                relative_path: "snake.erb".into(),
+                payload: SourcePayload::Utf8(text.into()),
+            }],
+        },
+        &AnalyzerOptions {
+            compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+            ..AnalyzerOptions::analysis_mode()
+        },
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reference_level >= 2),
+        "{:#?}",
+        report.diagnostics
+    );
+    report
+        .project
+        .expect("snake analysis should produce a project")
+}
+
+fn omitted_host_calls(artifact: &erabasic_bytecode::BytecodeArtifact) -> Vec<(String, Vec<usize>)> {
+    let mut calls = Vec::new();
+    for function in &artifact.functions {
+        for instruction in &function.code {
+            if instruction.opcode != Opcode::CallHost as u16 || instruction.payload.len() == 7 {
+                continue;
+            }
+            let import_index = u32::from_le_bytes(
+                instruction.payload[..4]
+                    .try_into()
+                    .expect("Host import index"),
+            ) as usize;
+            let import_key = function.imports[import_index].key;
+            let host = artifact
+                .host_imports
+                .iter()
+                .find(|host| host.import.key == import_key)
+                .expect("Host import resolves");
+            let count = usize::from(u16::from_le_bytes(
+                instruction.payload[7..9]
+                    .try_into()
+                    .expect("omission count"),
+            ));
+            let omissions = (0..count)
+                .map(|index| {
+                    usize::from(u16::from_le_bytes(
+                        instruction.payload[9 + index * 2..11 + index * 2]
+                            .try_into()
+                            .expect("omitted argument index"),
+                    ))
+                })
+                .collect::<Vec<_>>();
+            calls.push((host.import.name.clone(), omissions));
+        }
+    }
+    calls
+}
+
+#[test]
+fn column_options_lower_to_validated_private_native_steps() {
+    let project = analyze(
+        "@SYSTEM_TITLE\nDT_COLUMN_OPTIONS \"t\", \"c\", DEFAULT, 12, DEFAULT, \"text\"\nRETURN\n",
+    );
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    let artifact = report.artifact.expect("column options compile");
+    let validation = validate_bytecode(
+        artifact.clone().into_unvalidated(),
+        &erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry()),
+    );
+    assert!(
+        validation.diagnostics.is_empty(),
+        "{:?}",
+        validation.diagnostics
+    );
+    let names = artifact
+        .native_imports
+        .iter()
+        .map(|native| native.import.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        names,
+        [
+            "dt__column_resolve",
+            "dt__column_check_int",
+            "dt__column_apply_int",
+            "dt__column_check_str",
+            "dt__column_apply_str"
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert!(
+        artifact
+            .native_imports
+            .iter()
+            .all(|native| native.contract.debug
+                == erabasic_bytecode::OperationDebugPolicy::Forbidden)
+    );
+    assert!(artifact.host_imports.is_empty());
 }
 
 #[test]
@@ -107,6 +226,86 @@ fn frontend_observation_calls_emit_nonfatal_source_notices() {
 }
 
 #[test]
+fn snake_audio_imports_persist_exact_wait_and_fallback_contracts() {
+    let report = compile_project(
+        &analyze_snake(
+            "@SYSTEM_TITLE\nPLAYSOUND \"tone.wav\", 2\nRESULT:0 = GETSOUNDORBGMINFO(0, 1)\nRESULT:1 = ISPLAYINGSOUND(0)\nRESULT:2 = ISPLAYINGBGM()\nRESULT:3 = SOUNDCONTROL(0, 0)\nRESULT:4 = BGMCONTROL(0)\nRETURN\n",
+        ),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    let artifact = report.artifact.expect("snake audio fixture compiles");
+    for host in artifact
+        .host_imports
+        .iter()
+        .filter(|host| host.import.namespace == "rustyera.audio")
+    {
+        let name = host.import.name.as_str();
+        let query = matches!(
+            name,
+            "getsoundorbgminfo" | "isplayingsound" | "isplayingbgm"
+        );
+        let selecting_play = name == "playsound";
+        if query || selecting_play {
+            assert_eq!(
+                host.contract.state,
+                erabasic_bytecode::OperationState::External
+            );
+            assert_eq!(
+                host.contract.transaction,
+                erabasic_bytecode::TransactionPolicy::Forbidden
+            );
+            assert_eq!(
+                host.contract.persistence,
+                erabasic_bytecode::OperationPersistence::RuntimeOnly
+            );
+            assert_eq!(
+                host.contract.snapshot,
+                erabasic_bytecode::OperationSnapshotPolicy::PendingBlocks
+            );
+            assert_eq!(
+                host.contract.hot_reload,
+                erabasic_bytecode::OperationHotReloadPolicy::ActiveBlocks
+            );
+            assert_eq!(
+                host.contract.wait,
+                erabasic_bytecode::OperationWaitPolicy::TransientExternal
+            );
+            assert_eq!(
+                host.contract.capability_fallback,
+                if query {
+                    erabasic_bytecode::CapabilityFallback::Unsupported
+                } else {
+                    erabasic_bytecode::CapabilityFallback::IntentNoOp
+                }
+            );
+            assert_eq!(
+                host.contract.portability,
+                if query {
+                    erabasic_bytecode::OperationPortability::FrontendObservation
+                } else {
+                    erabasic_bytecode::OperationPortability::PlatformIntent
+                }
+            );
+        } else {
+            assert_eq!(
+                host.contract.transaction,
+                erabasic_bytecode::TransactionPolicy::BufferedEffect
+            );
+            assert_eq!(
+                host.contract.wait,
+                erabasic_bytecode::OperationWaitPolicy::Immediate
+            );
+        }
+        assert!(host.contract.is_coherent(), "{name}");
+    }
+    let bytes = encode_artifact(&artifact).unwrap();
+    let decoded = decode_artifact(&bytes, &DecodeLimits::default()).unwrap();
+    assert_eq!(decoded.into_inner().host_imports, artifact.host_imports);
+}
+
+#[test]
 fn scoped_scalar_initializers_and_array_declarations_compile() {
     let report = compile_project(
         &analyze(
@@ -158,6 +357,88 @@ fn folded_getnum_does_not_emit_a_native_call() {
             .iter()
             .all(|import| !import.import.name.eq_ignore_ascii_case("getnum"))
     );
+}
+
+#[test]
+fn loop_control_outside_a_loop_compiles_to_a_runtime_trap() {
+    let artifact = compile_project(
+        &analyze("@SYSTEM_TITLE\nCONTINUE\nRETURN\n"),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    )
+    .artifact
+    .expect("deferred loop-control fault should compile");
+    assert!(
+        artifact.functions[0]
+            .code
+            .iter()
+            .any(|instruction| instruction.opcode == Opcode::Trap as u16
+                && instruction.payload.as_slice() == b"CONTINUE outside loop")
+    );
+}
+
+#[test]
+fn expression_methods_use_typed_lazy_bytecode_in_expressions_and_statements() {
+    use erabasic_bytecode::{UserArgumentSpec, UserCallMode, UserCallSpec};
+
+    let project = analyze(
+        "@SYSTEM_TITLE\nRESULT = GETMETH(\"TARGET\", 7, FLAG:1,, -9223372036854775807 - 1)\nGETMETHS \"TEXT\", \"fallback\", STR:2\nRETURN\n",
+    );
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+    let artifact = report.artifact.expect("typed method calls should compile");
+    assert!(artifact.native_imports.iter().all(|import| !matches!(
+        import.import.name.to_ascii_uppercase().as_str(),
+        "GETMETH" | "GETMETHS"
+    )));
+    let code = &artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .code;
+    let specs = code
+        .iter()
+        .filter(|instruction| instruction.opcode == Opcode::ResolveUserCall as u16)
+        .map(|instruction| UserCallSpec::decode(&instruction.payload).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(specs.len(), 2);
+    assert_eq!(specs[0].mode, UserCallMode::MethodInteger);
+    assert!(matches!(
+        specs[0].arguments.as_slice(),
+        [
+            UserArgumentSpec::Variable(_),
+            UserArgumentSpec::Omitted,
+            UserArgumentSpec::Value(BytecodeType::Integer)
+        ]
+    ));
+    assert_eq!(specs[1].mode, UserCallMode::MethodString);
+    for opcode in [
+        Opcode::GuardUserArgument,
+        Opcode::AdvanceUserArgument,
+        Opcode::AbandonUserCall,
+        Opcode::SelectUserArgument,
+        Opcode::CaptureUserArgument,
+        Opcode::InvokeUserCall,
+    ] {
+        assert!(
+            code.iter()
+                .any(|instruction| instruction.opcode == opcode as u16)
+        );
+    }
+    let encoded = encode_artifact(&artifact).unwrap();
+    let decoded = decode_artifact(&encoded, &DecodeLimits::default()).unwrap();
+    let validation = validate_bytecode(
+        decoded,
+        &erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry()),
+    );
+    assert!(validation.is_valid(), "{:?}", validation.diagnostics);
 }
 
 #[test]
@@ -236,6 +517,121 @@ fn gdrawsprite_preserves_the_color_matrix_array_place() {
 }
 
 #[test]
+fn static_user_argument_policy_preserves_lazy_lowering_and_warm_analysis_warnings() {
+    let text = "@SYSTEM_TITLE\nCALL TAKE, 1, SIDE(), 1 / 0\nRESULT = METH(2, SIDE(), 9223372036854775807 + 1)\nRETURN\n@TAKE(ARG)\nRETURN\n@METH(ARG)\n#FUNCTION\nRETURNF ARG\n@SIDE\n#FUNCTION\nFLAG:0 += 1\nRETURNF 9\n";
+    let analyze_snake = || {
+        analyze_project(
+            AnalysisInput {
+                project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+                    .data
+                    .unwrap(),
+                sources: vec![ProjectSource {
+                    relative_path: "user-arity.erb".into(),
+                    payload: SourcePayload::Utf8(text.into()),
+                }],
+            },
+            &AnalyzerOptions {
+                compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+                    erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+                ),
+                ..AnalyzerOptions::analysis_mode()
+            },
+            &ExtensionRegistry::default(),
+        )
+    };
+    let first_analysis = analyze_snake();
+    let first_diagnostics = first_analysis.diagnostics.clone();
+    assert_eq!(
+        first_diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == erabasic_analyzer::AnalyzerDiagnosticCode::ExcessUserArguments
+            })
+            .count(),
+        2
+    );
+    let first = compile_project(
+        &first_analysis.project.unwrap(),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    assert!(first.diagnostics.is_empty(), "{:?}", first.diagnostics);
+    let artifact = first
+        .artifact
+        .as_ref()
+        .expect("snake extra arguments should compile");
+    let title = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap();
+    let side = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SIDE")
+        .unwrap();
+    assert!(title.imports.iter().all(|import| import.key != side.key));
+    assert_eq!(
+        title
+            .code
+            .iter()
+            .filter(|instruction| { instruction.opcode == Opcode::Call as u16 })
+            .count(),
+        2,
+        "only the two retained user calls may be emitted"
+    );
+    let warm_analysis = analyze_snake();
+    assert_eq!(
+        warm_analysis.diagnostics, first_diagnostics,
+        "load warnings must not depend on whether function bytecode will be reused"
+    );
+    let mut warm_project = warm_analysis.project.unwrap();
+    let warm = compile_project(
+        &warm_project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        Some(&first.incremental_state),
+    );
+    assert!(warm.artifact.is_some(), "{:?}", warm.diagnostics);
+    assert_eq!(warm.stats.compiled_functions, 0);
+    assert_eq!(warm.stats.reused_functions, artifact.functions.len());
+    // A policy change must not hit a warm function compiled under the warning mode.
+    warm_project.program.call_compatibility.user_argument_policy =
+        erabasic_compat::UserCallArgumentPolicy::RejectExcess;
+    let strict = compile_project(
+        &warm_project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        Some(&warm.incremental_state),
+    );
+    assert!(strict.artifact.is_none());
+    assert!(strict.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == CompilerDiagnosticCode::InvalidHir
+            && diagnostic.severity == CompilerDiagnosticSeverity::Error
+    }));
+}
+
+#[test]
+fn reference_static_calls_and_direct_methods_keep_excess_argument_errors() {
+    for statement in ["CALL TAKE, 1, 2", "RESULT = METH(1, 2)"] {
+        let report = compile_project(
+            &analyze(&format!(
+                "@SYSTEM_TITLE\n{statement}\nRETURN\n@TAKE(ARG)\nRETURN\n@METH(ARG)\n#FUNCTION\nRETURNF ARG\n"
+            )),
+            &CompilerOptions::default(),
+            &default_host_registry(),
+            None,
+        );
+        assert!(report.artifact.is_none());
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == CompilerDiagnosticCode::InvalidHir
+                && diagnostic.severity == CompilerDiagnosticSeverity::Error
+        }));
+    }
+}
+
+#[test]
 fn static_call_ignores_a_final_argument_separator() {
     let report = compile_project(
         &analyze("@SYSTEM_TITLE\nCALL TARGET,\nRETURN\n@TARGET\nRETURN\n"),
@@ -308,9 +704,200 @@ fn host_operations_use_only_call_host_and_round_trip() {
     let bytes = encode_artifact(&artifact).expect("artifact should encode");
     let decoded =
         decode_artifact(&bytes, &DecodeLimits::default()).expect("artifact should decode");
-    let validation = validate_bytecode(decoded, &ValidationContext::for_artifact(&artifact));
+    let validation = validate_bytecode(
+        decoded,
+        &erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry()),
+    );
     assert!(validation.is_valid(), "{:#?}", validation.diagnostics);
     assert_eq!(validation.value.unwrap().into_inner(), artifact);
+}
+
+#[test]
+fn safe_sql_calls_emit_validated_v1_host_imports_with_physical_variadic_arity() {
+    let project = analyze_snake(
+        "@SYSTEM_TITLE\nSQL_CONNECT \"discarded\"\nRESULT:0 = SQL_CONNECT(\"db\")\nRESULT:1 = SQL_CONNECT(\"db\", )\nRESULT:2 = SQL_P_EXECUTE_NONQUERY(\"db\", \"SELECT @0\")\nRESULT:3 = SQL_P_EXECUTE_NONQUERY(\"db\", \"SELECT @0\", \"one\")\nRESULT:4 = SQL_P_EXECUTE_NONQUERY(\"db\", \"SELECT @0, @1\", , \"two\")\nRESULT:5 = SQL_P_EXECUTE_NONQUERY(\"db\", \"SELECT @0, @1\", \"one\", \"two\")\nSQL_P_EXECUTE_NONQUERY \"db\", \"SELECT @0, @1, @2\", \"one\", \"two\",\nSQL_DISCONNECT \"discarded\"\nRETURN\n",
+    );
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    assert!(report.diagnostics.is_empty(), "{:#?}", report.diagnostics);
+    let artifact = report.artifact.expect("safe SQL calls should compile");
+    let sql_imports = artifact
+        .host_imports
+        .iter()
+        .filter(|host| host.import.namespace == "rustyera.sql")
+        .collect::<Vec<_>>();
+    assert_eq!(sql_imports.len(), 7);
+    assert!(sql_imports.iter().all(|host| {
+        host.import.abi_version == 1
+            && host.capability == HostCapability::Sql
+            && host.contract.state == erabasic_bytecode::OperationState::External
+            && host.contract.transaction == erabasic_bytecode::TransactionPolicy::Forbidden
+            && host.contract.persistence == erabasic_bytecode::OperationPersistence::ProjectDerived
+            && host.contract.snapshot == erabasic_bytecode::OperationSnapshotPolicy::PendingBlocks
+            && host.contract.hot_reload == erabasic_bytecode::OperationHotReloadPolicy::ActiveBlocks
+            && host.contract.wait == erabasic_bytecode::OperationWaitPolicy::TransientExternal
+            && host.contract.debug == erabasic_bytecode::OperationDebugPolicy::Forbidden
+            && host.contract.portability == erabasic_bytecode::OperationPortability::Portable
+            && host.contract.is_coherent()
+    }));
+    let parameter_shapes = sql_imports
+        .iter()
+        .filter(|host| host.import.name == "sql_p_execute_nonquery")
+        .map(|host| host.import.parameters.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        parameter_shapes,
+        [
+            vec![BytecodeType::String, BytecodeType::String],
+            vec![
+                BytecodeType::String,
+                BytecodeType::String,
+                BytecodeType::String,
+            ],
+            vec![
+                BytecodeType::String,
+                BytecodeType::String,
+                BytecodeType::Integer,
+                BytecodeType::String,
+            ],
+            vec![
+                BytecodeType::String,
+                BytecodeType::String,
+                BytecodeType::String,
+                BytecodeType::String,
+            ],
+            vec![
+                BytecodeType::String,
+                BytecodeType::String,
+                BytecodeType::String,
+                BytecodeType::String,
+                BytecodeType::Integer,
+            ],
+        ]
+        .into_iter()
+        .collect()
+    );
+    let omitted_sql_calls = omitted_host_calls(&artifact);
+    assert!(
+        omitted_sql_calls
+            .iter()
+            .any(|(name, omitted)| { name == "sql_p_execute_nonquery" && omitted == &[2] })
+    );
+    assert!(
+        omitted_sql_calls
+            .iter()
+            .any(|(name, omitted)| { name == "sql_p_execute_nonquery" && omitted == &[4] })
+    );
+
+    let bytes = encode_artifact(&artifact).expect("SQL artifact should encode");
+    let decoded = decode_artifact(&bytes, &DecodeLimits::default()).expect("SQL artifact decodes");
+    let validation = validate_bytecode(
+        decoded,
+        &erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry()),
+    );
+    assert!(validation.is_valid(), "{:#?}", validation.diagnostics);
+}
+
+#[test]
+fn every_deferred_sql_call_reports_missing_capability_without_runtime_traps() {
+    for (name, call, capability) in [
+        (
+            "SQL_CONNECTION_OPEN",
+            "SQL_CONNECTION_OPEN \"db\"",
+            "rustyera.sql.connection-open@future",
+        ),
+        (
+            "SQL_READER_GET_FLOAT",
+            "SQL_READER_GET_FLOAT 1, 0",
+            "rustyera.sql.float@future",
+        ),
+        (
+            "SQL_EXECUTE_SCALAR_FLOAT",
+            "SQL_EXECUTE_SCALAR_FLOAT \"db\", \"SELECT 1\"",
+            "rustyera.sql.float@future",
+        ),
+        (
+            "SQL_P_EXECUTE_SCALAR_FLOAT",
+            "SQL_P_EXECUTE_SCALAR_FLOAT \"db\", \"SELECT @0\", \"1\"",
+            "rustyera.sql.float@future",
+        ),
+        (
+            "SQL_ESCAPE",
+            "SQL_ESCAPE \"text\"",
+            "rustyera.sql.escape@future",
+        ),
+        (
+            "SQL_IMPORT_DT_XML",
+            "SQL_IMPORT_DT_XML \"db\", \"table\", \"schema.xml\", \"data.xml\"",
+            "rustyera.sql.dt-xml@future",
+        ),
+        (
+            "SQL_EXPORT_MAP_XML",
+            "SQL_EXPORT_MAP_XML \"db\", \"table\", \"data.xml\"",
+            "rustyera.sql.xml-export@future",
+        ),
+        (
+            "SQL_EXPORT_DT_XML",
+            "SQL_EXPORT_DT_XML \"db\", \"table\", \"schema.xml\", \"data.xml\"",
+            "rustyera.sql.xml-export@future",
+        ),
+        (
+            "SQL_IMPORT_XML_CUSTOM",
+            "SQL_IMPORT_XML_CUSTOM \"db\", \"table\", \"data.xml\", \"row\", \"key\"",
+            "rustyera.sql.custom-xml@future",
+        ),
+    ] {
+        let source = format!("@SYSTEM_TITLE\n{call}\nRETURN\n");
+        let report = compile_project(
+            &analyze_snake(&source),
+            &CompilerOptions::default(),
+            &default_host_registry(),
+            None,
+        );
+        assert!(report.artifact.is_none(), "{name} unexpectedly compiled");
+        assert!(
+            report.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == CompilerDiagnosticCode::MissingCapability
+                    && diagnostic.message.contains(capability)
+            }),
+            "{name}: {:#?}",
+            report.diagnostics
+        );
+        assert!(
+            !report.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == CompilerDiagnosticCode::UnsupportedConstruct
+                    || diagnostic.message.contains("unknown function")
+            }),
+            "{name}: {:#?}",
+            report.diagnostics
+        );
+    }
+}
+
+#[test]
+fn every_deferred_sql_name_has_a_deterministic_capability_classification() {
+    let registry = default_host_registry();
+    for name in [
+        "SQL_CONNECTION_OPEN",
+        "SQL_READER_GET_FLOAT",
+        "SQL_EXECUTE_SCALAR_FLOAT",
+        "SQL_P_EXECUTE_SCALAR_FLOAT",
+        "SQL_ESCAPE",
+        "SQL_IMPORT_DT_XML",
+        "SQL_EXPORT_MAP_XML",
+        "SQL_EXPORT_DT_XML",
+        "SQL_IMPORT_XML_CUSTOM",
+    ] {
+        assert!(matches!(
+            registry.classification(name),
+            Some(ExecutionBinding::UnsupportedCapability { capability, reason })
+                if capability.starts_with("rustyera.sql.") && !reason.is_empty()
+        ));
+    }
 }
 
 #[test]
@@ -337,7 +924,7 @@ fn printdata_lowers_to_lazy_skip_random_selection_and_valid_stack_control() {
     );
     let validation = validate_bytecode(
         artifact.clone().into_unvalidated(),
-        &ValidationContext::for_artifact(&artifact),
+        &erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry()),
     );
     assert!(validation.is_valid(), "{:#?}", validation.diagnostics);
 }
@@ -364,11 +951,11 @@ fn dynamic_call_uses_vm_resolution_before_argument_evaluation() {
         .as_slice();
     assert!(
         code.iter()
-            .any(|instruction| instruction.opcode == Opcode::ResolveFunction as u16)
+            .any(|instruction| instruction.opcode == Opcode::ResolveUserCall as u16)
     );
     assert!(
         code.iter()
-            .any(|instruction| instruction.opcode == Opcode::InvokeDynamic as u16)
+            .any(|instruction| instruction.opcode == Opcode::InvokeUserCall as u16)
     );
 }
 
@@ -616,7 +1203,11 @@ fn every_analyzer_builtin_has_one_explicit_execution_class() {
                     "incoherent Native contract for {name}"
                 );
             }
-            ExecutionBinding::Unsupported { .. } => {}
+            ExecutionBinding::BitArray
+            | ExecutionBinding::ArrayMatch
+            | ExecutionBinding::ExpressionMethod { .. }
+            | ExecutionBinding::Unsupported { .. }
+            | ExecutionBinding::UnsupportedCapability { .. } => {}
         }
     }
     assert!(matches!(
@@ -649,13 +1240,92 @@ fn every_analyzer_builtin_has_one_explicit_execution_class() {
     ));
     assert!(matches!(
         registry.classification("GETMETH"),
-        Some(ExecutionBinding::Unsupported { .. })
+        Some(ExecutionBinding::ExpressionMethod {
+            result: erabasic_bytecode::MethodResult::Integer
+        })
     ));
     assert!(matches!(
         registry.classification("CALLSHARP"),
         Some(ExecutionBinding::Host(binding))
             if binding.namespace == "rustyera.extension" && binding.name == "callsharp"
     ));
+    for name in ["MATCHALL", "MATCHALLEX"] {
+        assert!(matches!(
+            registry.classification(name),
+            Some(ExecutionBinding::ArrayMatch)
+        ));
+    }
+}
+
+#[test]
+fn static_bit_and_match_openers_require_exact_staged_authorization() {
+    let data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+        .data
+        .unwrap();
+    let analysis = analyze_project(
+        AnalysisInput {
+            project_data: data,
+            sources: vec![ProjectSource {
+                relative_path: "staged-auth.erb".into(),
+                payload: SourcePayload::Utf8(
+                    "@SYSTEM_TITLE\n#DIM BITS, 2\nRESULT:0 = BITGET(BITS, 0)\nRESULT:1 = MATCHALL(BITS, 0)\nRETURN\n"
+                        .into(),
+                ),
+            }],
+        },
+        &AnalyzerOptions {
+            compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            ),
+            ..AnalyzerOptions::analysis_mode()
+        },
+        &ExtensionRegistry::default(),
+    );
+    let artifact = compile_project(
+        &analysis.project.expect("snake data calls analyze"),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    )
+    .artifact
+    .expect("snake data calls compile");
+    let context =
+        erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry());
+
+    let mut removed = artifact.clone();
+    removed.runtime_staged_authorizations.clear();
+    removed.refresh_ids().unwrap();
+    let report = validate_bytecode(removed.into_unvalidated(), &context);
+    assert!(report.value.is_none());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("lacks artifact authorization")),
+        "{:#?}",
+        report.diagnostics
+    );
+
+    let mut replaced = artifact.clone();
+    let bit = replaced
+        .runtime_staged_authorizations
+        .iter_mut()
+        .find(|family| family.name == "bitget")
+        .unwrap();
+    bit.shapes.clear();
+    bit.key = bit.canonical_key();
+    replaced.refresh_ids().unwrap();
+    let report = validate_bytecode(replaced.into_unvalidated(), &context);
+    assert!(report.value.is_none());
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic.code,
+            erabasic_validator::ValidationCode::HostAbiMismatch
+                | erabasic_validator::ValidationCode::InvalidOperand
+        )),
+        "{:#?}",
+        report.diagnostics
+    );
 }
 
 #[test]
@@ -1107,3 +1777,551 @@ fn large_project_recompiles_only_the_changed_function() {
     assert_eq!(updated.stats.reused_functions, 511);
 }
 use std::fmt::Write as _;
+
+#[test]
+fn compatibility_identity_invalidates_function_cache_and_artifact() {
+    use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
+    let registry = default_host_registry();
+    let reference = analyze("@SYSTEM_TITLE\nCALL HELPER\nRETURN\n@HELPER\nRESULT = 1\nRETURN\n");
+    let first = compile_project_with_artifact(
+        &reference,
+        &CompilerOptions::default(),
+        &registry,
+        None,
+        None,
+    );
+    let original = first.artifact.as_ref().unwrap();
+    let mut snake = reference.clone();
+    snake.program.compatibility =
+        CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
+    let changed = compile_project_with_artifact(
+        &snake,
+        &CompilerOptions::default(),
+        &registry,
+        Some(&first.incremental_state),
+        Some(original),
+    );
+    assert!(changed.artifact.is_some(), "{:?}", changed.diagnostics);
+    assert_eq!(changed.stats.reused_functions, 0);
+    let target = changed.artifact.as_ref().unwrap();
+    assert_eq!(target.manifest.compatibility, snake.program.compatibility);
+    assert_ne!(
+        original.manifest.program_version.execution_id,
+        target.manifest.program_version.execution_id
+    );
+    let same = compile_project_with_artifact(
+        &snake,
+        &CompilerOptions::default(),
+        &registry,
+        Some(&changed.incremental_state),
+        Some(target),
+    );
+    assert_eq!(same.stats.compiled_functions, 0);
+    assert_eq!(same.stats.reused_functions, 2);
+    assert!(apply_patch(original, &erabasic_bytecode::create_patch(original, target)).is_err());
+}
+
+#[test]
+fn html_queries_lower_to_validated_lazy_host_steps() {
+    let project = analyze(
+        r#"@SYSTEM_TITLE
+RESULT:10 = HTML_STRINGLEN("<b>x</b>", FLAG_VALUE())
+RESULT:11 = HTML_STRINGLINES("abc", WIDTH_VALUE())
+HTML_STRINGLEN "x"
+HTML_STRINGLINES "abc", WIDTH_VALUE()
+RETURN
+@FLAG_VALUE
+#FUNCTION
+RETURNF 1
+@WIDTH_VALUE
+#FUNCTION
+RETURNF 2
+"#,
+    );
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    let artifact = report.artifact.expect("HTML query lowering should compile");
+    let validation = validate_bytecode(
+        artifact.clone().into_unvalidated(),
+        &erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry()),
+    );
+    assert!(
+        validation.diagnostics.is_empty(),
+        "{:?}",
+        validation.diagnostics
+    );
+    let names = artifact
+        .host_imports
+        .iter()
+        .map(|host| host.import.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for name in [
+        "html__measure_length",
+        "html__length_unit",
+        "html__lines_begin",
+        "html__lines_more",
+        "html__lines_step",
+        "html__lines_end",
+    ] {
+        assert!(names.contains(name), "missing {name}");
+        assert!(
+            default_host_registry().classification(name).is_none(),
+            "private query steps cannot be called by scripts"
+        );
+    }
+    assert!(!names.contains("html_stringlen") && !names.contains("html_stringlines"));
+}
+
+#[test]
+fn dynamic_form_and_list_calls_share_lazy_slots_and_explicit_method_discard() {
+    use erabasic_bytecode::{UserCallMode, UserCallSpec};
+    let project = analyze(
+        "@SYSTEM_TITLE\nCALLFORMF METHOD_TARGET(3)\nTRYCALLFORM MISSING(1 / LOCAL:1)\nTRYCALLLIST\nFUNC MISSING, 1 / LOCAL\nFUNC LIST_TARGET, 7\nENDFUNC\nRETURN\n@METHOD_TARGET(ARG)\n#FUNCTION\nRETURNF ARG + 1\n@LIST_TARGET(ARG)\nRETURN\n",
+    );
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    let artifact = report.artifact.expect("dynamic form/list calls compile");
+    let code = &artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .code;
+    assert!(
+        code.iter()
+            .all(|instruction| !matches!(instruction.opcode, 36 | 37))
+    );
+    let specs = code
+        .iter()
+        .filter(|instruction| instruction.opcode == Opcode::ResolveUserCall as u16)
+        .map(|instruction| UserCallSpec::decode(&instruction.payload).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(specs.len(), 4);
+    assert_eq!(specs[0].mode, UserCallMode::MethodDiscard);
+    assert!(
+        specs[1..]
+            .iter()
+            .all(|spec| spec.mode == UserCallMode::Procedure && spec.allow_missing)
+    );
+    for (resolve, instruction) in code
+        .iter()
+        .enumerate()
+        .filter(|(_, instruction)| instruction.opcode == Opcode::ResolveUserCall as u16)
+    {
+        let spec = UserCallSpec::decode(&instruction.payload).unwrap();
+        if spec.allow_missing {
+            assert_eq!(
+                code[spec.missing_target as usize],
+                erabasic_bytecode::opcode::abandon_user_call(u32::try_from(resolve).unwrap())
+            );
+        }
+        assert_eq!(code[resolve + 1].opcode, Opcode::GuardUserArgument as u16);
+    }
+    let validation = validate_bytecode(
+        artifact.clone().into_unvalidated(),
+        &erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry()),
+    );
+    assert!(validation.is_valid(), "{:?}", validation.diagnostics);
+}
+
+#[test]
+fn complete_call_text_six_modes_lower_one_string_with_local_catch_status() {
+    use erabasic_bytecode::{CallTextMode, CallTextSpec};
+    // Requires the separately owned CALLSTR parser/catalog/analyzer hunks before execution.
+    let data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+        .data
+        .unwrap();
+    let analysis = analyze_project(AnalysisInput { project_data: data, sources: vec![ProjectSource {
+        relative_path: "call-text.erb".into(), payload: SourcePayload::Utf8(
+            "@SYSTEM_TITLE\nCALLSTR \"TARGET(1)\"\nJUMPSTR \" \"\nTRYCALLSTR \"MISSING, 2\"\nTRYJUMPSTR \" \"\nTRYCCALLSTR \"TARGET(3)\"\nCATCH\nRESULT = 4\nENDCATCH\nTRYCJUMPSTR \" \"\nCATCH\nRESULT = 5\nENDCATCH\nRETURN\n@TARGET(ARG)\nRETURN\n".into()),
+    }] }, &AnalyzerOptions { compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake), ..AnalyzerOptions::analysis_mode() }, &ExtensionRegistry::default());
+    let project = analysis
+        .project
+        .expect("snake call-text parses and analyzes");
+    let report = compile_project(
+        &project,
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    );
+    let artifact = report.artifact.expect("complete call-text lowers");
+    let code = &artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .code;
+    let specs = code
+        .iter()
+        .filter(|instruction| instruction.opcode == Opcode::InvokeCallText as u16)
+        .map(|instruction| CallTextSpec::decode(&instruction.payload).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        specs.iter().map(|spec| spec.mode).collect::<Vec<_>>(),
+        vec![
+            CallTextMode::Call,
+            CallTextMode::Jump,
+            CallTextMode::TryCall,
+            CallTextMode::TryJump,
+            CallTextMode::CatchCall,
+            CallTextMode::CatchJump
+        ]
+    );
+    for spec in specs {
+        if spec.mode.has_catch() {
+            assert_eq!(
+                code[spec.catch_target as usize],
+                erabasic_bytecode::opcode::push_integer(0)
+            );
+        } else {
+            assert_eq!(spec.catch_target, 0);
+        }
+    }
+    let validation = validate_bytecode(
+        artifact.clone().into_unvalidated(),
+        &erabasic_compiler::runtime_native_validation_context(&artifact, &default_host_registry()),
+    );
+    assert!(validation.is_valid(), "{:?}", validation.diagnostics);
+}
+
+fn analyze_call_dependency_sources(
+    caller: &str,
+    target: &str,
+) -> erabasic_analyzer::AnalyzedProject {
+    let data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+        .data
+        .unwrap();
+    let report = analyze_project(
+        AnalysisInput {
+            project_data: data,
+            sources: [
+                ("caller.erb", caller),
+                ("target.erb", target),
+                ("unrelated.erb", "@UNRELATED\nRETURN\n"),
+            ]
+            .into_iter()
+            .map(|(path, text)| ProjectSource {
+                relative_path: path.into(),
+                payload: SourcePayload::Utf8(text.into()),
+            })
+            .collect(),
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|value| value.reference_level >= 2),
+        "{:?}",
+        report.diagnostics
+    );
+    report.project.unwrap()
+}
+
+#[test]
+fn changed_callee_defaults_and_formals_recompile_only_dependent_callers() {
+    let registry = default_host_registry();
+    let options = CompilerOptions::default();
+    for (caller, before, after) in [
+        (
+            "@SYSTEM_TITLE\nCALL TARGET\nRETURN\n",
+            "@TARGET(ARG:0 = 1)\nRETURN\n",
+            "@TARGET(ARG:0 = 2)\nRETURN\n",
+        ),
+        (
+            "@SYSTEM_TITLE\nCALL TARGET\nRETURN\n",
+            "@TARGET(ARG:0 = 1)\nRETURN\n",
+            "@TARGET(ARG:0 = 1, ARG:1 = 2)\nRETURN\n",
+        ),
+        (
+            "@SYSTEM_TITLE\nRESULT = TARGET()\nRETURN\n",
+            "@TARGET(ARG:0 = 1)\n#FUNCTION\nRETURNF ARG\n",
+            "@TARGET(ARG:0 = 2)\n#FUNCTION\nRETURNF ARG\n",
+        ),
+    ] {
+        let initial = compile_project_with_artifact(
+            &analyze_call_dependency_sources(caller, before),
+            &options,
+            &registry,
+            None,
+            None,
+        );
+        let project = analyze_call_dependency_sources(caller, after);
+        let warm = compile_project_with_artifact(
+            &project,
+            &options,
+            &registry,
+            Some(&initial.incremental_state),
+            initial.artifact.as_ref(),
+        );
+        let cold = compile_project(&project, &options, &registry, None);
+        assert!(warm.artifact.is_some(), "{:?}", warm.diagnostics);
+        assert_eq!(warm.artifact, cold.artifact);
+        assert_eq!(warm.stats.compiled_functions, 2, "{caller}");
+        assert_eq!(warm.stats.reused_functions, 1, "{caller}");
+    }
+}
+
+#[test]
+fn dynamic_callers_depend_on_possible_signatures_but_not_callee_bodies() {
+    let registry = default_host_registry();
+    let options = CompilerOptions::default();
+    let caller = "@SYSTEM_TITLE\nRESULT = GETMETH(LOCALS, 0)\nRETURN\n";
+    let before = "@TARGET(ARG:0 = 1)\n#FUNCTION\nRETURNF 1\n";
+    let initial = compile_project_with_artifact(
+        &analyze_call_dependency_sources(caller, before),
+        &options,
+        &registry,
+        None,
+        None,
+    );
+    for (after, compiled) in [
+        ("@TARGET(ARG:0 = 2)\n#FUNCTION\nRETURNF 1\n", 2),
+        ("@TARGET(ARG:0 = 1)\n#FUNCTION\nRETURNF 2\n", 1),
+    ] {
+        let project = analyze_call_dependency_sources(caller, after);
+        let warm = compile_project_with_artifact(
+            &project,
+            &options,
+            &registry,
+            Some(&initial.incremental_state),
+            initial.artifact.as_ref(),
+        );
+        let cold = compile_project(&project, &options, &registry, None);
+        assert!(warm.artifact.is_some(), "{:?}", warm.diagnostics);
+        assert_eq!(warm.artifact, cold.artifact);
+        assert_eq!(warm.stats.compiled_functions, compiled);
+        assert_eq!(warm.stats.reused_functions, 3 - compiled);
+    }
+}
+
+#[test]
+fn call_compatibility_is_part_of_incremental_semantic_identity() {
+    let registry = default_host_registry();
+    let options = CompilerOptions::default();
+    let original = analyze_call_dependency_sources(
+        "@SYSTEM_TITLE\nCALL TARGET, 1\nRETURN\n",
+        "@TARGET(ARG)\nRETURN\n",
+    );
+    let initial = compile_project(&original, &options, &registry, None);
+    for policy in 0..3 {
+        let mut project = original.clone();
+        match policy {
+            0 => {
+                project.program.call_compatibility.allow_event_as_normal =
+                    !project.program.call_compatibility.allow_event_as_normal;
+            }
+            1 => {
+                project.program.call_compatibility.allow_omitted_arguments =
+                    !project.program.call_compatibility.allow_omitted_arguments;
+            }
+            _ => {
+                project
+                    .program
+                    .call_compatibility
+                    .auto_convert_integer_to_string = !project
+                    .program
+                    .call_compatibility
+                    .auto_convert_integer_to_string;
+            }
+        }
+        let warm = compile_project(
+            &project,
+            &options,
+            &registry,
+            Some(&initial.incremental_state),
+        );
+        let cold = compile_project(&project, &options, &registry, None);
+        assert_eq!(warm.artifact, cold.artifact);
+        assert_eq!(warm.stats.reused_functions, 0);
+    }
+}
+
+#[test]
+fn changing_a_reference_formal_rebuilds_its_call_contract() {
+    let registry = default_host_registry();
+    let options = CompilerOptions::default();
+    let caller = "@SYSTEM_TITLE\nCALL TARGET, FLAG\nRETURN\n";
+    let original =
+        analyze_call_dependency_sources(caller, "@TARGET(ITEMS)\n#DIM REF ITEMS, 0\nRETURN\n");
+    let initial = compile_project_with_artifact(&original, &options, &registry, None, None);
+    assert!(initial.artifact.is_some(), "{:?}", initial.diagnostics);
+    let project =
+        analyze_call_dependency_sources(caller, "@TARGET(ITEMS)\n#DIM ITEMS, 1\nRETURN\n");
+    let warm = compile_project_with_artifact(
+        &project,
+        &options,
+        &registry,
+        Some(&initial.incremental_state),
+        initial.artifact.as_ref(),
+    );
+    let cold = compile_project(&project, &options, &registry, None);
+    assert!(warm.artifact.is_some(), "{:?}", warm.diagnostics);
+    assert_eq!(warm.artifact, cold.artifact);
+    // Existing shared variable dependencies are deliberately unchanged by this task, so the
+    // declaration change can invalidate more than the caller and target.
+    assert!(warm.stats.compiled_functions >= 2);
+}
+
+#[test]
+fn dynamic_native_families_follow_registry_across_warm_compilation_and_validation() {
+    let project = analyze("@SYSTEM_TITLE\nRESULTS '= STRFORM(\"{ABS(-7)}\")\nRETURN\n");
+    let options = CompilerOptions::default();
+    let registry = default_host_registry();
+    let first = compile_project(&project, &options, &registry, None);
+    let artifact = first.artifact.as_ref().unwrap();
+    assert!(
+        !artifact
+            .native_imports
+            .iter()
+            .any(|native| native.import.name == "abs")
+    );
+    let family = artifact
+        .runtime_native_authorizations
+        .iter()
+        .find(|family| family.name == "abs")
+        .unwrap();
+    let accepted =
+        erabasic_compiler::runtime_native_validation_context(artifact, &default_host_registry());
+    let mut denied_context = accepted.clone();
+    denied_context
+        .runtime_native_authorizations
+        .remove(&family.key);
+    let denied = validate_bytecode(artifact.clone().into_unvalidated(), &denied_context);
+    assert!(denied.value.is_none());
+    assert!(
+        denied.diagnostics.iter().any(
+            |diagnostic| diagnostic.code == erabasic_validator::ValidationCode::HostAbiMismatch
+        )
+    );
+
+    let mut weakened = artifact.clone();
+    let family = weakened
+        .runtime_native_authorizations
+        .iter_mut()
+        .find(|family| family.name == "getvar")
+        .unwrap();
+    family.contract = erabasic_bytecode::canonical_native_contract("abs");
+    family.key = family.canonical_key();
+    weakened.refresh_ids().unwrap();
+    let report = validate_bytecode(
+        weakened.clone().into_unvalidated(),
+        &erabasic_compiler::runtime_native_validation_context(&weakened, &default_host_registry()),
+    );
+    assert!(
+        report.value.is_none(),
+        "trusted registry and canonical source contracts must reject artifact state-policy weakening"
+    );
+
+    let mut denied_registry = registry;
+    denied_registry.register_execution(
+        "ABS",
+        ExecutionBinding::Unsupported {
+            reason: "host withdrew dynamic grant".into(),
+        },
+    );
+    let second = compile_project(
+        &project,
+        &options,
+        &denied_registry,
+        Some(&first.incremental_state),
+    );
+    let target = second.artifact.as_ref().unwrap();
+    assert!(
+        !target
+            .runtime_native_authorizations
+            .iter()
+            .any(|family| family.name == "abs")
+    );
+    assert!(
+        target
+            .runtime_builtins
+            .iter()
+            .any(|symbol| symbol.name == "ABS")
+    );
+    assert_ne!(
+        artifact.manifest.program_version.execution_id,
+        target.manifest.program_version.execution_id
+    );
+    assert_eq!(
+        apply_patch(artifact, second.patch.as_ref().unwrap()).unwrap(),
+        *target
+    );
+}
+
+#[test]
+fn dynamic_host_grants_follow_registry_in_warm_cache_patch_and_container() {
+    let project = analyze("@SYSTEM_TITLE\nRESULTS '= STRFORM(\"{GETKEY(7)}\")\nRETURN\n");
+    let options = CompilerOptions::default();
+    let registry = default_host_registry();
+    let first = compile_project(&project, &options, &registry, None);
+    let artifact = first.artifact.as_ref().unwrap();
+    assert!(
+        !artifact
+            .host_imports
+            .iter()
+            .any(|host| host.import.name.eq_ignore_ascii_case("getkey"))
+    );
+    let family = artifact
+        .runtime_host_authorizations
+        .iter()
+        .find(|family| family.name == "getkey")
+        .unwrap();
+    let mut context = erabasic_compiler::runtime_native_validation_context(artifact, &registry);
+    context.runtime_host_authorizations.remove(&family.key);
+    let denied = validate_bytecode(artifact.clone().into_unvalidated(), &context);
+    assert!(denied.value.is_none());
+    assert!(
+        denied.diagnostics.iter().any(
+            |diagnostic| diagnostic.code == erabasic_validator::ValidationCode::HostAbiMismatch
+        )
+    );
+    let decoded = decode_artifact(
+        &encode_artifact(artifact).unwrap(),
+        &DecodeLimits::default(),
+    )
+    .unwrap()
+    .into_inner();
+    assert_eq!(&decoded, artifact);
+    let mut denied_registry = registry;
+    denied_registry.register_execution(
+        "GETKEY",
+        ExecutionBinding::Unsupported {
+            reason: "withdrawn runtime Host grant".into(),
+        },
+    );
+    let warm = compile_project(
+        &project,
+        &options,
+        &denied_registry,
+        Some(&first.incremental_state),
+    );
+    let target = warm.artifact.as_ref().unwrap();
+    let cold = compile_project(&project, &options, &denied_registry, None);
+    assert_eq!(cold.artifact.as_ref(), Some(target));
+    assert!(
+        !target
+            .runtime_host_authorizations
+            .iter()
+            .any(|family| family.name == "getkey")
+    );
+    assert_ne!(
+        artifact.manifest.program_version.execution_id,
+        target.manifest.program_version.execution_id
+    );
+    assert_eq!(
+        &apply_patch(artifact, warm.patch.as_ref().unwrap()).unwrap(),
+        target
+    );
+}

@@ -1,30 +1,95 @@
 use super::{PresentationModel, rgb_color};
 use era_runtime_protocol::{
-    AudioState, LogicalLength, MediaPlacement, RationalOpacity, ResourceReplay, TooltipFormat,
+    AudioChannelV1, AudioEffectAction, AudioPlaybackStateV1, AudioState, LogicalLength,
+    ResourceReplay, TooltipFormat,
 };
 
 impl PresentationModel {
-    pub(crate) fn play_bgm(&mut self, resource_id: String) {
+    pub(crate) fn clear_transient_sound_compatibility_state(&mut self) {
+        self.sound_playing = false;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_transient_sound_compatibility_state_for_test(&mut self, value: bool) {
+        self.sound_playing = value;
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn transient_sound_compatibility_state_for_test(&self) -> bool {
+        self.sound_playing
+    }
+
+    pub(crate) fn set_sound_volume(&mut self, volume: i64) -> u64 {
+        self.sound_volume_millionths =
+            u32::try_from(volume.clamp(0, 100)).unwrap_or_default() * 10_000;
+        self.bump();
+        self.revision
+    }
+
+    pub(crate) const fn sound_volume_millionths(&self) -> u32 {
+        self.sound_volume_millionths
+    }
+
+    pub(crate) fn play_bgm(&mut self, resource_id: String) -> u64 {
         self.audio.clear();
         self.audio.push(AudioState {
-            channel_id: 1,
+            channel: AudioChannelV1::Bgm,
             resource_id,
             repeat_count: -1,
             volume_millionths: 1_000_000,
-            playing: true,
+            state: AudioPlaybackStateV1::Playing,
             revision: self.revision.saturating_add(1),
+            rate_millionths: 1_000_000,
+            preserve_pitch: true,
         });
         self.delivery.dirty.audio = true;
         self.bump();
+        self.revision
     }
 
-    pub(crate) fn stop_bgm(&mut self) {
+    pub(crate) fn stop_bgm(&mut self) -> u64 {
         self.audio.clear();
         self.delivery.dirty.audio = true;
         self.bump();
+        self.revision
     }
 
-    pub(crate) fn set_bgm_volume(&mut self, volume: i64) {
+    pub(crate) fn control_bgm(
+        &mut self,
+        action: AudioEffectAction,
+        rate_millionths: u32,
+        preserve_pitch: bool,
+    ) -> u64 {
+        let revision = self.revision.saturating_add(1);
+        for state in &mut self.audio {
+            match action {
+                AudioEffectAction::Pause => state.state = AudioPlaybackStateV1::Paused,
+                AudioEffectAction::Resume => state.state = AudioPlaybackStateV1::Playing,
+                AudioEffectAction::SetRate => {
+                    state.rate_millionths = rate_millionths;
+                    state.preserve_pitch = preserve_pitch;
+                }
+                AudioEffectAction::Play
+                | AudioEffectAction::Stop
+                | AudioEffectAction::SetVolume => {}
+            }
+            state.revision = revision;
+        }
+        if !self.audio.is_empty() {
+            self.delivery.dirty.audio = true;
+        }
+        self.bump();
+        self.revision
+    }
+
+    pub(crate) fn bgm_revision(&self) -> Option<u64> {
+        self.audio
+            .iter()
+            .find(|state| state.channel == AudioChannelV1::Bgm)
+            .map(|state| state.revision)
+    }
+
+    pub(crate) fn set_bgm_volume(&mut self, volume: i64) -> u64 {
         let volume = volume.clamp(0, 100);
         for state in &mut self.audio {
             state.volume_millionths = u32::try_from(volume).unwrap_or_default() * 10_000;
@@ -32,6 +97,7 @@ impl PresentationModel {
         }
         self.delivery.dirty.audio = true;
         self.bump();
+        self.revision
     }
 
     pub(crate) fn projects_audio(&self) -> bool {
@@ -41,6 +107,15 @@ impl PresentationModel {
     pub(crate) fn set_resource_replay(&mut self, resources: ResourceReplay) {
         self.resources = resources;
         self.resource_replay_stale = false;
+        self.delivery.dirty.resources = true;
+        self.bump();
+    }
+
+    pub(crate) fn set_animation_timer(&mut self, milliseconds: i32) {
+        if self.resources.animation_timer_ms == milliseconds {
+            return;
+        }
+        self.resources.animation_timer_ms = milliseconds;
         self.delivery.dirty.resources = true;
         self.bump();
     }
@@ -56,68 +131,6 @@ impl PresentationModel {
     pub(crate) fn resource_replay_is_ready_to_publish(&self) -> bool {
         self.resource_replay_stale
             && (self.input_wait.is_some() || (self.redraw_enabled && self.delivery.dirty.redraw))
-    }
-
-    pub(crate) fn add_background(&mut self, resource_id: String, depth: i64, opacity: i64) {
-        self.backgrounds.push(MediaPlacement {
-            resource_id,
-            x: LogicalLength(0),
-            y: LogicalLength(0),
-            width: self.settings.drawable_width,
-            height: LogicalLength(0),
-            depth,
-            opacity: RationalOpacity {
-                numerator: opacity,
-                denominator: 255,
-            },
-            revision: self.revision.saturating_add(1),
-            hover_resource_id: None,
-            mask_resource_id: None,
-            requested_width: None,
-            requested_height: None,
-            requested_y: None,
-        });
-        // Stable descending sort matches List.Sort's intended depth layering
-        // while retaining insertion order for equal-depth portable replay.
-        self.backgrounds
-            .sort_by_key(|placement| std::cmp::Reverse(placement.depth));
-        self.delivery.dirty.backgrounds = true;
-        self.bump();
-    }
-
-    pub(crate) fn remove_background(&mut self, resource_id: &str) -> bool {
-        let Some(index) = self
-            .backgrounds
-            .iter()
-            .position(|item| item.resource_id == resource_id)
-        else {
-            return false;
-        };
-        self.backgrounds.remove(index);
-        self.delivery.dirty.backgrounds = true;
-        self.bump();
-        true
-    }
-
-    pub(crate) fn clear_backgrounds(&mut self) {
-        self.backgrounds.clear();
-        self.delivery.dirty.backgrounds = true;
-        self.bump();
-    }
-
-    pub(crate) fn clear_client_backgrounds(&mut self) {
-        self.client_backgrounds.clear();
-        self.delivery.dirty.backgrounds = true;
-        self.bump();
-    }
-
-    pub(super) fn projected_backgrounds(&self) -> Vec<MediaPlacement> {
-        let mut backgrounds =
-            Vec::with_capacity(self.backgrounds.len() + self.client_backgrounds.len());
-        backgrounds.extend(self.backgrounds.iter().cloned());
-        backgrounds.extend(self.client_backgrounds.iter().cloned());
-        backgrounds.sort_by_key(|placement| std::cmp::Reverse(placement.depth));
-        backgrounds
     }
 
     pub(crate) fn set_tooltip_colors(&mut self, foreground: i64, background: i64) {

@@ -596,7 +596,7 @@ impl RuntimeSession {
                 pending.wait.countdown_remaining_ms = Some(duration / 1_000_000);
             }
         }
-        if let Some(submission) = self.replay_submission(&pending.wait) {
+        if let Some(submission) = self.replay_submission(&pending)? {
             self.operations.activate_input(pending);
             return self.finish_or_defer_automatic_input(submission);
         }
@@ -626,6 +626,32 @@ impl RuntimeSession {
             self.operations.activate_input(pending);
             return self.finish_or_defer_automatic_input(submission);
         }
+        let sequence_command = match self.sequence_submission(&pending)? {
+            super::admission::SequenceSubmission::Value(submission) => {
+                self.operations.activate_input(pending);
+                return self.finish_or_defer_automatic_input(submission);
+            }
+            super::admission::SequenceSubmission::Command(command) => Some(command),
+            super::admission::SequenceSubmission::None => None,
+        };
+        if self
+            .undo_replay
+            .as_ref()
+            .and_then(|replay| replay.remaining.front())
+            .is_some_and(|record| {
+                record.source.as_ref().is_some_and(|source| {
+                    matches!(source.root, InputRoot::Sequence(_))
+                        && !self
+                            .queued_input
+                            .front()
+                            .is_some_and(|piece| piece.source.same_replay_origin(source))
+                })
+            })
+        {
+            return Err(RuntimeError::Internal(
+                "replay expected a script sequence that was not regenerated".into(),
+            ));
+        }
         if self.undo_replay.is_none() {
             self.undo_token = None;
             self.emit_input_undo_state()?;
@@ -645,10 +671,12 @@ impl RuntimeSession {
         self.emit_wait_change(WaitChange::Opened(pending.wait.clone()))?;
         self.operations.activate_input(pending);
         if pause_runtime {
-            self.set_phase(RuntimePhase::WaitingInput)
-        } else {
-            Ok(())
+            self.set_phase(RuntimePhase::WaitingInput)?;
         }
+        if let Some(command) = sequence_command {
+            self.handle_system_input_command(0, &command)?;
+        }
+        Ok(())
     }
 
     fn finish_or_defer_automatic_input(

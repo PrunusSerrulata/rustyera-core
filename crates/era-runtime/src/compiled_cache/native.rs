@@ -179,6 +179,11 @@ fn encode_native_section(index: usize, plan: &NativeSectionPlan<'_>) -> Result<V
             &CompiledCacheMetadataRef {
                 manifest: &plan.bytecode.manifest,
                 call_compatibility: &plan.bytecode.call_compatibility,
+                runtime_builtins: &plan.bytecode.runtime_builtins,
+                runtime_variables: &plan.bytecode.runtime_variables,
+                runtime_native_authorizations: &plan.bytecode.runtime_native_authorizations,
+                runtime_host_authorizations: &plan.bytecode.runtime_host_authorizations,
+                runtime_staged_authorizations: &plan.bytecode.runtime_staged_authorizations,
                 native_imports: &plan.bytecode.native_imports,
                 host_imports: &plan.bytecode.host_imports,
                 event_groups: &plan.bytecode.event_groups,
@@ -210,7 +215,7 @@ fn encode_native_section(index: usize, plan: &NativeSectionPlan<'_>) -> Result<V
         ),
         MANIFEST_SECTION_INDEX => encode_manifest_section(plan.manifest, plan.kind, cancelled),
         7 => encode_section(plan.snapshot, plan.kind, cancelled),
-        8 => encode_section(plan.diagnostics, plan.kind, cancelled),
+        8 => super::sections::encode_diagnostic_templates(plan.diagnostics, plan.kind, cancelled),
         value if value < source_start => encode_section(
             &plan.bytecode.functions[plan.function_ranges[value - function_start].clone()],
             plan.kind,
@@ -258,13 +263,13 @@ pub(super) fn encode_manifest_section(
     kind: ProjectContainerKind,
     cancelled: Option<&AtomicBool>,
 ) -> Result<Vec<u8>, String> {
-    let mut encoder = ManifestSectionEncoder::new(manifest.files.len(), kind)?;
+    let mut encoder = ManifestSectionEncoder::new(manifest, kind)?;
     loop {
         if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
             return Err("compiled cache build cancelled".into());
         }
         if let Some(section) = encoder.step(manifest)? {
-            return Ok(section);
+            return Ok(section.into_vec());
         }
     }
 }

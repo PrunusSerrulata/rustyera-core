@@ -41,6 +41,7 @@ impl CooperativeCompiledCacheEncoder {
             plan: None,
             next_section: 0,
             manifest_encoder: None,
+            manifest_hash_offset: None,
             pending_section: None,
             output: None,
             trailing_data: input.trailing_data,
@@ -108,7 +109,7 @@ impl CooperativeCompiledCacheEncoder {
         })
     }
 
-    pub(crate) fn step(&mut self) -> Result<Option<Vec<u8>>, String> {
+    pub(crate) fn step(&mut self) -> Result<Option<ContainerBytes>, String> {
         if self
             .cancelled
             .as_ref()
@@ -116,13 +117,27 @@ impl CooperativeCompiledCacheEncoder {
         {
             return Err("compiled cache build cancelled".into());
         }
+        if let Some(offset) = self.manifest_hash_offset.as_mut() {
+            let (output, hasher) = self.output.as_mut().expect("cache output was initialized");
+            let end = offset
+                .saturating_add(COOPERATIVE_MANIFEST_CHUNK_BYTES)
+                .min(output.len());
+            output.hash_range(*offset..end, hasher)?;
+            *offset = end;
+            if end == output.len() {
+                self.manifest_hash_offset = None;
+                self.next_section += 1;
+            }
+            self.report_cooperative_progress();
+            return Ok(None);
+        }
         if let Some((section, offset)) = self.pending_section.as_mut() {
             let end = offset
                 .saturating_add(COOPERATIVE_MANIFEST_CHUNK_BYTES)
                 .min(section.len());
             let chunk = &section[*offset..end];
             let (output, hasher) = self.output.as_mut().expect("cache output was initialized");
-            output.extend_from_slice(chunk);
+            output.extend_from_slice(chunk)?;
             hasher.update(chunk);
             *offset = end;
             if end == section.len() {
@@ -148,8 +163,9 @@ impl CooperativeCompiledCacheEncoder {
             return Ok(None);
         }
         let (mut output, hasher) = self.output.take().expect("cache output was initialized");
-        output.extend_from_slice(hasher.finalize().as_bytes());
-        output.append(&mut self.trailing_data);
+        output.extend_from_slice(hasher.finalize().as_bytes())?;
+        output.extend_from_slice(&self.trailing_data)?;
+        self.trailing_data.clear();
         if let Some(reporter) = &self.progress {
             let completed = self.progress_completed.saturating_add(1);
             reporter.report(crate::ProjectProgress {
@@ -176,7 +192,55 @@ impl CooperativeCompiledCacheEncoder {
         });
     }
 
+    fn advance_manifest_section(&mut self) -> Result<(), String> {
+        // Initializing zstd allocates its compression workspace. Keep one encoder for
+        // the entire section instead of eagerly rebuilding it on every host pump.
+        if self.manifest_encoder.is_none() {
+            let output = std::mem::take(
+                &mut self
+                    .output
+                    .as_mut()
+                    .expect("cache output was initialized")
+                    .0,
+            );
+            self.manifest_encoder = Some(ManifestSectionEncoder::with_output(
+                &self.manifest,
+                self.kind,
+                output,
+            )?);
+        }
+        let encoder = self
+            .manifest_encoder
+            .as_mut()
+            .expect("manifest encoder was initialized");
+        let before = encoder.file_index;
+        let output = encoder.step(&self.manifest)?;
+        let after = encoder.file_index;
+        if self.kind == ProjectContainerKind::FullProject && after > before {
+            // This manifest belongs to the export, while the live project remains intact.
+            // Never clone a shared manifest just to reclaim completed payloads.
+            if let Some(manifest) = Arc::get_mut(&mut self.manifest) {
+                for file in &mut manifest.files[before..after] {
+                    file.payload = FilePayload::Bytes(ProtocolBytes::new(Vec::new()));
+                }
+            }
+        }
+        if let Some(output) = output {
+            self.manifest_hash_offset = Some(encoder.section_start);
+            self.output
+                .as_mut()
+                .expect("cache output was initialized")
+                .0 = output;
+            self.manifest_encoder = None;
+        }
+        Ok(())
+    }
+
     fn encode_next_section(&mut self) -> Result<Option<Vec<u8>>, String> {
+        if self.next_section == MANIFEST_SECTION_INDEX {
+            self.advance_manifest_section()?;
+            return Ok(None);
+        }
         let plan = self.plan.as_ref().expect("cache layout was planned");
         let function_start = FIXED_SECTION_COUNT;
         let source_start = function_start + plan.function_ranges.len();
@@ -186,6 +250,20 @@ impl CooperativeCompiledCacheEncoder {
                 &CompiledCacheMetadataRef {
                     manifest: &self.artifact.artifact().manifest,
                     call_compatibility: &self.artifact.artifact().call_compatibility,
+                    runtime_builtins: &self.artifact.artifact().runtime_builtins,
+                    runtime_variables: &self.artifact.artifact().runtime_variables,
+                    runtime_native_authorizations: &self
+                        .artifact
+                        .artifact()
+                        .runtime_native_authorizations,
+                    runtime_host_authorizations: &self
+                        .artifact
+                        .artifact()
+                        .runtime_host_authorizations,
+                    runtime_staged_authorizations: &self
+                        .artifact
+                        .artifact()
+                        .runtime_staged_authorizations,
                     native_imports: &self.artifact.artifact().native_imports,
                     host_imports: &self.artifact.artifact().host_imports,
                     event_groups: &self.artifact.artifact().event_groups,
@@ -215,21 +293,12 @@ impl CooperativeCompiledCacheEncoder {
                 self.kind,
                 cancelled,
             )?,
-            MANIFEST_SECTION_INDEX => {
-                let encoder = self
-                    .manifest_encoder
-                    .get_or_insert(ManifestSectionEncoder::new(
-                        self.manifest.files.len(),
-                        self.kind,
-                    )?);
-                let Some(section) = encoder.step(&self.manifest)? else {
-                    return Ok(None);
-                };
-                self.manifest_encoder = None;
-                section
-            }
             7 => encode_section(&self.snapshot, self.kind, cancelled)?,
-            8 => encode_section(&self.diagnostics, self.kind, cancelled)?,
+            8 => super::sections::encode_diagnostic_templates(
+                &self.diagnostics,
+                self.kind,
+                cancelled,
+            )?,
             index if index < source_start => {
                 let range = plan.function_ranges[index - function_start].clone();
                 encode_section(
@@ -271,7 +340,10 @@ impl CooperativeCompiledCacheEncoder {
         )?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(&output);
-        self.output = Some((output, hasher));
+        self.output = Some((
+            ContainerBytes::new(self.kind == ProjectContainerKind::FullProject, output),
+            hasher,
+        ));
         self.planner = None;
         self.progress_total = cooperative_work_estimate(&self.manifest, &self.artifact, &plan);
         self.plan = Some(plan);
@@ -311,17 +383,42 @@ fn cooperative_work_estimate(
 }
 
 pub(super) struct ManifestSectionEncoder {
-    writer:
-        Option<super::io::CountingWriter<'static, zstd::stream::write::Encoder<'static, Vec<u8>>>>,
+    writer: Option<
+        super::io::CountingWriter<'static, zstd::stream::write::Encoder<'static, ContainerBytes>>,
+    >,
     file_index: usize,
     payload_offset: usize,
     payload_hasher: Option<blake3::Hasher>,
     kind: ProjectContainerKind,
+    section_start: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static MANIFEST_ENCODER_CREATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 impl ManifestSectionEncoder {
-    pub(super) fn new(file_count: usize, kind: ProjectContainerKind) -> Result<Self, String> {
-        let encoder = zstd::stream::Encoder::new(Vec::new(), kind.compression_level())
+    #[cfg(any(not(target_arch = "wasm32"), test))]
+    pub(super) fn new(
+        manifest: &ProjectManifest,
+        kind: ProjectContainerKind,
+    ) -> Result<Self, String> {
+        Self::with_output(manifest, kind, ContainerBytes::default())
+    }
+
+    fn with_output(
+        manifest: &ProjectManifest,
+        kind: ProjectContainerKind,
+        mut output: ContainerBytes,
+    ) -> Result<Self, String> {
+        #[cfg(test)]
+        MANIFEST_ENCODER_CREATIONS.set(MANIFEST_ENCODER_CREATIONS.get() + 1);
+        // Reserve the section header in the final buffer. Compression appends directly after
+        // it, avoiding compressed -> section -> output copies of the entire resource payload.
+        let section_start = output.len();
+        output.extend_from_slice(&[0; 16])?;
+        let encoder = zstd::stream::Encoder::new(output, kind.compression_level())
             .map_err(|error| error.to_string())?;
         let mut writer = super::io::CountingWriter::new(encoder, None);
         writer
@@ -330,9 +427,18 @@ impl ManifestSectionEncoder {
                 ProjectContainerKind::FullProject => MANIFEST_SECTION_MAGIC,
             })
             .map_err(|error| error.to_string())?;
+        manifest
+            .compatibility
+            .validate()
+            .map_err(|error| error.to_string())?;
+        write_bytes(
+            &mut writer,
+            &serde_json::to_vec(&manifest.compatibility).map_err(|error| error.to_string())?,
+        )?;
         write_varint(
             &mut writer,
-            u64::try_from(file_count).map_err(|_| "project manifest has too many files")?,
+            u64::try_from(manifest.files.len())
+                .map_err(|_| "project manifest has too many files")?,
         )?;
         Ok(Self {
             writer: Some(writer),
@@ -340,10 +446,14 @@ impl ManifestSectionEncoder {
             payload_offset: 0,
             payload_hasher: None,
             kind,
+            section_start,
         })
     }
 
-    pub(super) fn step(&mut self, manifest: &ProjectManifest) -> Result<Option<Vec<u8>>, String> {
+    pub(super) fn step(
+        &mut self,
+        manifest: &ProjectManifest,
+    ) -> Result<Option<ContainerBytes>, String> {
         let Some(file) = manifest.files.get(self.file_index) else {
             return self.finish().map(Some);
         };
@@ -439,24 +549,25 @@ impl ManifestSectionEncoder {
         Ok(None)
     }
 
-    fn finish(&mut self) -> Result<Vec<u8>, String> {
+    fn finish(&mut self) -> Result<ContainerBytes, String> {
         let writer = self
             .writer
             .take()
             .expect("manifest encoder retains its writer");
         let decoded_length = writer.bytes;
-        let compressed = writer
+        let mut output = writer
             .into_inner()
             .finish()
             .map_err(|error| error.to_string())?;
-        let mut output = Vec::with_capacity(16 + compressed.len());
-        output.extend_from_slice(&decoded_length.to_le_bytes());
-        output.extend_from_slice(
-            &u64::try_from(compressed.len())
+        let start = self.section_start;
+        let compressed_length = output.len() - start - 16;
+        output.patch(start, &decoded_length.to_le_bytes())?;
+        output.patch(
+            start + 8,
+            &u64::try_from(compressed_length)
                 .map_err(|_| "compiled cache section is too large")?
                 .to_le_bytes(),
-        );
-        output.extend_from_slice(&compressed);
+        )?;
         Ok(output)
     }
 }

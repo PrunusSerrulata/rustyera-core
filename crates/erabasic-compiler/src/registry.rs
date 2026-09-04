@@ -3,8 +3,9 @@ use std::collections::BTreeMap;
 use erabasic_analyzer::{builtin_function_names, builtin_instruction_names};
 use erabasic_bytecode::{
     CandidatePolicy, CapabilityFallback, HostCapability, HostEffect, HostSnapshotCapability,
-    OperationContract, OperationDebugPolicy, OperationHotReloadPolicy, OperationPersistence,
-    OperationSnapshotPolicy, OperationState, OperationWaitPolicy, TransactionPolicy,
+    MethodResult, OperationContract, OperationDebugPolicy, OperationHotReloadPolicy,
+    OperationPersistence, OperationSnapshotPolicy, OperationState, OperationWaitPolicy,
+    TransactionPolicy,
 };
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +13,29 @@ mod contracts;
 mod hosts;
 
 use contracts::{host_contract, native_contract};
-use hosts::{AUDIO, CLOCK, GRAPHICS, INPUT, NETWORK, STORAGE, SYSTEM, TEXT, register_hosts};
+use hosts::{
+    AUDIO, CLOCK, GRAPHICS, INPUT, NETWORK, STORAGE, SYSTEM, TEXT, register_hosts, register_sql,
+};
+
+pub(crate) fn column_options_contract() -> OperationContract {
+    let mut contract = native_contract("dt_column_options");
+    contract.debug = OperationDebugPolicy::Forbidden;
+    contract
+}
+
+pub(crate) fn html_query_binding(name: &str) -> HostBinding {
+    // Only specialized lowering emits these imports; they are not catalog callables.
+    let contract = host_contract("rustyera.text", "HTML_STRINGLINES");
+    HostBinding {
+        namespace: "rustyera.text".into(),
+        name: name.to_ascii_lowercase(),
+        abi_version: 1,
+        effect: contract.effect(),
+        capability: HostCapability::Text,
+        snapshot_capability: contract.snapshot_capability(),
+        contract,
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HostBinding {
@@ -28,8 +51,20 @@ pub struct HostBinding {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ExecutionBinding {
     Native(OperationContract),
+    BitArray,
+    ExpressionMethod {
+        result: MethodResult,
+    },
+    /// VM token capture/range/scan; no eager Native service exists.
+    ArrayMatch,
     Host(HostBinding),
-    Unsupported { reason: String },
+    Unsupported {
+        reason: String,
+    },
+    UnsupportedCapability {
+        capability: String,
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -71,7 +106,15 @@ impl HostRegistry {
     pub fn resolve(&self, era_name: &str) -> Option<HostBinding> {
         match self.classification(era_name) {
             Some(ExecutionBinding::Host(binding)) => Some(binding.clone()),
-            Some(ExecutionBinding::Native(_) | ExecutionBinding::Unsupported { .. }) | None => None,
+            Some(
+                ExecutionBinding::Native(_)
+                | ExecutionBinding::BitArray
+                | ExecutionBinding::ArrayMatch
+                | ExecutionBinding::ExpressionMethod { .. }
+                | ExecutionBinding::Unsupported { .. }
+                | ExecutionBinding::UnsupportedCapability { .. },
+            )
+            | None => None,
         }
     }
 }
@@ -83,7 +126,19 @@ pub fn default_host_registry() -> HostRegistry {
         .into_iter()
         .chain(builtin_function_names())
     {
-        let binding = if native_is_implemented(&name) {
+        let binding = if matches!(name.as_str(), "MATCHALL" | "MATCHALLEX") {
+            ExecutionBinding::ArrayMatch
+        } else if matches!(name.as_str(), "GETMETH" | "GETMETHS") {
+            ExecutionBinding::ExpressionMethod {
+                result: if name == "GETMETHS" {
+                    MethodResult::String
+                } else {
+                    MethodResult::Integer
+                },
+            }
+        } else if erabasic_bytecode::BitOperation::from_name(&name).is_some() {
+            ExecutionBinding::BitArray
+        } else if native_is_implemented(&name) {
             ExecutionBinding::Native(native_contract(&name))
         } else {
             ExecutionBinding::Unsupported {
@@ -158,6 +213,7 @@ pub fn default_host_registry() -> HostRegistry {
         HostCapability::Network,
         true,
     );
+    register_sql(&mut registry);
     // Preserve CALLSHARP as an external extension intent without embedding the
     // reference runtime's CLR plugin loader. The raw call expression is the
     // single ABI argument, so frontends can provide an explicit adapter.
@@ -190,8 +246,14 @@ const IMPLEMENTED_NATIVE_NAMES: &[&str] = &[
     "strlen",
     "strlenu",
     "strform",
+    "strformcheck",
+    "existmeth",
     "toint",
     "isnumeric",
+    "unchecked_add",
+    "unchecked_sub",
+    "unchecked_mul",
+    "unchecked_neg",
     "unicode",
     "convert",
     "color_fromrgb",
@@ -238,6 +300,7 @@ const IMPLEMENTED_NATIVE_NAMES: &[&str] = &[
     "getvar",
     "getvars",
     "setvar",
+    "varsetex",
     "varset",
     "cvarset",
     "arraymsort",
@@ -262,6 +325,10 @@ const IMPLEMENTED_NATIVE_NAMES: &[&str] = &[
     "getchara",
     "getspchara",
     "existcsv",
+    "getcsvnobyname",
+    "getcsvnobycallname",
+    "getcsvnobynickname",
+    "getcsvnobymastername",
     "csvname",
     "csvcallname",
     "csvnickname",

@@ -30,6 +30,9 @@ pub(super) fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         false,
         false,
     );
+    for name in ["HTML_PRINTC", "HTML_PRINTLC"] {
+        add(name, Expressions, &[String, Integer], 1, false, true);
+    }
 
     for name in [
         "ELSE",
@@ -72,11 +75,28 @@ pub(super) fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     // array variable and writes all of its dimensions to RESULT.
     add("VARSIZE", Expressions, &[ReferenceAny], 1, false, false);
     add("ASSERT", Expressions, &[Integer], 1, false, false);
+    // DEFAULT positions have a dedicated parser/analyzer, with typed value expressions.
+    add(
+        "DT_COLUMN_OPTIONS",
+        Expressions,
+        &[String, String, ArgumentConstraint::Raw, Any],
+        4,
+        true,
+        false,
+    );
     add("THROW", FormStyle, &[Formatted], 0, false, true);
     // The statement form is distinct from ENCODETOUNI(string, position): it
     // consumes one nullable FORM string and writes its code points to RESULT.
     add("ENCODETOUNI", FormStyle, &[Formatted], 0, false, true);
     add("FORCEKANA", Expressions, &[Integer], 1, false, false);
+    add(
+        "PLAYSOUND",
+        Expressions,
+        &[String, Integer],
+        1,
+        false,
+        false,
+    );
     add("UPCHECK", NoArgs, &[], 0, false, false);
     add("CUPCHECK", Expressions, &[Integer], 1, false, false);
     add(
@@ -302,6 +322,24 @@ pub(super) fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
             true,
         );
     }
+    // CALLSTR receives one evaluated string containing both target and arguments.
+    for name in [
+        "CALLSTR",
+        "JUMPSTR",
+        "TRYCALLSTR",
+        "TRYJUMPSTR",
+        "TRYCCALLSTR",
+        "TRYCJUMPSTR",
+    ] {
+        add(
+            name,
+            ArgumentStyle::SingleExpression,
+            &[String],
+            1,
+            false,
+            false,
+        );
+    }
     add("RETURNF", Expressions, &[Any], 0, true, true);
     add("AWAIT", Expressions, &[Integer], 0, true, true);
     for name in ["INPUT", "ONEINPUT", "BINPUT", "ONEBINPUT"] {
@@ -330,7 +368,7 @@ pub(super) fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     // The timed input builders in the reference implementation share a strict
     // six-slot layout. Optional trailing slots may be absent, but an interior
     // omission is not accepted by ArgumentBuilder.checkArgumentType.
-    for name in ["TINPUT", "TONEINPUT"] {
+    for name in ["TINPUT", "TONEINPUT", "TINPUTNF", "TONEINPUTNF"] {
         add(
             name,
             Expressions,
@@ -340,7 +378,7 @@ pub(super) fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
             false,
         );
     }
-    for name in ["TINPUTS", "TONEINPUTS"] {
+    for name in ["TINPUTS", "TONEINPUTS", "TINPUTSNF", "TONEINPUTSNF"] {
         add(
             name,
             Expressions,
@@ -415,6 +453,61 @@ pub(super) fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
     }
     // SETFONT uses STR_EXPRESSION_NULLABLE: an empty invocation resets the font.
     add("SETFONT", Expressions, &[String], 0, false, true);
+    add("SETANIMETIMER", Expressions, &[Integer], 1, false, false);
+    add(
+        "SETIMAGELAYER",
+        Expressions,
+        &[
+            String,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            ReferenceAny,
+            Integer,
+        ],
+        2,
+        false,
+        true,
+    );
+    add(
+        "SETIMAGELAYERL",
+        Expressions,
+        &[
+            String,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            Integer,
+            ReferenceAny,
+        ],
+        2,
+        false,
+        true,
+    );
+    add("CLEARIMAGELAYER", Expressions, &[Integer], 1, false, false);
+    add("CLEARIMAGELAYER_ALL", NoArgs, &[], 0, false, false);
+    add(
+        "BITMAP_CACHE_ENABLE",
+        Expressions,
+        &[Integer],
+        1,
+        false,
+        false,
+    );
+    add(
+        "TEXT_BGC_ON",
+        Expressions,
+        &[Integer, Integer],
+        2,
+        false,
+        false,
+    );
+    add("TEXT_BGC_OFF", NoArgs, &[], 0, false, false);
     add("PRINTDATA", Expressions, &[MutableInteger], 0, false, true);
     add("STRDATA", Expressions, &[MutableString], 0, false, false);
     // Raw is used only for host/plugin statements whose grammar is intentionally
@@ -469,6 +562,8 @@ pub(super) fn builtin_instructions() -> BTreeMap<String, InstructionSignature> {
         "FORCE_QUIT_AND_RESTART",
         "GETTIME",
         "HTML_PRINT",
+        "HTML_PRINTC",
+        "HTML_PRINTLC",
         "HTML_PRINT_ISLAND",
         "HTML_PRINT_ISLAND_CLEAR",
         "HTML_TAGSPLIT",

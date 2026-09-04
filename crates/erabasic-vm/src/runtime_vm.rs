@@ -1,7 +1,7 @@
 use erabasic_bytecode::{Digest, HostImport, HostSnapshotCapability, SymbolKey};
 use erabasic_validator::ValidatedArtifact;
 
-use crate::structured::{StructuredExtension, StructuredScope};
+use crate::structured::{ColumnIdentityStamp, StructuredExtension, StructuredScope};
 use crate::{
     EraState, EraStateReport, FiberId, FiberState, FiberStatus, GenerationId, HostCallRequest,
     HostCallResult, HostReady, HostRequestId, HostWaitStability, HotReloadReport,
@@ -20,8 +20,25 @@ use crate::debug::DebugState;
 pub struct RuntimeVm {
     vm: Vm,
     natives: NativeServiceRegistry,
-    pending_natives: Option<NativeServiceRegistry>,
+    pending_natives: Option<(
+        NativeServiceRegistry,
+        Option<ColumnIdentityStamp>,
+        Option<crate::structured::MapLeaseStamp>,
+    )>,
+    candidate_base_column_stamp: CandidateColumnBase,
+    candidate_base_array_stamp: Option<crate::state::array_leases::ArrayLeaseStamp>,
     line_columns: u32,
+    pending_completion_events: Vec<VmPortEvent>,
+}
+
+/// Distinguish an unforked runtime from a fork whose artifact has no structured services.
+#[derive(Clone, Copy)]
+enum CandidateColumnBase {
+    Unforked,
+    Forked(
+        Option<ColumnIdentityStamp>,
+        Option<crate::structured::MapLeaseStamp>,
+    ),
 }
 
 /// The immutable program index retained while a runtime obtains title entropy.
@@ -48,6 +65,8 @@ pub const DEFAULT_LINE_COLUMNS: u32 = 75;
 /// It intentionally excludes fibers, frames and scheduler counters.
 pub struct PreparedCandidateState {
     artifact_id: Digest,
+    base_column_stamp: CandidateColumnBase,
+    base_array_stamp: Option<crate::state::array_leases::ArrayLeaseStamp>,
     memory: crate::Memory,
     natives: NativeServiceRegistry,
 }
@@ -60,7 +79,10 @@ impl RuntimeVm {
             vm,
             natives,
             pending_natives,
+            candidate_base_column_stamp: _,
+            candidate_base_array_stamp: _,
             line_columns: _,
+            pending_completion_events: _,
         } = self;
         drop(natives);
         drop(pending_natives);
@@ -93,7 +115,18 @@ impl RuntimeVm {
     ///
     /// Returns an error when a registered Native service cannot be snapshotted.
     pub fn fork_isolated(&self) -> Result<Self, VmError> {
+        if !self.pending_completion_events.is_empty() {
+            return Err(VmError::InvalidState(
+                "pending Host completion events must be delivered before forking".into(),
+            ));
+        }
+        let base_array_stamp = self.vm.array_lease_stamp()?;
         let mut vm = self.vm.clone();
+        let mut array_roots =
+            crate::interpreter::bit_calls::live_bit_leases(self.vm.fibers.values());
+        array_roots.extend(self.vm.memory.array_leases.protected.iter().copied());
+        vm.memory.array_leases.retain(&array_roots);
+        vm.memory.array_leases.protected = array_roots;
         vm.fibers.clear();
         vm.runnable.clear();
         vm.primary_fiber = None;
@@ -103,25 +136,143 @@ impl RuntimeVm {
         vm.clear_path_memo_cache();
         vm.active_path_memo_fiber.set(None);
         vm.active_path_memo.borrow_mut().take();
-        let natives = self
+        let roots =
+            self.natives
+                .candidate_map_roots(&crate::interpreter::map_calls::live_map_leases(
+                    self.vm.fibers.values(),
+                ));
+        self.natives
+            .retain_map_leases(&roots)
+            .map_err(|error| VmError::Snapshot(error.to_string()))?;
+        let mut natives = self
             .natives
             .fork_for_artifact(vm.artifact())
+            .map_err(VmError::Snapshot)?;
+        natives
+            .protect_map_roots(roots)
             .map_err(VmError::Snapshot)?;
         Ok(Self {
             vm,
             natives,
             pending_natives: None,
+            candidate_base_array_stamp: Some(base_array_stamp),
+            candidate_base_column_stamp: CandidateColumnBase::Forked(
+                self.natives
+                    .column_identity_stamp()
+                    .map_err(VmError::Snapshot)?,
+                self.natives.map_lease_stamp().map_err(VmError::Snapshot)?,
+            ),
             line_columns: self.line_columns,
+            pending_completion_events: Vec::new(),
         })
     }
 
-    #[must_use]
-    pub fn into_candidate_state(self) -> PreparedCandidateState {
-        PreparedCandidateState {
+    /// Fork a complete candidate for an atomic state replacement.
+    ///
+    /// Unlike `fork_isolated`, this candidate does not retain any caller-frame array or MAP
+    /// roots: a successful ordinary load discards the current execution timeline. The live VM
+    /// remains untouched while traditional variables, structured data, and random state are
+    /// validated on the returned candidate.
+    ///
+    /// # Errors
+    /// Returns an error for pending completion events or an already isolated parent.
+    pub fn fork_for_state_replacement(&self) -> Result<Self, VmError> {
+        if !self.pending_completion_events.is_empty() {
+            return Err(VmError::InvalidState(
+                "pending Host completion events must be delivered before replacement forking"
+                    .into(),
+            ));
+        }
+        if !self.vm.memory.array_leases.protected.is_empty()
+            || !self.natives.protected_map_roots().is_empty()
+        {
+            return Err(VmError::InvalidState(
+                "an isolated candidate cannot become a replacement source".into(),
+            ));
+        }
+        let mut vm = self.vm.clone();
+        vm.clear_execution();
+        let natives = self
+            .natives
+            .fork_for_artifact(vm.artifact())
+            .map_err(VmError::Snapshot)?;
+        natives
+            .retain_map_leases(&BTreeSet::new())
+            .map_err(|error| VmError::Snapshot(error.to_string()))?;
+        let mut result = Self {
+            vm,
+            natives,
+            pending_natives: None,
+            candidate_base_column_stamp: CandidateColumnBase::Unforked,
+            candidate_base_array_stamp: None,
+            line_columns: self.line_columns,
+            pending_completion_events: Vec::new(),
+        };
+        result.refresh_draw_line_string();
+        Ok(result)
+    }
+
+    /// Replace the complete VM/native state with a previously validated replacement candidate.
+    ///
+    /// # Errors
+    /// Rejects stale artifacts, generations, candidates with execution, or pending completions.
+    pub fn commit_state_replacement(&mut self, replacement: Self) -> Result<(), VmError> {
+        self.validate_state_replacement(&replacement)?;
+        *self = replacement;
+        Ok(())
+    }
+
+    /// Validate a complete replacement without publishing it.
+    ///
+    /// # Errors
+    /// Rejects the same stale or executable candidates as [`Self::commit_state_replacement`].
+    pub fn validate_state_replacement(&self, replacement: &Self) -> Result<(), VmError> {
+        if !self.pending_completion_events.is_empty()
+            || !replacement.pending_completion_events.is_empty()
+        {
+            return Err(VmError::InvalidState(
+                "state replacement cannot cross pending Host completion events".into(),
+            ));
+        }
+        if self.vm.artifact_id() != replacement.vm.artifact_id()
+            || self.vm.current_generation() != replacement.vm.current_generation()
+        {
+            return Err(VmError::InvalidState(
+                "state replacement belongs to a stale artifact generation".into(),
+            ));
+        }
+        if !replacement.vm.fibers.is_empty() || replacement.has_work() {
+            return Err(VmError::InvalidState(
+                "state replacement candidate unexpectedly contains execution".into(),
+            ));
+        }
+        if !replacement.vm.memory.array_leases.protected.is_empty()
+            || !replacement.natives.protected_map_roots().is_empty()
+        {
+            return Err(VmError::InvalidState(
+                "state replacement candidate retained parent roots".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Consume a completed candidate after all terminal completion events were delivered.
+    ///
+    /// # Errors
+    /// Rejects a candidate whose Host outcome has not yet been observed by its caller.
+    pub fn into_candidate_state(self) -> Result<PreparedCandidateState, VmError> {
+        if !self.pending_completion_events.is_empty() {
+            return Err(VmError::InvalidState(
+                "candidate has undelivered Host completion events".into(),
+            ));
+        }
+        Ok(PreparedCandidateState {
             artifact_id: self.vm.artifact_id(),
+            base_column_stamp: self.candidate_base_column_stamp,
+            base_array_stamp: self.candidate_base_array_stamp,
             memory: self.vm.memory,
             natives: self.natives,
-        }
+        })
     }
 
     /// Atomically install candidate memory and Native services without replacing
@@ -132,14 +283,97 @@ impl RuntimeVm {
     /// Rejects a candidate prepared for another artifact generation.
     pub fn commit_candidate_state(
         &mut self,
-        candidate: PreparedCandidateState,
+        mut candidate: PreparedCandidateState,
     ) -> Result<(), VmError> {
+        if !self.pending_completion_events.is_empty() {
+            return Err(VmError::InvalidState(
+                "pending Host completion events must be delivered before candidate commit".into(),
+            ));
+        }
         if candidate.artifact_id != self.vm.artifact_id() {
             return Err(VmError::InvalidState(
                 "candidate state belongs to another artifact".into(),
             ));
         }
+        let base_array_stamp = candidate.base_array_stamp.as_ref().ok_or_else(|| {
+            VmError::InvalidState("candidate has no array lease source guard".into())
+        })?;
+        self.vm.validate_array_lease_stamp(base_array_stamp)?;
+        let mut roots = crate::interpreter::bit_calls::live_bit_leases(self.vm.fibers.values());
+        roots.extend(self.vm.memory.array_leases.protected.iter().copied());
+        if candidate
+            .memory
+            .array_leases
+            .entries
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            != roots
+            || roots.iter().any(|id| {
+                candidate
+                    .memory
+                    .array_leases
+                    .entries
+                    .get(id)
+                    .zip(self.vm.memory.array_leases.entries.get(id))
+                    .is_none_or(|(candidate, parent)| {
+                        candidate.owner != parent.owner
+                            || candidate.input != parent.input
+                            || candidate.length != parent.length
+                    })
+            })
+        {
+            return Err(VmError::InvalidState(
+                "candidate array leases differ from protected parent roots".into(),
+            ));
+        }
+        candidate
+            .memory
+            .array_leases
+            .protected
+            .clone_from(&self.vm.memory.array_leases.protected);
+        // Inherited roots belong to a still-live outer runtime, not this isolated
+        // parent's discarded frames. Their exact set/source stamp is checked above;
+        // only this parent's own frame roots can be validated against its fibers.
+        let expected = roots
+            .iter()
+            .filter(|id| !self.vm.memory.array_leases.protected.contains(*id))
+            .filter_map(|id| {
+                self.vm
+                    .memory
+                    .array_leases
+                    .entries
+                    .get(id)
+                    .map(|lease| (*id, lease.owner))
+            })
+            .collect();
+        candidate.memory.validate_array_leases(
+            &self.vm.fibers,
+            &expected,
+            self.vm.config.maximum_operand_stack,
+        )?;
+        let CandidateColumnBase::Forked(base, map_base) = candidate.base_column_stamp else {
+            return Err(VmError::InvalidState(
+                "candidate state was not forked from a live runtime".into(),
+            ));
+        };
+        self.natives
+            .validate_column_identity_stamp(base)
+            .map_err(VmError::InvalidState)?;
+        self.natives
+            .validate_map_lease_stamp(map_base)
+            .map_err(VmError::InvalidState)?;
+        let roots =
+            self.natives
+                .candidate_map_roots(&crate::interpreter::map_calls::live_map_leases(
+                    self.vm.fibers.values(),
+                ));
+        candidate
+            .natives
+            .finish_map_candidate(&roots, self.natives.protected_map_roots())
+            .map_err(VmError::InvalidState)?;
         self.vm.memory = candidate.memory;
+        self.vm.prune_bit_leases();
         self.natives = candidate.natives;
         self.refresh_draw_line_string();
         Ok(())
@@ -152,7 +386,10 @@ impl RuntimeVm {
             vm: Vm::new(artifact, config),
             natives,
             pending_natives: None,
+            candidate_base_column_stamp: CandidateColumnBase::Unforked,
+            candidate_base_array_stamp: None,
             line_columns: DEFAULT_LINE_COLUMNS,
+            pending_completion_events: Vec::new(),
         };
         runtime.refresh_draw_line_string();
         runtime
@@ -165,7 +402,10 @@ impl RuntimeVm {
             vm: Vm::new(artifact, config),
             natives,
             pending_natives: None,
+            candidate_base_column_stamp: CandidateColumnBase::Unforked,
+            candidate_base_array_stamp: None,
             line_columns: DEFAULT_LINE_COLUMNS,
+            pending_completion_events: Vec::new(),
         };
         runtime.refresh_draw_line_string();
         runtime
@@ -187,7 +427,10 @@ impl RuntimeVm {
             vm: Vm::new_for_title(artifact, config),
             natives,
             pending_natives: None,
+            candidate_base_column_stamp: CandidateColumnBase::Unforked,
+            candidate_base_array_stamp: None,
             line_columns: DEFAULT_LINE_COLUMNS,
+            pending_completion_events: Vec::new(),
         };
         runtime.refresh_draw_line_string();
         runtime
@@ -205,7 +448,10 @@ impl RuntimeVm {
             vm: Vm::new_for_title_with_progress(artifact, config, progress),
             natives,
             pending_natives: None,
+            candidate_base_column_stamp: CandidateColumnBase::Unforked,
+            candidate_base_array_stamp: None,
             line_columns: DEFAULT_LINE_COLUMNS,
+            pending_completion_events: Vec::new(),
         };
         runtime.refresh_draw_line_string();
         runtime
@@ -225,7 +471,10 @@ impl RuntimeVm {
             vm: Vm::new_for_title_from_program_with_progress(program, config, progress),
             natives,
             pending_natives: None,
+            candidate_base_column_stamp: CandidateColumnBase::Unforked,
+            candidate_base_array_stamp: None,
             line_columns: DEFAULT_LINE_COLUMNS,
+            pending_completion_events: Vec::new(),
         };
         runtime.refresh_draw_line_string();
         runtime
@@ -242,7 +491,7 @@ impl RuntimeVm {
         let changed = self.natives.character_width_mode() != mode;
         self.natives.set_character_width_mode(mode);
         if let Some(pending) = &mut self.pending_natives {
-            pending.set_character_width_mode(mode);
+            pending.0.set_character_width_mode(mode);
         }
         if changed {
             // Width-sensitive compiler natives are memo-safe only within one width policy.
@@ -280,10 +529,66 @@ impl RuntimeVm {
         self.vm.set_runtime_calculated_string("DRAWLINESTR", &value);
     }
 
-    fn current_host_import(&self, key: SymbolKey) -> Option<&HostImport> {
-        let generation = self.vm.generations.get(&self.vm.current_generation)?;
-        let index = generation.host_import_index(key)?;
-        generation.artifact.host_imports.get(index)
+    fn waiting_host_import(
+        &self,
+        fiber_id: FiberId,
+        wait: &crate::state::WaitingHost,
+    ) -> Option<HostImport> {
+        let generation = self.vm.generations.get(&wait.origin.generation)?;
+        let import = if let Some(scope) = wait.form_scope {
+            if scope.fiber != fiber_id {
+                return None;
+            }
+            let fiber = self.vm.fibers.get(&fiber_id)?;
+            let frame = fiber
+                .frames
+                .last()
+                .filter(|frame| frame.id == scope.frame)?;
+            frame
+                .runtime_form
+                .as_ref()?
+                .waiting_host_import(scope, &wait.origin, generation)?
+        } else {
+            let index = generation.host_import_index(wait.import.key)?;
+            generation.artifact.host_imports.get(index)?.clone()
+        };
+        (import.import == wait.import && import.import.result == wait.result).then_some(import)
+    }
+
+    /// The origin is taken from the VM's actual waiting continuation, not the frontend request.
+    #[must_use]
+    pub fn host_request_scope(
+        &self,
+        request: crate::HostRequestId,
+    ) -> Option<crate::RuntimeHostScope> {
+        self.vm.fibers.iter().find_map(|(fiber, state)| {
+            let FiberState::WaitingHost(wait) = &state.state else {
+                return None;
+            };
+            if wait.request != request {
+                return None;
+            }
+            self.waiting_host_import(*fiber, wait)?;
+            wait.form_scope
+        })
+    }
+    #[must_use]
+    pub fn host_scope_is_live(&self, scope: crate::RuntimeHostScope) -> bool {
+        self.vm
+            .fibers
+            .get(&scope.fiber)
+            .and_then(|fiber| fiber.frames.iter().find(|frame| frame.id == scope.frame))
+            .and_then(|frame| frame.runtime_form.as_ref())
+            .is_some_and(|form| form.contains_host_scope(scope))
+    }
+    #[must_use]
+    pub fn host_scope_has_html_ticket(&self, scope: crate::RuntimeHostScope, ticket: &str) -> bool {
+        self.vm
+            .fibers
+            .get(&scope.fiber)
+            .and_then(|fiber| fiber.frames.iter().find(|frame| frame.id == scope.frame))
+            .and_then(|frame| frame.runtime_form.as_ref())
+            .is_some_and(|form| form.scope_has_html_ticket(scope, ticket))
     }
 
     #[must_use]
@@ -298,6 +603,38 @@ impl RuntimeVm {
     #[must_use]
     pub fn fiber_frame_count(&self, fiber: FiberId) -> Option<usize> {
         self.vm.fibers.get(&fiber).map(|fiber| fiber.frames.len())
+    }
+
+    /// Read an exact retained caller frame without exposing VM-owned references.
+    /// `depth` is zero-based from the root; nested calls preserve the owner's identity.
+    #[must_use]
+    pub fn host_frame_identity(
+        &self,
+        fiber: FiberId,
+        depth: usize,
+    ) -> Option<(
+        crate::FrameId,
+        crate::GenerationId,
+        erabasic_bytecode::SymbolKey,
+    )> {
+        let frame = self.vm.fibers.get(&fiber)?.frames.get(depth)?;
+        Some((frame.id, frame.generation, frame.function))
+    }
+
+    /// Only runtime snapshot validation consumes this bounded ownership inventory.
+    #[must_use]
+    pub fn active_html_line_scopes(&self) -> Vec<(crate::RuntimeHostScope, String)> {
+        self.vm
+            .fibers
+            .iter()
+            .flat_map(|(id, fiber)| {
+                fiber
+                    .frames
+                    .iter()
+                    .filter_map(|frame| frame.runtime_form.as_ref())
+                    .flat_map(|form| form.html_scope_tickets(*id))
+            })
+            .collect()
     }
 
     /// Return the active dimensions for a named global, local, or bound
@@ -328,6 +665,18 @@ impl RuntimeVm {
             .fibers
             .values()
             .any(|fiber| matches!(fiber.state, FiberState::Runnable))
+    }
+
+    /// Whether a committed Host outcome still needs delivery to the runtime.
+    #[must_use]
+    pub fn has_pending_events(&self) -> bool {
+        !self.pending_completion_events.is_empty()
+    }
+
+    /// Whether driving can deliver an event or execute a runnable fiber.
+    #[must_use]
+    pub fn has_work(&self) -> bool {
+        self.has_pending_events() || self.has_runnable_fibers()
     }
 
     /// Export the exact SFMT stream position used by RAND natives.
@@ -383,6 +732,14 @@ impl RuntimeVm {
             .map_err(VmError::InvalidState)?;
         let mut prepared = self.vm.prepare_runtime_state(transaction)?;
         prepared.structured_state = structured_state;
+        prepared.base_map_stamp = self
+            .natives
+            .map_lease_stamp()
+            .map_err(VmError::InvalidState)?;
+        prepared.base_column_stamp = self
+            .natives
+            .column_identity_stamp()
+            .map_err(VmError::InvalidState)?;
         Ok((prepared, imported))
     }
 }
@@ -402,18 +759,47 @@ impl VmRuntimeStatePort for RuntimeVm {
             .map_err(VmError::InvalidState)?;
         let mut prepared = self.vm.prepare_runtime_state(transaction)?;
         prepared.structured_state = structured_state;
+        prepared.base_map_stamp = self
+            .natives
+            .map_lease_stamp()
+            .map_err(VmError::InvalidState)?;
+        prepared.base_column_stamp = self
+            .natives
+            .column_identity_stamp()
+            .map_err(VmError::InvalidState)?;
         Ok(prepared)
     }
 
-    fn commit_runtime_state(&mut self, prepared: PreparedRuntimeState) -> Result<(), VmError> {
+    fn commit_runtime_state(&mut self, mut prepared: PreparedRuntimeState) -> Result<(), VmError> {
+        self.vm
+            .validate_array_lease_stamp(&prepared.base_array_stamp)?;
         if prepared.generation != self.vm.current_generation() {
             return Err(VmError::InvalidState(
                 "runtime state transaction belongs to a stale generation".into(),
             ));
         }
+        self.natives
+            .validate_column_identity_stamp(prepared.base_column_stamp)
+            .map_err(VmError::InvalidState)?;
+        self.natives
+            .validate_map_lease_stamp(prepared.base_map_stamp)
+            .map_err(VmError::InvalidState)?;
+        let live_maps = if prepared.reset_execution {
+            BTreeSet::new()
+        } else {
+            crate::interpreter::map_calls::live_map_leases(self.vm.fibers.values())
+        };
+        prepared.structured_state = self
+            .natives
+            .prepare_map_lease_cleanup(prepared.structured_state.as_deref(), &live_maps)
+            .map_err(VmError::InvalidState)?;
         if let Some(structured_state) = &prepared.structured_state {
             self.natives
-                .commit_structured_state(structured_state)
+                .commit_structured_state(
+                    structured_state,
+                    prepared.base_column_stamp,
+                    prepared.base_map_stamp,
+                )
                 .map_err(VmError::InvalidState)?;
         }
         self.vm.commit_runtime_state(prepared)?;
@@ -477,6 +863,68 @@ impl<H: VmHost> VmHost for CapturingRuntimeHost<'_, H> {
 }
 
 impl RuntimeVm {
+    fn deliver_captured_host(&mut self, request: HostCallRequest, events: &mut Vec<VmPortEvent>) {
+        let definition = self
+            .vm
+            .fibers
+            .get(&request.fiber)
+            .and_then(|fiber| match &fiber.state {
+                FiberState::WaitingHost(wait) if wait.request == request.id => {
+                    self.waiting_host_import(request.fiber, wait)
+                }
+                _ => None,
+            });
+        if let Some(import) = definition.filter(|definition| definition.import == request.import) {
+            events.push(VmPortEvent::HostCall(VmHostRequest {
+                id: request.id,
+                fiber: request.fiber,
+                import,
+                arguments: request.arguments,
+                omitted_arguments: request.omitted_arguments,
+                origin: request.origin,
+            }));
+        } else {
+            // Missing owner/grant is an invariant failure, never a name fallback
+            // or a silently dropped HostPending event.
+            let failure = crate::ExecutionFailure::classified(
+                crate::FaultCategory::InternalInvariant,
+                crate::VmFaultCode::Host,
+                "captured Host request lost its exact generation/owner authorization",
+            );
+            if let Ok((fiber, Some(fault))) = self.vm.fail_waiting_host(request.id, failure) {
+                events.push(VmPortEvent::FiberFaulted(fiber, fault));
+            } else {
+                // Internal failures are never catchable. A missing wait or
+                // an impossible recovery still reports the captured origin.
+                let fault = crate::VmFault::from_origin(
+                    request.fiber,
+                    request.origin,
+                    crate::ExecutionFailure::classified(
+                        crate::FaultCategory::InternalInvariant,
+                        crate::VmFaultCode::Host,
+                        "captured Host request has no recoverable authorized owner",
+                    ),
+                );
+                let published = match self.vm.fibers.remove(&request.fiber) {
+                    Some(mut fiber) => {
+                        let published = match self.vm.transition_fault(&mut fiber, fault) {
+                            crate::interpreter::fault_hooks::FaultTransition::Published(fault) => {
+                                *fault
+                            }
+                            crate::interpreter::fault_hooks::FaultTransition::HookStarted => {
+                                unreachable!("internal invariant faults cannot start script hooks")
+                            }
+                        };
+                        self.vm.fibers.insert(request.fiber, fiber);
+                        published
+                    }
+                    None => fault,
+                };
+                events.push(VmPortEvent::FiberFaulted(request.fiber, published));
+            }
+        }
+    }
+
     /// Drive with an optional immediate Host implementation. Unsupported calls still cross the
     /// ordinary caller-pumped port and retain all persistent wait/debug semantics.
     pub fn drive_with_immediate_host(
@@ -485,6 +933,13 @@ impl RuntimeVm {
         mode: VmDriveMode,
         immediate: &mut impl VmHost,
     ) -> VmPortDriveReport {
+        if !self.pending_completion_events.is_empty() {
+            return VmPortDriveReport {
+                stop: VmPortStop::Idle,
+                instructions: 0,
+                events: std::mem::take(&mut self.pending_completion_events),
+            };
+        }
         self.vm.retire_terminal_fibers();
         if matches!(mode, VmDriveMode::SelectedFiber(_)) {
             return VmPortDriveReport {
@@ -515,23 +970,8 @@ impl RuntimeVm {
                     notification,
                 }),
                 crate::VmEvent::HostPending { request, .. } => {
-                    if let Some(request) = host.captured.take(request)
-                        && let Some(definition) = self.current_host_import(request.import.key)
-                    {
-                        let import = HostImport {
-                            import: request.import,
-                            effect: definition.effect,
-                            capability: definition.capability,
-                            snapshot_capability: definition.snapshot_capability,
-                            contract: definition.contract,
-                        };
-                        events.push(VmPortEvent::HostCall(VmHostRequest {
-                            id: request.id,
-                            fiber: request.fiber,
-                            import,
-                            arguments: request.arguments,
-                            origin: request.origin,
-                        }));
+                    if let Some(request) = host.captured.take(request) {
+                        self.deliver_captured_host(request, &mut events);
                     }
                 }
                 crate::VmEvent::FiberYielded { fiber } => {
@@ -608,7 +1048,13 @@ impl VmRuntimePort for RuntimeVm {
     }
 
     fn retire_terminal_fibers(&mut self) -> usize {
-        self.vm.retire_terminal_fibers()
+        if self.has_pending_events() {
+            // The caller has not observed the terminal state yet. Retiring it can
+            // otherwise discard the primary identity before event dispatch.
+            0
+        } else {
+            self.vm.retire_terminal_fibers()
+        }
     }
 
     fn validate_host_completion(
@@ -628,7 +1074,7 @@ impl VmRuntimePort for RuntimeVm {
             })
             .ok_or(VmError::StaleHostRequest(request))?;
         let import = self
-            .current_host_import(wait.import.key)
+            .waiting_host_import(fiber_id, wait)
             .ok_or_else(|| VmError::InvalidState("waiting host import is missing".into()))?;
         match &completion {
             VmHostCompletion::Ready(ready) => {
@@ -642,6 +1088,11 @@ impl VmRuntimePort for RuntimeVm {
                 )?;
             }
             VmHostCompletion::ReturnCurrent(_) => {
+                if wait.form_scope.is_some() {
+                    return Err(VmError::InvalidState(
+                        "direct Host expression cannot return its owner frame".into(),
+                    ));
+                }
                 if fiber.frames.len() <= 1 {
                     return Err(VmError::InvalidState(
                         "cannot return the root frame through a host completion".into(),
@@ -678,9 +1129,21 @@ impl VmRuntimePort for RuntimeVm {
         }
         match completion.completion {
             VmHostCompletion::Ready(ready) => self.vm.resume_host(completion.request, ready),
-            VmHostCompletion::ReturnCurrent(value) => self
-                .vm
-                .return_current_from_host(completion.request, value.as_ref()),
+            VmHostCompletion::ReturnCurrent(value) => {
+                let fiber = self
+                    .vm
+                    .return_current_from_host(completion.request, value.as_ref())?;
+                self.natives
+                    .retain_map_leases(&crate::interpreter::map_calls::live_map_leases(
+                        self.vm.fibers.values(),
+                    ))
+                    .map_err(|error| VmError::InvalidState(error.to_string()))?;
+                if let Some(FiberStatus::Completed(value)) = self.vm.fiber_status(fiber) {
+                    self.pending_completion_events
+                        .push(VmPortEvent::FiberCompleted(fiber, value));
+                }
+                Ok(fiber)
+            }
             VmHostCompletion::Pending {
                 stability,
                 rebind_payload,
@@ -700,14 +1163,33 @@ impl VmRuntimePort for RuntimeVm {
                 wait.rebind_payload = rebind_payload;
                 Ok(fiber_id)
             }
-            VmHostCompletion::Error(message) => Err(VmError::InvalidState(format!(
-                "host request failed: {message}"
-            ))),
+            VmHostCompletion::Error(failure) => {
+                let (fiber, fault) = self.vm.fail_waiting_host(completion.request, failure)?;
+                self.natives
+                    .retain_map_leases(&crate::interpreter::map_calls::live_map_leases(
+                        self.vm.fibers.values(),
+                    ))
+                    .map_err(|error| VmError::InvalidState(error.to_string()))?;
+                if let Some(fault) = fault {
+                    self.pending_completion_events
+                        .push(VmPortEvent::FiberFaulted(fiber, fault));
+                }
+                Ok(fiber)
+            }
         }
     }
 
     fn cancel_fiber(&mut self, fiber: FiberId) -> Result<(), VmError> {
-        self.vm.cancel_fiber(fiber)
+        self.vm.cancel_fiber(fiber)?;
+        if let Some(FiberStatus::Faulted(fault)) = self.vm.fiber_status(fiber) {
+            self.pending_completion_events
+                .push(VmPortEvent::FiberFaulted(fiber, fault));
+        }
+        self.natives
+            .retain_map_leases(&crate::interpreter::map_calls::live_map_leases(
+                self.vm.fibers.values(),
+            ))
+            .map_err(|error| VmError::InvalidState(error.to_string()))
     }
 
     fn export_era_state(&self) -> EraState {
@@ -721,37 +1203,78 @@ impl VmRuntimePort for RuntimeVm {
     }
 
     fn snapshot_eligibility(&self) -> SnapshotEligibility {
+        if !self.pending_completion_events.is_empty() {
+            return SnapshotEligibility::Ineligible(vec![
+                crate::SnapshotBlocker::PendingCompletionEvents,
+            ]);
+        }
         self.vm.snapshot_eligibility(&self.natives)
     }
 
     fn snapshot(&self) -> Result<VmSnapshot, VmError> {
+        if !self.pending_completion_events.is_empty() {
+            return Err(VmError::Snapshot(
+                "host completion events have not been delivered".into(),
+            ));
+        }
         self.vm.snapshot(&self.natives)
     }
 
     fn encode_snapshot(&self) -> Result<Vec<u8>, VmError> {
+        if !self.pending_completion_events.is_empty() {
+            return Err(VmError::Snapshot(
+                "host completion events have not been delivered".into(),
+            ));
+        }
         self.vm.encode_snapshot(&self.natives)
     }
 
     fn encode_unrestricted_snapshot(&self) -> Result<Vec<u8>, VmError> {
+        if !self.pending_completion_events.is_empty() {
+            return Err(VmError::Snapshot(
+                "host completion events have not been delivered".into(),
+            ));
+        }
         self.vm.encode_unrestricted_snapshot(&self.natives)
     }
 
     fn prepare_hot_reload(&mut self, target: ValidatedArtifact) -> Result<(), VmError> {
+        if !self.pending_completion_events.is_empty() {
+            return Err(VmError::HotReload(
+                "host completion events have not been delivered".into(),
+            ));
+        }
+        let base_column_stamp = self
+            .natives
+            .column_identity_stamp()
+            .map_err(VmError::Snapshot)?;
         let migrated = self
             .natives
             .migrated_for_artifact(target.artifact())
             .map_err(VmError::Snapshot)?;
         self.vm.prepare_hot_reload_artifact(target)?;
-        self.pending_natives = Some(migrated);
+        let map_stamp = self.natives.map_lease_stamp().map_err(VmError::Snapshot)?;
+        self.pending_natives = Some((migrated, base_column_stamp, map_stamp));
         Ok(())
     }
 
     fn commit_hot_reload(&mut self) -> Result<HotReloadReport, VmError> {
+        let (_, base_column_stamp, base_map_stamp) = self
+            .pending_natives
+            .as_ref()
+            .ok_or_else(|| VmError::InvalidState("prepared native migration is missing".into()))?;
+        self.natives
+            .validate_column_identity_stamp(*base_column_stamp)
+            .map_err(VmError::InvalidState)?;
+        self.natives
+            .validate_map_lease_stamp(*base_map_stamp)
+            .map_err(VmError::InvalidState)?;
         let report = self.vm.commit_hot_reload()?;
-        self.natives = self
+        let (natives, _, _) = self
             .pending_natives
             .take()
-            .ok_or_else(|| VmError::InvalidState("prepared native migration is missing".into()))?;
+            .expect("validated native migration remains available");
+        self.natives = natives;
         self.refresh_draw_line_string();
         Ok(report)
     }
@@ -889,7 +1412,10 @@ impl VmRestorePort for RuntimeVm {
             vm,
             natives,
             pending_natives: None,
+            candidate_base_column_stamp: CandidateColumnBase::Unforked,
+            candidate_base_array_stamp: None,
             line_columns: DEFAULT_LINE_COLUMNS,
+            pending_completion_events: Vec::new(),
         };
         Ok(PreparedVmRestore {
             runtime,
@@ -926,12 +1452,20 @@ fn validate_ready(
                 "host write belongs to another fiber".into(),
             ));
         }
-        let definition = vm
-            .artifact()
-            .globals
-            .iter()
-            .find(|definition| definition.key == write.target.variable)
-            .ok_or_else(|| VmError::InvalidState("host write variable is missing".into()))?;
+        // Public Host descriptors never carry the VM-private backing capability.
+        // A legitimate REF write names its live formal and resolves the binding in VM.
+        if write.target.backing.is_some() {
+            return Err(VmError::InvalidState(
+                "Host cannot inject an array backing identity".into(),
+            ));
+        }
+        let (_, definition) = vm.place_definition(fiber, &write.target).map_err(|error| {
+            VmError::ScriptFailure(crate::ExecutionFailure::classified(
+                crate::FaultCategory::HostContract,
+                crate::VmFaultCode::Host,
+                error.to_string(),
+            ))
+        })?;
         // Host completions are constructed by the trusted runtime and must update
         // reference pseudo-variables such as immutable-to-script ISTIMEOUT.
         if definition.value_type != write.value.value_type() {
@@ -939,7 +1473,13 @@ fn validate_ready(
                 "host write value type differs".into(),
             ));
         }
-        let _ = vm.read_place(fiber, &write.target)?;
+        let _ = vm.read_place(fiber, &write.target).map_err(|error| {
+            VmError::ScriptFailure(crate::ExecutionFailure::classified(
+                crate::FaultCategory::HostContract,
+                crate::VmFaultCode::Host,
+                error.to_string(),
+            ))
+        })?;
     }
     Ok(())
 }
@@ -962,6 +1502,7 @@ mod tests {
                 result: None,
             },
             arguments: vec![VmValue::Integer(i64::try_from(id).unwrap_or(i64::MAX))],
+            omitted_arguments: Vec::new(),
             origin: crate::VmExecutionOrigin {
                 generation: GenerationId(1),
                 function: SymbolKey([0; 16]),

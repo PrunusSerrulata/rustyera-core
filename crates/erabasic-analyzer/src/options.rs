@@ -13,6 +13,7 @@ pub enum WarningPolicy {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct AnalyzerOptions {
+    pub compatibility: erabasic_compat::CompatibilityIdentity,
     pub ignore_case: bool,
     pub sort_with_filename: bool,
     pub allow_function_overloading: bool,
@@ -23,6 +24,10 @@ pub struct AnalyzerOptions {
     pub function_not_called: WarningPolicy,
     pub compatible_function_argument_auto_convert: bool,
     pub compatible_function_argument_optional: bool,
+    /// Promote the snake non-variadic excess-argument warning to a load error.
+    pub strict_user_call_arguments: bool,
+    /// Disable snake `BEFORE_ERROR`/`BEFORE_THROW` final-fault hooks.
+    pub disable_before_error_throw: bool,
     pub compatible_call_event: bool,
     pub system_save_in_binary: bool,
     pub use_erd: bool,
@@ -36,6 +41,10 @@ pub struct AnalyzerOptions {
     pub allow_full_width_space: bool,
     pub debug_semicolon: bool,
     pub ignore_triple_symbols: bool,
+    /// Parse-time RAND argument compatibility used by runtime expression probes.
+    pub compatible_rand: bool,
+    /// Do not infer omitted character indices in runtime expression probes.
+    pub system_no_target: bool,
     /// Replacement inserted between physical lines in `{ ... }` continuations.
     pub continuation_separator: String,
 }
@@ -43,6 +52,7 @@ pub struct AnalyzerOptions {
 impl Default for AnalyzerOptions {
     fn default() -> Self {
         Self {
+            compatibility: erabasic_compat::CompatibilityIdentity::default(),
             ignore_case: true,
             sort_with_filename: false,
             allow_function_overloading: true,
@@ -53,6 +63,8 @@ impl Default for AnalyzerOptions {
             function_not_called: WarningPolicy::Ignore,
             compatible_function_argument_auto_convert: false,
             compatible_function_argument_optional: false,
+            strict_user_call_arguments: false,
+            disable_before_error_throw: false,
             compatible_call_event: false,
             system_save_in_binary: false,
             use_erd: true,
@@ -63,6 +75,8 @@ impl Default for AnalyzerOptions {
             allow_full_width_space: true,
             debug_semicolon: false,
             ignore_triple_symbols: false,
+            compatible_rand: false,
+            system_no_target: false,
             continuation_separator: " ".into(),
         }
     }

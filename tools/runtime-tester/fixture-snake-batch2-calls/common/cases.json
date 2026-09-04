@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "original": {
+      "semantic_version": 1,
+      "policy_version": 1
+    },
+    "snake": {
+      "semantic_version": 5,
+      "policy_version": 5
+    }
+  },
+  "evidenceStatus": "source_derived_candidates_not_executed; pending probes are not golden",
+  "loadExpect": {
+    "ok": true,
+    "result": {
+      "termination": "waitingInput"
+    }
+  },
+  "cases": [
+    {
+      "id": "callform-exact",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Both pinned Process.CalledFunction.cs: ConvertArg and UserDefinedFunctionArgument.SetTransporter; source-only derivation, not a captured oracle result",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "COMMON_EXACT",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:9"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "FLAG:0": 0,
+                  "FLAG:1": 7,
+                  "FLAG:9": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "FLAG:0": 0,
+                  "FLAG:1": 7,
+                  "FLAG:9": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "ref-array-skips-index",
+      "group": "METHODS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2B_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2B_acceptance",
+      "expectationBasis": "Both pinned Process.CalledFunction.cs: ConvertArg and UserDefinedFunctionArgument.SetTransporter; source-only derivation, not a captured oracle result",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "COMMON_REF",
+            "watch": [
+              "RESULT:0",
+              "FLAG:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 4,
+                  "FLAG:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 4,
+                  "FLAG:0": 0
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

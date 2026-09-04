@@ -1,11 +1,13 @@
+use std::collections::BTreeSet;
+
 use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AudioState, CanvasPoint, CanvasRect, CanvasSize, MediaPlacement, PresentationHistory,
-    PresentationSettings, RedrawState, TooltipSettings,
+    AudioState, CanvasPoint, CanvasRect, CanvasSize, PresentationHistory, PresentationSettings,
+    RedrawState, SceneStateV1, TooltipSettings,
 };
-use crate::InputWait;
+use crate::{InputWait, ProtocolBytes};
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
@@ -23,6 +25,12 @@ pub struct SpriteFrameReplay {
     /// Runtime-created animation frames can reference a replay canvas instead of a file resource.
     #[n(5)]
     pub canvas_id: Option<i64>,
+    /// Exact immutable identity of a project resource. Canvas-backed frames have no digest.
+    #[n(6)]
+    pub content_digest: Option<ProtocolBytes>,
+    /// Exact canvas revision used by a canvas-backed frame.
+    #[n(7)]
+    pub canvas_revision: Option<u64>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -40,6 +48,12 @@ pub struct SpriteReplay {
     pub canvas_id: Option<i64>,
     #[n(5)]
     pub canvas_rectangle: Option<CanvasRect>,
+    /// Monotonic identity of the exact sprite definition referenced by a scene layer.
+    #[n(6)]
+    pub revision: u64,
+    /// Exact canvas revision used by a canvas-backed sprite.
+    #[n(7)]
+    pub canvas_revision: Option<u64>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -60,6 +74,8 @@ pub enum CanvasReplayCommand {
         destination: CanvasRect,
         #[n(2)]
         color_matrix: Option<Vec<i64>>,
+        #[n(3)]
+        resource_revision: u64,
     },
     #[n(2)]
     SetPixel {
@@ -136,14 +152,27 @@ pub enum CanvasReplayCommand {
         rotation_millidegrees: i64,
         #[n(7)]
         rotation_center: Option<CanvasPoint>,
+        #[n(8)]
+        mask_revision: Option<u64>,
     },
     #[n(11)]
     LoadEncodedImage {
         #[n(0)]
-        content_digest: Vec<u8>,
+        content_digest: ProtocolBytes,
         #[n(1)]
-        encoded: Vec<u8>,
+        encoded: ProtocolBytes,
     },
+    #[n(12)]
+    PolygonPointAdd {
+        #[n(0)]
+        point: CanvasPoint,
+    },
+    #[n(13)]
+    PolygonPointClear,
+    #[n(14)]
+    DrawPolygon,
+    #[n(15)]
+    FillPolygon,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -172,6 +201,107 @@ pub struct ResourceReplay {
     pub animation_timer_ms: i32,
 }
 
+impl ResourceReplay {
+    /// Validate every exact mutable-resource edge as an atomic identity/revision pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the replay contains duplicate exact identities, an incomplete
+    /// canvas identity/revision pair, or a reference whose exact definition is absent.
+    pub fn validate_exact_references(&self) -> Result<(), String> {
+        let mut sprites = BTreeSet::new();
+        let mut canvases = BTreeSet::new();
+        for sprite in &self.sprites {
+            let key = (sprite.name.to_ascii_uppercase(), sprite.revision);
+            if !sprites.insert(key) {
+                return Err("duplicate exact sprite identity in resource replay".into());
+            }
+            validate_optional_canvas_pair(sprite.canvas_id, sprite.canvas_revision, "sprite")?;
+            for frame in &sprite.frames {
+                validate_optional_canvas_pair(
+                    frame.canvas_id,
+                    frame.canvas_revision,
+                    "sprite frame",
+                )?;
+            }
+        }
+        for canvas in &self.canvases {
+            if !canvases.insert((canvas.canvas_id, canvas.revision)) {
+                return Err("duplicate exact canvas identity in resource replay".into());
+            }
+        }
+        for sprite in &self.sprites {
+            for edge in sprite
+                .canvas_id
+                .zip(sprite.canvas_revision)
+                .into_iter()
+                .chain(
+                    sprite
+                        .frames
+                        .iter()
+                        .filter_map(|frame| frame.canvas_id.zip(frame.canvas_revision)),
+                )
+            {
+                if !canvases.contains(&edge) {
+                    return Err(format!("missing exact canvas {}@{}", edge.0, edge.1));
+                }
+            }
+        }
+        for canvas in &self.canvases {
+            for command in &canvas.commands {
+                match command {
+                    CanvasReplayCommand::DrawSprite {
+                        name,
+                        resource_revision,
+                        ..
+                    } => {
+                        let edge = (name.to_ascii_uppercase(), *resource_revision);
+                        if !sprites.contains(&edge) {
+                            return Err(format!("missing exact sprite {}@{}", edge.0, edge.1));
+                        }
+                    }
+                    CanvasReplayCommand::DrawCanvas {
+                        source_canvas_id,
+                        source_revision,
+                        mask_canvas_id,
+                        mask_revision,
+                        ..
+                    } => {
+                        validate_optional_canvas_pair(
+                            *mask_canvas_id,
+                            *mask_revision,
+                            "canvas mask",
+                        )?;
+                        let source = (*source_canvas_id, *source_revision);
+                        if !canvases.contains(&source) {
+                            return Err(format!("missing exact canvas {}@{}", source.0, source.1));
+                        }
+                        if let Some(mask) = (*mask_canvas_id).zip(*mask_revision)
+                            && !canvases.contains(&mask)
+                        {
+                            return Err(format!("missing exact canvas {}@{}", mask.0, mask.1));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_optional_canvas_pair(
+    canvas_id: Option<i64>,
+    canvas_revision: Option<u64>,
+    owner: &str,
+) -> Result<(), String> {
+    if canvas_id.is_some() == canvas_revision.is_some() {
+        Ok(())
+    } else {
+        Err(format!("{owner} has a partial exact canvas reference"))
+    }
+}
+
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct PresentationSnapshot {
@@ -182,7 +312,7 @@ pub struct PresentationSnapshot {
     #[n(2)]
     pub history: PresentationHistory,
     #[n(3)]
-    pub backgrounds: Vec<MediaPlacement>,
+    pub scene: SceneStateV1,
     #[n(4)]
     pub audio: Vec<AudioState>,
     #[n(5)]

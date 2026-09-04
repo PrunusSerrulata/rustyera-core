@@ -13,15 +13,17 @@ mod expression;
 mod identifiers;
 mod index_resolver;
 mod input;
+mod integer;
 mod options;
 mod portability;
 mod project;
+mod reference_origin;
 mod symbols;
 
 pub use catalog::{
     ArgumentConstraint, CallablePortability, CallableSignature, ExtensionCallableKind,
     ExtensionRegistry, InstructionSignature, builtin_callable_portability, builtin_function_names,
-    builtin_instruction_names,
+    builtin_function_signatures, builtin_instruction_names,
 };
 pub use diagnostic::{
     AnalyzerDiagnostic, AnalyzerDiagnosticCode, AnalyzerDiagnosticSeverity, AnalyzerSourceLocation,

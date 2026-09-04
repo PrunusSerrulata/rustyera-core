@@ -57,6 +57,7 @@ fn generated_configuration_can_be_confirmed_before_the_next_edit() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -106,7 +107,7 @@ fn generated_configuration_can_be_confirmed_before_the_next_edit() {
             _ => None,
         })
         .expect("empty transaction confirms generated contents");
-    assert!(prepared.contents.contains("schema_version = 3"));
+    assert!(prepared.contents.contains("schema_version = 5"));
     submit(
         &mut session,
         3,
@@ -174,6 +175,7 @@ fn tui_configuration_profile_applies_defaults_and_commits_atomically() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "main.erb".into(),
@@ -197,7 +199,7 @@ fn tui_configuration_profile_applies_defaults_and_commits_atomically() {
             .iter()
             .filter(|entry| entry.applicability & CONFIG_TUI != 0)
             .count(),
-        39
+        41
     );
     for (code, expected) in [
         ("MaxLog", "1000"),
@@ -250,6 +252,7 @@ fn tui_configuration_profile_applies_defaults_and_commits_atomically() {
         &mut session,
         3,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 2,
             files: Vec::new(),
         }),
@@ -399,6 +402,7 @@ fn browser_configuration_profile_hot_applies_and_tracks_restart_values() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {
@@ -433,7 +437,7 @@ fn browser_configuration_profile_hot_applies_and_tracks_restart_values() {
             .iter()
             .filter(|entry| entry.applicability & CONFIG_BROWSER != 0)
             .count(),
-        45
+        47
     );
     assert_eq!(
         initial
@@ -701,6 +705,7 @@ fn browser_and_tauri_configuration_abort_preserves_effective_presentation() {
             &mut session,
             1,
             RuntimeMessage::ProjectManifest(ProjectManifest {
+                compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
                 project_revision: 1,
                 files: vec![SubmittedFile {
                     relative_path: "main.erb".into(),
@@ -790,6 +795,7 @@ fn html_pop_matches_the_reference_fixture_and_writes_the_string_result() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "html-pop.erb".into(),
@@ -877,6 +883,7 @@ fn run_erafl_html_entry(entry: &str) -> (RuntimeSession, Vec<RuntimeMessage>) {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![
                 SubmittedFile {

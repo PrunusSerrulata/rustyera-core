@@ -1,20 +1,38 @@
-use std::sync::Arc;
-
 use erabasic_ast::{Alignment, BinaryOp, Expr, ExprKind, FormPart, FormattedString, UnaryOp};
 use erabasic_bytecode::{BytecodeFunctionKind, BytecodeType, SymbolKey};
 use erabasic_parser::{DefaultParserContext, parse_formatted_at};
 use serde::{Deserialize, Serialize};
 
-use super::{StepError, binary_value, map_vm_error, unary_value};
+use super::{StepError, map_vm_error};
 use crate::{
     Fiber, FrameId, GenerationId, HostReady, NativeServiceRegistry, Vm, VmFaultCode, VmValue,
-    bind_persistent_arguments, make_frame, prepare_dynamic_arguments,
 };
 
+mod bit_calls;
+mod call_plan;
+mod call_text;
+mod checkpoints;
+mod existvar;
 mod frontend;
+mod host_calls;
+mod input_host;
+mod map_calls;
+mod matching;
+mod methods;
+mod mutations;
+mod native_binding;
+mod reference_arguments;
+mod source_arguments;
+mod staged_binding;
 mod support;
+mod typing;
 
+use checkpoints::FormatCheckpoint;
+pub(crate) use checkpoints::{
+    RuntimeFormCatchTarget, finish_runtime_form_catch, select_runtime_form_catch,
+};
 use frontend::parse_runtime_form;
+pub(super) use frontend::probe_runtime_expression;
 use support::{binary_tag, owner_frame, owner_frame_mut, resource_limit, unary_tag, unsupported};
 const MAX_RUNTIME_FORM_BYTES: usize = 1024 * 1024;
 const MAX_RUNTIME_FORM_NESTING: usize = 256;
@@ -28,24 +46,104 @@ pub(crate) struct RuntimeFormContinuation {
     work: Vec<RuntimeFormTask>,
     values: Vec<VmValue>,
     outputs: Vec<String>,
-    awaiting_user_result: bool,
+    awaiting_user_call: Option<methods::RuntimeUserWait>,
+    checkpoints: Vec<FormatCheckpoint>,
+    next_checkpoint: u64,
+    host_calls: Vec<host_calls::RuntimeHostCall>,
+    next_host_scope: u64,
+    next_map_call: u64,
+    next_reference_scope: u64,
+    next_bit_call: u64,
+    completion: RuntimeFormRoot,
+    reference_arguments: Option<reference_arguments::PendingReferenceArguments>,
+    reference_bindings: bool,
+    call_plans: Vec<call_plan::RuntimeCallPlan>,
+    current_call_plan: Option<u64>,
+    next_call_plan: u64,
     remaining_nodes: usize,
     remaining_source_bytes: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 enum RuntimeFormTask {
+    GateInputHost {
+        plan: u64,
+        key: Expr,
+        triggered: bool,
+    },
+    FinishInputHost {
+        name: String,
+        count: usize,
+    },
+    ReadInputHost {
+        depth: usize,
+        gate: Option<(Expr, bool)>,
+    },
+    BitCapture {
+        spec: erabasic_bytecode::BitCallSpec,
+        site: call_plan::RuntimeCallSite,
+        source: Vec<Option<Expr>>,
+    },
+    BitFinish(bit_calls::FormBitCall),
     StartForm(FormattedString),
     RenderForm(FormattedString),
     RenderPart(FormPart),
     FinishFormValue,
     CompleteRoot,
+    BeginCheckedForm(String),
+    FinishCheck(u64),
+    FinishExpressionProbe(u64),
+    FinishCallTextArgumentCatch(u64),
+    ExistVarFirst {
+        plan: u64,
+        source: Expr,
+        mode: Option<Expr>,
+    },
+    ExistVarMode {
+        plan: u64,
+        source: Expr,
+    },
+    ParseCallText {
+        source: String,
+        spec: erabasic_bytecode::CallTextSpec,
+    },
+    MapCapture {
+        bound: erabasic_bytecode::BoundRuntimeNative,
+        site: call_plan::RuntimeCallSite,
+        arguments: Vec<Option<Expr>>,
+    },
+    MapValuesEnabled {
+        call: map_calls::MapWorkCall,
+        output: Option<Expr>,
+    },
+    MapFinish(map_calls::MapWorkCall),
+    ReferenceArgumentsPump,
+    RestoreReferenceBindings(bool),
+    RestoreCallPlan(Option<u64>),
+    ReleaseReferenceArguments,
+    FinishCallTextArguments {
+        target: SymbolKey,
+        spec: erabasic_bytecode::CallTextSpec,
+    },
+    CaptureReferencePlace {
+        key: SymbolKey,
+        indices: usize,
+    },
     Evaluate(Expr),
+    MatchBegin(matching::FormMatch),
+    MatchEnd(matching::FormMatch),
+    MatchNeedle(matching::FormMatch),
+    MatchScan(matching::FormMatch),
     ReadVariable {
         name: String,
         indices: usize,
     },
     ApplyUnary(UnaryOp),
+    MutateVariable {
+        variable: SymbolKey,
+        indices: usize,
+        mode: u8,
+    },
     EvaluateBinaryRight {
         op: BinaryOp,
         right: Expr,
@@ -55,6 +153,12 @@ enum RuntimeFormTask {
         then_expr: Expr,
         else_expr: Expr,
     },
+    FinishNative {
+        site: call_plan::RuntimeCallSite,
+        bound: erabasic_bytecode::BoundRuntimeNative,
+        source: Vec<Option<Expr>>,
+    },
+    HostAdvance(u64),
     FinishCall {
         name: String,
         arguments: usize,
@@ -69,11 +173,31 @@ enum RuntimeFormTask {
         else_value: Option<FormattedString>,
     },
     PushOmitted,
+    ResolveMethod {
+        plan: u64,
+        result: erabasic_bytecode::MethodResult,
+        fallback: Option<Expr>,
+        arguments: Vec<Option<Expr>>,
+    },
+    MethodArgument(methods::RuntimeUserCall),
+    CaptureMethodArgument(methods::RuntimeUserCall),
+    ExistsMethod,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+enum RuntimeFormRoot {
+    Value(BytecodeType),
+    Call {
+        spec: erabasic_bytecode::CallTextSpec,
+        failed: bool,
+    },
 }
 
 pub(super) enum RuntimeFormStep {
     Pending,
-    Complete(String),
+    Blocked,
+    Complete(VmValue),
+    CompleteCall,
 }
 
 pub(crate) fn requires_runtime_form_context(source: &str) -> bool {
@@ -105,8 +229,10 @@ pub(super) fn begin_runtime_form(
         ));
     }
     let node_limit = vm.config.maximum_operand_stack.max(1);
-    let (formatted, nodes) =
+    let (formatted, mut plan) =
         parse_runtime_form(vm, natives, generation, function, source, node_limit)?;
+    let nodes = plan.nodes;
+    plan.id = 1;
     let continuation = RuntimeFormContinuation {
         generation,
         function,
@@ -118,7 +244,20 @@ pub(super) fn begin_runtime_form(
         ],
         values: Vec::new(),
         outputs: Vec::new(),
-        awaiting_user_result: false,
+        awaiting_user_call: None,
+        checkpoints: Vec::new(),
+        next_checkpoint: 1,
+        host_calls: Vec::new(),
+        next_host_scope: 1,
+        next_map_call: 1,
+        next_reference_scope: 1,
+        next_bit_call: 1,
+        completion: RuntimeFormRoot::Value(BytecodeType::String),
+        reference_arguments: None,
+        reference_bindings: false,
+        call_plans: vec![plan],
+        current_call_plan: Some(1),
+        next_call_plan: 2,
         remaining_nodes: node_limit.saturating_sub(nodes),
         remaining_source_bytes: MAX_RUNTIME_FORM_BYTES.saturating_sub(source.len()),
     };
@@ -135,10 +274,114 @@ pub(super) fn begin_runtime_form(
     Ok(())
 }
 
+/// The caller evaluates and type-checks the outer String before entering this API.
+pub(super) fn begin_runtime_form_check(
+    vm: &Vm,
+    fiber: &mut Fiber,
+    generation: GenerationId,
+    function: SymbolKey,
+    instruction: usize,
+    source: String,
+) -> Result<(), StepError> {
+    begin_work(
+        vm,
+        fiber,
+        generation,
+        function,
+        instruction,
+        RuntimeFormRoot::Value(BytecodeType::Integer),
+        RuntimeFormTask::BeginCheckedForm(source),
+    )
+}
+
+pub(super) fn begin_runtime_call_text(
+    vm: &Vm,
+    fiber: &mut Fiber,
+    generation: GenerationId,
+    function: SymbolKey,
+    instruction: usize,
+    source: String,
+    spec: erabasic_bytecode::CallTextSpec,
+) -> Result<(), StepError> {
+    let program = vm.generations.get(&generation).ok_or_else(|| {
+        StepError::new(VmFaultCode::MissingSymbol, "CALLSTR generation is missing")
+    })?;
+    if !program.artifact.manifest.compatibility.supports_call_text() {
+        return Err(support::permission_denied(
+            "CALLSTR is unavailable in this compatibility identity",
+        ));
+    }
+    begin_work(
+        vm,
+        fiber,
+        generation,
+        function,
+        instruction,
+        RuntimeFormRoot::Call {
+            spec,
+            failed: false,
+        },
+        RuntimeFormTask::ParseCallText { source, spec },
+    )
+}
+
+fn begin_work(
+    vm: &Vm,
+    fiber: &mut Fiber,
+    generation: GenerationId,
+    function: SymbolKey,
+    instruction: usize,
+    completion: RuntimeFormRoot,
+    task: RuntimeFormTask,
+) -> Result<(), StepError> {
+    let owner = fiber.frames.last_mut().ok_or_else(|| {
+        StepError::new(
+            VmFaultCode::InvalidInstruction,
+            "runtime-form caller frame is missing",
+        )
+    })?;
+    if owner.runtime_form.is_some() || owner.generation != generation || owner.function != function
+    {
+        return Err(StepError::new(
+            VmFaultCode::InvalidInstruction,
+            "runtime-form caller identity or continuation differs",
+        ));
+    }
+    owner.runtime_form = Some(RuntimeFormContinuation {
+        generation,
+        function,
+        frame: owner.id,
+        instruction,
+        work: vec![RuntimeFormTask::CompleteRoot, task],
+        values: Vec::new(),
+        outputs: Vec::new(),
+        awaiting_user_call: None,
+        checkpoints: Vec::new(),
+        next_checkpoint: 1,
+        host_calls: Vec::new(),
+        next_host_scope: 1,
+        next_map_call: 1,
+        next_reference_scope: 1,
+        next_bit_call: 1,
+        completion,
+        reference_arguments: None,
+        reference_bindings: false,
+        call_plans: Vec::new(),
+        current_call_plan: None,
+        next_call_plan: 1,
+        remaining_nodes: vm.config.maximum_operand_stack.max(1),
+        remaining_source_bytes: MAX_RUNTIME_FORM_BYTES,
+    });
+    Ok(())
+}
+
 pub(super) fn resume_runtime_form(
     vm: &mut Vm,
     fiber: &mut Fiber,
     natives: &mut NativeServiceRegistry,
+    position: &super::InstructionPosition<'_>,
+    host: &mut impl crate::VmHost,
+    host_count: &mut u32,
 ) -> Result<RuntimeFormStep, StepError> {
     let owner = fiber.frames.last().ok_or_else(|| {
         StepError::new(
@@ -159,10 +402,11 @@ pub(super) fn resume_runtime_form(
             )
         })?;
 
-    let result = continuation.step(vm, fiber, natives);
+    let result = continuation.step(vm, fiber, natives, position, host, host_count);
     match result {
         Ok(RuntimeFormStep::Complete(value)) => Ok(RuntimeFormStep::Complete(value)),
-        Ok(RuntimeFormStep::Pending) => {
+        Ok(RuntimeFormStep::CompleteCall) => Ok(RuntimeFormStep::CompleteCall),
+        Ok(step @ (RuntimeFormStep::Pending | RuntimeFormStep::Blocked)) => {
             let frame = fiber
                 .frames
                 .iter_mut()
@@ -179,15 +423,47 @@ pub(super) fn resume_runtime_form(
                     "STRFORM owner acquired a second continuation",
                 ));
             }
-            Ok(RuntimeFormStep::Pending)
+            Ok(step)
         }
-        Err(error) => Err(error),
+        Err(error) => {
+            let frame = fiber
+                .frames
+                .iter_mut()
+                .find(|frame| frame.id == continuation.frame)
+                .ok_or_else(|| {
+                    StepError::new(
+                        VmFaultCode::InvalidInstruction,
+                        "STRFORM error owner disappeared",
+                    )
+                })?;
+            if frame.runtime_form.replace(continuation).is_some() {
+                return Err(StepError::new(
+                    VmFaultCode::InvalidInstruction,
+                    "STRFORM error owner already has a continuation",
+                ));
+            }
+            Err(error)
+        }
     }
 }
 
 impl RuntimeFormContinuation {
     pub(crate) const fn origin(&self) -> (GenerationId, SymbolKey, usize) {
         (self.generation, self.function, self.instruction)
+    }
+
+    pub(crate) fn call_text_spec(&self) -> Option<erabasic_bytecode::CallTextSpec> {
+        match self.completion {
+            RuntimeFormRoot::Call { spec, .. } => Some(spec),
+            RuntimeFormRoot::Value(_) => None,
+        }
+    }
+
+    pub(crate) fn root_result_type(&self) -> Option<BytecodeType> {
+        match self.completion {
+            RuntimeFormRoot::Value(value_type) => Some(value_type),
+            RuntimeFormRoot::Call { .. } => None,
+        }
     }
 
     pub(crate) fn valid_for_frame(
@@ -205,6 +481,17 @@ impl RuntimeFormContinuation {
             && self.outputs.len() <= MAX_RUNTIME_FORM_NESTING
             && self.remaining_nodes <= maximum_stack
             && self.remaining_source_bytes <= MAX_RUNTIME_FORM_BYTES
+            && self.host_scopes_valid()
+            && self.checkpoints_valid()
+            && self.host_resources().is_some_and(|(slots, bytes)| {
+                slots <= maximum_stack && bytes <= MAX_RUNTIME_FORM_BYTES
+            })
+            && self.reference_arguments_valid()
+            && self
+                .reference_argument_resources()
+                .is_some_and(|(slots, bytes)| {
+                    slots <= maximum_stack && bytes <= MAX_RUNTIME_FORM_BYTES
+                })
     }
 
     // Keeping the continuation transition table together makes every resumable state auditable.
@@ -214,17 +501,12 @@ impl RuntimeFormContinuation {
         vm: &mut Vm,
         fiber: &mut Fiber,
         natives: &mut NativeServiceRegistry,
+        position: &super::InstructionPosition<'_>,
+        host: &mut impl crate::VmHost,
+        host_count: &mut u32,
     ) -> Result<RuntimeFormStep, StepError> {
-        if self.awaiting_user_result {
-            let owner = owner_frame_mut(fiber, self.frame)?;
-            let value = owner.stack.pop().ok_or_else(|| {
-                StepError::new(
-                    VmFaultCode::InvalidInstruction,
-                    "STRFORM user function result is missing",
-                )
-            })?;
-            self.values.push(value);
-            self.awaiting_user_result = false;
+        if self.awaiting_user_call.is_some() {
+            self.finish_user_wait(vm, fiber)?;
             self.check_resources(vm)?;
             return Ok(RuntimeFormStep::Pending);
         }
@@ -236,6 +518,66 @@ impl RuntimeFormContinuation {
             )
         })?;
         match task {
+            RuntimeFormTask::GateInputHost { key, triggered, .. } => {
+                self.call_input_host(
+                    vm,
+                    fiber,
+                    host,
+                    host_count,
+                    input_host::InputHostInvocation {
+                        name: "__GETKEY_ACTIVE",
+                        arguments: Vec::new(),
+                        gate: Some((key, triggered)),
+                    },
+                )?;
+                if matches!(fiber.state, crate::FiberState::WaitingHost(_)) {
+                    return Ok(RuntimeFormStep::Blocked);
+                }
+            }
+            RuntimeFormTask::FinishInputHost { name, count } => {
+                let arguments = self.take_values(count)?;
+                self.call_input_host(
+                    vm,
+                    fiber,
+                    host,
+                    host_count,
+                    input_host::InputHostInvocation {
+                        name: &name,
+                        arguments,
+                        gate: None,
+                    },
+                )?;
+                if matches!(fiber.state, crate::FiberState::WaitingHost(_)) {
+                    return Ok(RuntimeFormStep::Blocked);
+                }
+            }
+            RuntimeFormTask::ReadInputHost { depth, gate } => {
+                self.read_input_host(fiber, depth, gate)?;
+            }
+            RuntimeFormTask::HostAdvance(id) => {
+                return self.advance_host_call(vm, fiber, id, position, host, host_count);
+            }
+            RuntimeFormTask::BitCapture { spec, site, source } => {
+                self.capture_bit(vm, fiber, spec, site, source)?;
+            }
+            RuntimeFormTask::BitFinish(call) => self.finish_bit(vm, fiber, call)?,
+            RuntimeFormTask::ReferenceArgumentsPump => self.advance_reference_arguments(vm)?,
+            RuntimeFormTask::RestoreCallPlan(previous) => {
+                self.restore_call_plan(previous)?;
+            }
+            RuntimeFormTask::RestoreReferenceBindings(previous) => {
+                self.reference_bindings = previous;
+            }
+            RuntimeFormTask::ReleaseReferenceArguments => {
+                self.reference_bindings = false;
+                self.reference_arguments = None;
+            }
+            RuntimeFormTask::FinishCallTextArguments { target, spec } => {
+                self.finish_call_text_arguments(vm, fiber, target, spec)?;
+            }
+            RuntimeFormTask::CaptureReferencePlace { key, indices } => {
+                self.capture_reference_place(vm, fiber, key, indices)?;
+            }
             RuntimeFormTask::StartForm(formatted) => {
                 if self.outputs.len() >= MAX_RUNTIME_FORM_NESTING {
                     return Err(resource_limit("STRFORM nesting limit exceeded"));
@@ -264,31 +606,93 @@ impl RuntimeFormContinuation {
                 self.values.push(VmValue::String(value));
             }
             RuntimeFormTask::CompleteRoot => {
-                if !self.outputs.is_empty() || self.values.len() != 1 {
+                if !self.host_calls.is_empty()
+                    || !self.outputs.is_empty()
+                    || !self.checkpoints.is_empty()
+                    || !self.work.is_empty()
+                {
                     return Err(StepError::new(
                         VmFaultCode::InvalidInstruction,
-                        "STRFORM root produced an invalid value stack",
+                        "runtime form root has unfinished temporary state",
                     ));
                 }
-                let Some(VmValue::String(value)) = self.values.pop() else {
-                    return Err(StepError::new(
-                        VmFaultCode::TypeMismatch,
-                        "STRFORM root did not produce a string",
-                    ));
-                };
-                return Ok(RuntimeFormStep::Complete(value));
+                match self.completion {
+                    RuntimeFormRoot::Value(expected) => {
+                        if self.values.len() != 1 || self.values[0].value_type() != expected {
+                            return Err(StepError::new(
+                                VmFaultCode::InvalidInstruction,
+                                "runtime form root result type or count differs",
+                            ));
+                        }
+                        return Ok(RuntimeFormStep::Complete(
+                            self.values.pop().expect("one value checked"),
+                        ));
+                    }
+                    RuntimeFormRoot::Call { spec, failed } => {
+                        if !self.values.is_empty() {
+                            return Err(StepError::new(
+                                VmFaultCode::InvalidInstruction,
+                                "call text root has an unexpected value",
+                            ));
+                        }
+                        if failed && spec.mode.has_catch() {
+                            owner_frame_mut(fiber, self.frame)?.instruction =
+                                spec.catch_target as usize;
+                        }
+                        return Ok(RuntimeFormStep::CompleteCall);
+                    }
+                }
             }
+            RuntimeFormTask::BeginCheckedForm(source) => {
+                self.begin_checked_form(vm, fiber, natives, &source)?;
+            }
+            RuntimeFormTask::FinishCheck(id) => self.finish_checked_form(id)?,
+            RuntimeFormTask::ParseCallText { source, spec } => {
+                self.parse_call_text(vm, fiber, natives, &source, spec)?;
+            }
+            RuntimeFormTask::ExistVarFirst { plan, source, mode } => {
+                self.existvar_first(vm, plan, source, mode)?;
+            }
+            RuntimeFormTask::ExistVarMode { source, .. } => {
+                self.existvar_mode(vm, fiber, source)?;
+            }
+            RuntimeFormTask::MapCapture {
+                bound,
+                site,
+                arguments,
+            } => self.capture_map(vm, fiber, natives, bound, site, arguments)?,
+            RuntimeFormTask::MapValuesEnabled { call, output } => {
+                self.map_values_enabled(vm, fiber, natives, call, output)?;
+            }
+            RuntimeFormTask::MapFinish(call) => self.finish_map(vm, fiber, natives, call)?,
+            RuntimeFormTask::FinishExpressionProbe(id) => self.finish_expression_probe(vm, id)?,
+            RuntimeFormTask::FinishCallTextArgumentCatch(_) => {
+                return Err(StepError::new(
+                    VmFaultCode::InvalidInstruction,
+                    "CALLSTR argument checkpoint escaped its user-call state",
+                ));
+            }
+            RuntimeFormTask::MatchBegin(call) => self.match_begin(vm, fiber, call)?,
+            RuntimeFormTask::MatchEnd(call) => self.match_end(call)?,
+            RuntimeFormTask::MatchNeedle(call) => self.match_needle(call)?,
+            RuntimeFormTask::MatchScan(call) => self.match_scan(vm, fiber, call)?,
             RuntimeFormTask::Evaluate(expression) => {
-                self.evaluate_expression(expression)?;
+                self.evaluate_expression(vm, fiber, expression)?;
             }
             RuntimeFormTask::ReadVariable { name, indices } => {
                 let indices = self.take_indices(indices)?;
                 self.values
                     .push(self.read_variable(vm, fiber, &name, &indices)?);
             }
+            RuntimeFormTask::MutateVariable {
+                variable,
+                indices,
+                mode,
+            } => self.mutate_variable(vm, fiber, variable, indices, mode)?,
             RuntimeFormTask::ApplyUnary(op) => {
                 let value = self.pop_value("STRFORM unary operand is missing")?;
-                self.values.push(unary_value(unary_tag(op), value)?);
+                self.values
+                    .push(vm.unary_value(self.generation, unary_tag(op), value)?);
             }
             RuntimeFormTask::EvaluateBinaryRight { op, right } => {
                 let left = self.pop_value("STRFORM binary left operand is missing")?;
@@ -328,7 +732,8 @@ impl RuntimeFormContinuation {
             RuntimeFormTask::ApplyBinary(op) => {
                 let right = self.pop_value("STRFORM binary right operand is missing")?;
                 let left = self.pop_value("STRFORM binary left operand is missing")?;
-                self.values.push(binary_value(binary_tag(op), left, right)?);
+                self.values
+                    .push(vm.binary_value(self.generation, binary_tag(op), left, right)?);
             }
             RuntimeFormTask::ChooseTernary {
                 then_expr,
@@ -341,9 +746,13 @@ impl RuntimeFormContinuation {
                     else_expr
                 }));
             }
+            RuntimeFormTask::FinishNative { bound, source, .. } => {
+                let arguments = self.take_values(source.len())?;
+                self.finish_native(vm, fiber, natives, bound, arguments)?;
+            }
             RuntimeFormTask::FinishCall { name, arguments } => {
                 let arguments = self.take_values(arguments)?;
-                self.finish_call(vm, fiber, natives, &name, arguments)?;
+                self.finish_call(vm, fiber, natives, &name, &arguments)?;
             }
             RuntimeFormTask::FinishInterpolation {
                 string,
@@ -358,13 +767,15 @@ impl RuntimeFormContinuation {
                     (true, VmValue::String(value)) => value,
                     (false, VmValue::Integer(value)) => value.to_string(),
                     (true, _) => {
-                        return Err(StepError::new(
+                        return Err(StepError::script(
+                            crate::ScriptFaultKind::Argument,
                             VmFaultCode::TypeMismatch,
                             "STRFORM string interpolation expects a string",
                         ));
                     }
                     (false, _) => {
-                        return Err(StepError::new(
+                        return Err(StepError::script(
+                            crate::ScriptFaultKind::Argument,
                             VmFaultCode::TypeMismatch,
                             "STRFORM integer interpolation expects an integer",
                         ));
@@ -379,8 +790,7 @@ impl RuntimeFormContinuation {
                     width_value.as_ref(),
                     alignment_value.as_ref(),
                     natives.character_width_mode(),
-                )
-                .map_err(|message| StepError::new(VmFaultCode::Native, message))?;
+                )?;
                 self.append_output(&value)?;
             }
             RuntimeFormTask::ChooseConditional {
@@ -395,6 +805,91 @@ impl RuntimeFormContinuation {
                 }
             }
             RuntimeFormTask::PushOmitted => self.values.push(VmValue::Integer(i64::MIN)),
+            RuntimeFormTask::ResolveMethod {
+                plan,
+                result,
+                fallback,
+                arguments,
+            } => {
+                self.resolve_method(vm, plan, result, fallback, arguments)?;
+            }
+            RuntimeFormTask::MethodArgument(call) => {
+                self.advance_method_arguments(vm, fiber, call)?;
+            }
+            RuntimeFormTask::CaptureMethodArgument(mut call) => {
+                self.validate_method_call(vm, fiber, &call, true)?;
+                let mut actual = self.pop_value("STRFORM method argument is missing")?;
+                let slot = call.next_slot;
+                if matches!(
+                    call.call.bindings.get(slot),
+                    Some(crate::state::user_calls::UserArgumentBinding::ArrayReference)
+                ) {
+                    let erabasic_bytecode::UserArgumentSpec::Variable(variable) = call.specs[slot]
+                    else {
+                        return Err(StepError::new(
+                            VmFaultCode::InvalidInstruction,
+                            "REF selector has no source",
+                        ));
+                    };
+                    let VmValue::Integer(character) = actual else {
+                        return Err(StepError::new(
+                            VmFaultCode::InvalidInstruction,
+                            "REF selector is not integer",
+                        ));
+                    };
+                    let character = u64::try_from(character).map_err(|_| {
+                        StepError::script(
+                            crate::ScriptFaultKind::Bounds,
+                            VmFaultCode::Bounds,
+                            "character selector is out of range",
+                        )
+                    })?;
+                    actual = vm
+                        .user_call_variable_place(fiber, self.generation, self.frame, variable)
+                        .map_err(map_vm_error)?;
+                    let (VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) = &mut actual
+                    else {
+                        unreachable!("variable helper returns place");
+                    };
+                    place.character = Some(character);
+                }
+                call.captured[slot] = Some(
+                    vm.capture_user_argument(
+                        fiber,
+                        self.frame,
+                        &call.call,
+                        &call.specs,
+                        slot,
+                        actual,
+                        crate::state::array_leases::ArrayLeaseOrigin::UserForm {
+                            instruction: self.instruction,
+                            call: call.reference_scope,
+                            slot,
+                        },
+                    )
+                    .map_err(map_vm_error)?,
+                );
+                call.next_slot += 1;
+                self.work.push(RuntimeFormTask::MethodArgument(call));
+            }
+            RuntimeFormTask::ExistsMethod => {
+                let VmValue::String(name) = self.pop_value("EXISTMETH name is missing")? else {
+                    return Err(StepError::new(
+                        VmFaultCode::TypeMismatch,
+                        "EXISTMETH expects a string",
+                    ));
+                };
+                let program = vm.generations.get(&self.generation).ok_or_else(|| {
+                    StepError::new(VmFaultCode::MissingSymbol, "STRFORM generation is missing")
+                })?;
+                self.values
+                    .push(VmValue::Integer(crate::state::user_calls::exists_method(
+                        program,
+                        self.generation,
+                        &name,
+                    )));
+                vm.invalidate_path_memo(fiber.id);
+            }
         }
         self.check_resources(vm)?;
         Ok(RuntimeFormStep::Pending)
@@ -471,7 +966,11 @@ impl RuntimeFormContinuation {
                     ));
                 };
                 let index = u64::try_from(index).map_err(|_| {
-                    StepError::new(VmFaultCode::Bounds, "STRFORM triple index is negative")
+                    StepError::script(
+                        crate::ScriptFaultKind::Bounds,
+                        VmFaultCode::Bounds,
+                        "STRFORM triple index is negative",
+                    )
                 })?;
                 let value = self.read_variable(vm, fiber, value, &[index])?;
                 let VmValue::String(value) = value else {
@@ -486,7 +985,12 @@ impl RuntimeFormContinuation {
         Ok(())
     }
 
-    fn evaluate_expression(&mut self, expression: Expr) -> Result<(), StepError> {
+    fn evaluate_expression(
+        &mut self,
+        vm: &Vm,
+        fiber: &Fiber,
+        expression: Expr,
+    ) -> Result<(), StepError> {
         match expression.kind {
             ExprKind::Integer(value) => self.values.push(VmValue::Integer(value)),
             ExprKind::String(value) => self.values.push(VmValue::String(value)),
@@ -506,13 +1010,22 @@ impl RuntimeFormContinuation {
             ExprKind::Group(inner) => self.work.push(RuntimeFormTask::Evaluate(*inner)),
             ExprKind::Unary { op, operand } => {
                 if matches!(op, UnaryOp::PreIncrement | UnaryOp::PreDecrement) {
-                    return Err(unsupported("STRFORM increment expressions are unsupported"));
+                    self.schedule_integer_mutation(
+                        vm,
+                        &operand,
+                        u8::from(op == UnaryOp::PreDecrement),
+                    )?;
+                    return Ok(());
                 }
                 self.work.push(RuntimeFormTask::ApplyUnary(op));
                 self.work.push(RuntimeFormTask::Evaluate(*operand));
             }
-            ExprKind::Postfix { .. } => {
-                return Err(unsupported("STRFORM increment expressions are unsupported"));
+            ExprKind::Postfix { op, operand } => {
+                let mode = match op {
+                    erabasic_ast::PostfixOp::Increment => 2,
+                    erabasic_ast::PostfixOp::Decrement => 3,
+                };
+                self.schedule_integer_mutation(vm, &operand, mode)?;
             }
             ExprKind::Binary { op, left, right } => {
                 self.work
@@ -531,6 +1044,36 @@ impl RuntimeFormContinuation {
                 self.work.push(RuntimeFormTask::Evaluate(*condition));
             }
             ExprKind::Call { name, args } => {
+                let user_defined = vm
+                    .generations
+                    .get(&self.generation)
+                    .is_some_and(|program| program.function_by_name(&name).is_some());
+                if user_defined {
+                    self.schedule_direct_user_call(vm, &name, args)?;
+                    return Ok(());
+                }
+                if self.schedule_input_host(vm, &name, &args)? {
+                    return Ok(());
+                }
+                if name.eq_ignore_ascii_case("EXISTVAR") {
+                    self.schedule_existvar(&args)?;
+                    return Ok(());
+                }
+                if name.eq_ignore_ascii_case("EXISTMETH") {
+                    let program = vm.generations.get(&self.generation).ok_or_else(|| {
+                        StepError::new(VmFaultCode::MissingSymbol, "EXISTMETH generation missing")
+                    })?;
+                    native_binding::authorization(program, &name)?;
+                }
+                if self.schedule_method(&name, &args)? {
+                    return Ok(());
+                }
+                if !name.eq_ignore_ascii_case("STRFORM")
+                    && !name.eq_ignore_ascii_case("STRFORMCHECK")
+                {
+                    self.schedule_planned_call(vm, fiber, expression.span, &args)?;
+                    return Ok(());
+                }
                 let count = args.len();
                 self.work.push(RuntimeFormTask::FinishCall {
                     name,
@@ -550,6 +1093,38 @@ impl RuntimeFormContinuation {
         Ok(())
     }
 
+    fn schedule_form_source(
+        &mut self,
+        vm: &Vm,
+        natives: &NativeServiceRegistry,
+        source: &str,
+    ) -> Result<(), StepError> {
+        if source.len() > self.remaining_source_bytes {
+            return Err(resource_limit(
+                "nested form sources exceed the parser limit",
+            ));
+        }
+        self.remaining_source_bytes -= source.len();
+        let (formatted, plan) = parse_runtime_form(
+            vm,
+            natives,
+            self.generation,
+            self.function,
+            source,
+            self.remaining_nodes,
+        )?;
+        self.remaining_nodes = self.remaining_nodes.saturating_sub(plan.nodes);
+        let previous = self.current_call_plan;
+        self.install_call_plan(plan)?;
+        self.work.push(RuntimeFormTask::RestoreCallPlan(previous));
+        self.work.push(RuntimeFormTask::RestoreReferenceBindings(
+            self.reference_bindings,
+        ));
+        self.reference_bindings = false;
+        self.work.push(RuntimeFormTask::StartForm(formatted));
+        Ok(())
+    }
+
     // Native and user-call completion share one exactly-once transition boundary.
     #[allow(clippy::too_many_lines)]
     fn finish_call(
@@ -558,127 +1133,111 @@ impl RuntimeFormContinuation {
         fiber: &mut Fiber,
         natives: &mut NativeServiceRegistry,
         name: &str,
-        arguments: Vec<VmValue>,
+        arguments: &[VmValue],
     ) -> Result<(), StepError> {
-        let generation = Arc::clone(vm.generations.get(&self.generation).ok_or_else(|| {
-            StepError::new(VmFaultCode::MissingSymbol, "STRFORM generation is missing")
-        })?);
-        if let Some(target) = generation.function_by_name(name).cloned() {
-            if target.kind != BytecodeFunctionKind::Method || target.result.is_none() {
-                return Err(StepError::new(
-                    VmFaultCode::TypeMismatch,
-                    format!("STRFORM target {name} is not a value-returning function"),
-                ));
-            }
-            if target
-                .parameters
-                .iter()
-                .any(|parameter| parameter.by_reference)
-            {
-                return Err(unsupported(format!(
-                    "STRFORM target {name} requires a reference argument"
-                )));
-            }
-            if fiber.frames.len() >= vm.config.maximum_call_depth {
-                return Err(resource_limit(
-                    "maximum call depth exceeded during STRFORM expansion",
-                ));
-            }
-            let arguments = prepare_dynamic_arguments(
-                &target,
-                arguments,
-                generation.artifact.call_compatibility,
-            )
-            .map_err(map_vm_error)?;
-            vm.memory.ensure_function_statics(
-                self.generation,
-                target.key,
-                generation.function_statics(target.key),
-            );
-            bind_persistent_arguments(
-                &mut vm.memory,
-                self.generation,
-                &target,
-                &generation,
-                &arguments,
-            )
-            .map_err(map_vm_error)?;
-            let event_context = owner_frame(fiber, self.frame)?.event_context;
-            let frame_id = vm.allocate_frame_id();
-            fiber.frames.push(make_frame(
-                frame_id,
-                self.generation,
-                &target,
-                generation.function_locals(target.key),
-                arguments,
-                true,
-                event_context,
+        let generation =
+            std::sync::Arc::clone(vm.generations.get(&self.generation).ok_or_else(|| {
+                StepError::new(VmFaultCode::MissingSymbol, "STRFORM generation is missing")
+            })?);
+        if generation.function_by_name(name).is_some() {
+            return Err(StepError::new(
+                VmFaultCode::InvalidInstruction,
+                "user call bypassed lazy runtime-form resolver",
             ));
-            self.awaiting_user_result = true;
+        }
+        if let Some(value) =
+            super::character_ops::query_character_name(&generation.artifact, name, arguments)
+                .map_err(super::map_vm_error)?
+        {
+            self.values.push(value);
             return Ok(());
         }
-
-        if name.eq_ignore_ascii_case("STRFORM") {
-            let [VmValue::String(source)] = arguments.as_slice() else {
+        if name.eq_ignore_ascii_case("STRFORM") || name.eq_ignore_ascii_case("STRFORMCHECK") {
+            let family = native_binding::authorization(&generation, name)?;
+            native_binding::require_provider(natives, family)?;
+            let [VmValue::String(source)] = arguments else {
                 return Err(StepError::new(
                     VmFaultCode::TypeMismatch,
-                    "STRFORM expects one string argument",
+                    "formatted-string function expects one string argument",
                 ));
             };
-            if source.len() > self.remaining_source_bytes {
-                return Err(resource_limit(
-                    "nested STRFORM sources exceed the runtime parser limit",
-                ));
+            if name.eq_ignore_ascii_case("STRFORMCHECK") {
+                self.begin_checked_form(vm, fiber, natives, source)?;
+            } else {
+                self.schedule_form_source(vm, natives, source)?;
             }
-            let (formatted, nodes) = parse_runtime_form(
-                vm,
-                natives,
-                self.generation,
-                self.function,
-                source,
-                self.remaining_nodes,
-            )?;
-            self.remaining_nodes = self.remaining_nodes.saturating_sub(nodes);
-            self.remaining_source_bytes = self.remaining_source_bytes.saturating_sub(source.len());
-            self.work.push(RuntimeFormTask::StartForm(formatted));
             return Ok(());
         }
 
-        let native = generation
-            .artifact
-            .native_imports
-            .iter()
-            .map(|native| &native.import)
-            .find(|native| {
-                native.name.eq_ignore_ascii_case(name)
-                    && native.result.is_some()
-                    && native.parameters.len() == arguments.len()
-                    && native
-                        .parameters
-                        .iter()
-                        .zip(&arguments)
-                        .all(|(expected, value)| *expected == value.value_type())
-                    && natives.contains(native.key)
-            })
-            .cloned()
-            .ok_or_else(|| {
-                StepError::new(
-                    VmFaultCode::MissingSymbol,
-                    format!("STRFORM callable {name} has no compatible runtime import"),
-                )
-            })?;
-        if matches!(
-            native.result,
-            Some(BytecodeType::IntegerPlace | BytecodeType::StringPlace)
-        ) {
-            return Err(unsupported(format!(
-                "STRFORM callable {name} returns a reference"
-            )));
+        Err(StepError::new(
+            VmFaultCode::InvalidInstruction,
+            "Native call bypassed source authorization binding",
+        ))
+    }
+
+    fn finish_native(
+        &mut self,
+        vm: &mut Vm,
+        fiber: &mut Fiber,
+        natives: &mut NativeServiceRegistry,
+        bound: erabasic_bytecode::BoundRuntimeNative,
+        arguments: Vec<VmValue>,
+    ) -> Result<(), StepError> {
+        let generation =
+            std::sync::Arc::clone(vm.generations.get(&self.generation).ok_or_else(|| {
+                StepError::new(VmFaultCode::MissingSymbol, "Native generation missing")
+            })?);
+        let family = native_binding::authorization(&generation, &bound.import.name)?;
+        if family.bind_physical(
+            bound.import.parameters.clone(),
+            bound.omitted_arguments.clone(),
+        ) != bound
+            || bound.import.parameters.len() != arguments.len()
+            || bound
+                .import
+                .parameters
+                .iter()
+                .zip(&arguments)
+                .any(|(expected, value)| *expected != value.value_type())
+        {
+            return Err(StepError::new(
+                VmFaultCode::InvalidInstruction,
+                "Native operands differ from bound source signature",
+            ));
         }
+        native_binding::require_provider(natives, family)?;
+        let service_key = bound.service_key;
+        if bound.import.name == "replace" && bound.omitted_arguments.contains(&3) {
+            return Err(StepError::script(
+                crate::ScriptFaultKind::Operation,
+                VmFaultCode::Native,
+                "REPLACE omitted mode is read by the reference method",
+            ));
+        }
+        let omitted_arguments = bound.omitted_arguments;
+        let native = bound.import;
         let expected = native.result;
         let owner_stack = owner_frame(fiber, self.frame)?.stack.len();
-        let (ready, rollback) =
-            vm.call_registered_native(fiber, native.key, native.clone(), arguments, natives)?;
+        let (ready, rollback) = if let Some(ready) = vm
+            .execute_special_native(
+                fiber,
+                &native.name.to_ascii_lowercase(),
+                &arguments,
+                &omitted_arguments,
+            )
+            .map_err(map_vm_error)?
+        {
+            (ready, None)
+        } else {
+            vm.call_registered_native_with_omissions(
+                fiber,
+                service_key,
+                native.clone(),
+                arguments,
+                omitted_arguments,
+                natives,
+            )?
+        };
         let commit = super::validate_native_ready(vm, fiber, expected, &ready).and_then(|()| {
             vm.apply_host_ready(
                 fiber,
@@ -690,10 +1249,23 @@ impl RuntimeFormContinuation {
             )
         });
         if let Err(error) = commit {
-            if let Some(checkpoint) = rollback {
-                let _ = natives.rollback(native.key, &checkpoint);
+            if let Some(checkpoint) = rollback
+                && let Err(rollback) = natives.rollback(service_key, &checkpoint)
+            {
+                return Err(StepError::classified(
+                    crate::FaultCategory::HostContract,
+                    VmFaultCode::Native,
+                    format!("runtime-form Native rollback failed: {rollback}"),
+                ));
             }
-            return Err(map_vm_error(error));
+            // Ready values/writes belong to the service contract. A bad returned
+            // place is not a script bounds error, even when the storage validator
+            // uses that category for a script-originated read of the same place.
+            return Err(StepError::classified(
+                crate::FaultCategory::HostContract,
+                VmFaultCode::Native,
+                error.to_string(),
+            ));
         }
         let owner = owner_frame_mut(fiber, self.frame)?;
         if owner.stack.len() != owner_stack.saturating_add(1) {

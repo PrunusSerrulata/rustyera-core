@@ -92,6 +92,18 @@ impl RuntimeSession {
                 "a configuration update is already pending",
             );
         }
+        if request.changes.iter().any(|change| {
+            matches!(
+                change.code.to_ascii_lowercase().as_str(),
+                "compatibility.profile" | "compatibilityprofile"
+            )
+        }) {
+            return self.reject(
+                message_id,
+                CommandErrorCode::VersionMismatch,
+                "compatibility profile changes require a complete project reopen",
+            );
+        }
         let profile_flag = crate::project::profile_applicability(self.configuration_profile);
         let transactional = profile_flag.is_some();
         let validated = match validate_configuration_changes(

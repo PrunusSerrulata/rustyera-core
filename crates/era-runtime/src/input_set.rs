@@ -165,7 +165,7 @@ fn append_character(output: &mut String, value: char) -> Result<(), &'static str
     Ok(())
 }
 
-fn ensure_size(size: usize) -> Result<(), &'static str> {
+pub(crate) fn ensure_size(size: usize) -> Result<(), &'static str> {
     (size <= MAX_EXPANDED_BYTES)
         .then_some(())
         .ok_or(EXPANSION_LIMIT_ERROR)

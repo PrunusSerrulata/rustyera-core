@@ -1,0 +1,979 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "original": {
+      "semantic_version": 1,
+      "policy_version": 1
+    },
+    "snake": {
+      "semantic_version": 2,
+      "policy_version": 2
+    }
+  },
+  "loadExpect": {
+    "ok": true,
+    "result": {
+      "termination": "waitingInput"
+    }
+  },
+  "cases": [
+    {
+      "id": "index-static-primary-names",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_STATIC_PRIMARY",
+            "watch": [
+              "RESULT:0",
+              "RESULT:1",
+              "RESULT:2"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 110,
+                  "RESULT:1": 311,
+                  "RESULT:2": 600
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 110,
+                  "RESULT:1": 311,
+                  "RESULT:2": 600
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "shared_static_user_indices",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-primary-name-precedes-alias",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_READ",
+            "arguments": "\"main\"",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 110
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 110
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "original_dynamic_user_index_existing_gap",
+      "snakeTargetStatus": "requires_batch_1_acceptance",
+      "knownRustDifference": {
+        "original": {
+          "status": "existing_gap",
+          "reason": "The fixed original reference resolves dynamic user primary names, but Rust original keeps its pre-batch-1 resolver and faults; shared static names have a separate success case.",
+          "rustTermination": "faulted",
+          "referenceTermination": "completed",
+          "disposition": "preserve_difference_not_expected_rejection"
+        }
+      }
+    },
+    {
+      "id": "index-user-alias-10-trim-first-wins",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_READ",
+            "arguments": "\"alias\"",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 110
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "user-defined ALS is unsupported; the dynamic name is missing"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-user-alias-11",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_READ",
+            "arguments": "\"second\"",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 111
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "user-defined ALS is unsupported; the dynamic name is missing"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-user-alias-300-bounds",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_READ",
+            "arguments": "\"z_far\"",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "user-defined ALS is unsupported; the dynamic name is missing",
+            "snake": "alias resolves to index 300 outside BUFF length 50"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-user-negative-alias-bounds",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_READ",
+            "arguments": "\"negative\"",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "user-defined ALS is unsupported; the dynamic name is missing",
+            "snake": "alias resolves to signed index -2; array access must reject it"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-missing-name",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_READ",
+            "arguments": "\"not_defined\"",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "undefined user index name",
+            "snake": "undefined user index name"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-numeric-upper-bound",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_RANGE",
+            "arguments": "50",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "numeric index equals BUFF length",
+            "snake": "numeric index equals BUFF length"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-numeric-negative-bound",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_RANGE",
+            "arguments": "-2",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "negative numeric array index",
+            "snake": "negative numeric array index"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-canonical-primary-name",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "ERDNAME(BUFF, 10) == \"main\""
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "value": 1
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 1
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-canonical-alias-insertion-order",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "ERDNAME(BUFF, 300) == \"z_far\""
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "value": 0
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 1
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-negative-canonical-is-empty",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "ERDNAME(BUFF, -2) == \"\""
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "value": 1
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 1
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-column-primary",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_COLUMN",
+            "arguments": "\"column_other\"",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 311
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 311
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "original_dynamic_user_index_existing_gap",
+      "snakeTargetStatus": "requires_batch_1_acceptance",
+      "knownRustDifference": {
+        "original": {
+          "status": "existing_gap",
+          "reason": "The fixed original reference resolves dynamic user primary names, but Rust original keeps its pre-batch-1 resolver and faults; shared static names have a separate success case.",
+          "rustTermination": "faulted",
+          "referenceTermination": "completed",
+          "disposition": "preserve_difference_not_expected_rejection"
+        }
+      }
+    },
+    {
+      "id": "index-column-alias-11",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_COLUMN",
+            "arguments": "\"column_alias\"",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 311
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "user-defined multidimensional ALS is unsupported"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-column-canonical-primary",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "ERDNAME(COLUMNDIV, 11, 2) == \"column_other\""
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "value": 1
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 1
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-matrix-primary-300",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_MATRIX",
+            "arguments": "\"matrix_main\"",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 600
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 600
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "original_dynamic_user_index_existing_gap",
+      "snakeTargetStatus": "requires_batch_1_acceptance",
+      "knownRustDifference": {
+        "original": {
+          "status": "existing_gap",
+          "reason": "The fixed original reference resolves dynamic user primary names, but Rust original keeps its pre-batch-1 resolver and faults; shared static names have a separate success case.",
+          "rustTermination": "faulted",
+          "referenceTermination": "completed",
+          "disposition": "preserve_difference_not_expected_rejection"
+        }
+      }
+    },
+    {
+      "id": "index-matrix-alias-300",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_MATRIX",
+            "arguments": "\"matrix_alias\"",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 600
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "user-defined multidimensional ALS is unsupported"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-matrix-canonical-primary",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "eval",
+            "source": "ERDNAME(SEMEN_MATRIX, 300, 2) == \"matrix_main\""
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "value": 1
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "value": 1
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-builtin-alias-10",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_BUILTIN",
+            "arguments": "\"flag_ten\"",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 210
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 210
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-builtin-alias-11",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_BUILTIN",
+            "arguments": "\"flag_eleven\"",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 211
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 211
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-builtin-alias-300",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_BUILTIN",
+            "arguments": "\"flag_big\"",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 500
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 500
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "index-builtin-alias-same-index",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_BUILTIN",
+            "arguments": "\"flag_second_name\"",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 500
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "fixed original oracle aborts the remaining ALS rows when duplicate-index warning formatting supplies one argument for a two-placeholder message"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance",
+      "knownRustDifference": {
+        "original": "original_builtin_alias_warning_existing_gap: Rust preserves its existing duplicate-index warning behavior and continues loading aliases; the fixed original oracle aborts at FLAG.als line 4"
+      },
+      "knownOracleDefect": {
+        "original": "fixed original oracle aborts the remaining ALS rows when duplicate-index warning formatting supplies one argument for a two-placeholder message",
+        "source": "Emuera/Runtime/Script/Data/ConstantData.cs:1812 and Emuera/Runtime/Utils/EvilMask/Lang.cs:655"
+      }
+    },
+    {
+      "id": "index-builtin-trimmed-name",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_BUILTIN",
+            "arguments": "\"trimmed_flag\"",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 210
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "fixed original oracle aborts the remaining ALS rows when duplicate-index warning formatting supplies one argument for a two-placeholder message; this fixture cannot independently prove original whitespace preservation after the earlier abort"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance",
+      "knownOracleDefect": {
+        "original": "fixed original oracle aborts the remaining ALS rows when duplicate-index warning formatting supplies one argument for a two-placeholder message",
+        "source": "Emuera/Runtime/Script/Data/ConstantData.cs:1812 and Emuera/Runtime/Utils/EvilMask/Lang.cs:655"
+      }
+    },
+    {
+      "id": "index-builtin-untrimmed-name",
+      "group": "INDEX",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "INDEX_BUILTIN",
+            "arguments": "\" trimmed_flag \"",
+            "watch": [
+              "RESULT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error"
+              }
+            }
+          },
+          "expectedRejection": {
+            "snake": "snake builtin ALS trims whitespace; the untrimmed lookup is absent",
+            "original": "fixed original oracle aborts the remaining ALS rows when duplicate-index warning formatting supplies one argument for a two-placeholder message"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "profile_scoped_index_inputs",
+      "snakeTargetStatus": "requires_batch_1_acceptance",
+      "knownRustDifference": {
+        "original": "original_builtin_alias_warning_existing_gap: Rust preserves its existing duplicate-index warning behavior and continues loading aliases; the fixed original oracle aborts at FLAG.als line 4"
+      },
+      "knownOracleDefect": {
+        "original": "fixed original oracle aborts the remaining ALS rows when duplicate-index warning formatting supplies one argument for a two-placeholder message",
+        "source": "Emuera/Runtime/Script/Data/ConstantData.cs:1812 and Emuera/Runtime/Utils/EvilMask/Lang.cs:655"
+      }
+    }
+  ]
+}

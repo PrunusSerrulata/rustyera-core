@@ -234,7 +234,9 @@ mod tests {
             &ValidationContext::for_artifact(&artifact),
         );
         Vm::new(
-            report.value.expect("validated artifact"),
+            report
+                .value
+                .unwrap_or_else(|| panic!("validated artifact: {:#?}", report.diagnostics)),
             VmConfig::default(),
         )
     }

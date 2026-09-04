@@ -2,7 +2,9 @@ use std::mem::size_of;
 
 use era_runtime_protocol::CanvasRect;
 
-use super::{CanvasCommand, CanvasSurface, ResourceGraph, SpriteDefinition, SpriteFrame};
+use super::{
+    CanvasCommand, CanvasSurface, ExactRevisionStore, ResourceGraph, SpriteDefinition, SpriteFrame,
+};
 
 pub(super) const MAXIMUM_CANVAS_COMMAND_BYTES: usize = 64 * 1024 * 1024;
 const MAXIMUM_CANVASES: usize = 65_536;
@@ -29,6 +31,7 @@ impl ResourceGraph {
                 height,
                 revision: 0,
                 commands: Vec::new(),
+                polygon_points: Vec::new(),
                 retained_command_bytes: 0,
                 brush_argb: self.canvas_defaults.brush_argb,
                 pen_argb: self.canvas_defaults.pen_argb,
@@ -69,7 +72,7 @@ impl ResourceGraph {
         let retained_command_bytes = command.retained_bytes();
         self.ensure_canvas_retained_bytes();
         if !retained_canvas_bytes_fit(
-            self.retained_canvas_command_bytes,
+            self.total_canvas_bytes_with(&self.exact_revisions),
             0,
             retained_command_bytes,
             MAXIMUM_CANVAS_COMMAND_BYTES,
@@ -83,6 +86,7 @@ impl ResourceGraph {
                 height,
                 revision: 1,
                 commands: vec![command],
+                polygon_points: Vec::new(),
                 retained_command_bytes,
                 brush_argb: self.canvas_defaults.brush_argb,
                 pen_argb: self.canvas_defaults.pen_argb,
@@ -122,7 +126,7 @@ impl ResourceGraph {
             .saturating_add(encoded.len());
         self.ensure_canvas_retained_bytes();
         if !retained_canvas_bytes_fit(
-            self.retained_canvas_command_bytes,
+            self.total_canvas_bytes_with(&self.exact_revisions),
             0,
             retained_command_bytes,
             MAXIMUM_CANVAS_COMMAND_BYTES,
@@ -139,6 +143,7 @@ impl ResourceGraph {
                     content_digest: digest.as_bytes().to_vec(),
                     encoded,
                 }],
+                polygon_points: Vec::new(),
                 retained_command_bytes,
                 brush_argb: self.canvas_defaults.brush_argb,
                 pen_argb: self.canvas_defaults.pen_argb,
@@ -193,7 +198,7 @@ impl ResourceGraph {
             // A full clear is a semantic checkpoint: no earlier drawing command can
             // affect the resulting pixels. Preserve the current state explicitly so
             // later drawing commands remain replayable without the discarded prefix.
-            let checkpoint = vec![
+            let mut checkpoint = vec![
                 command,
                 CanvasCommand::SetBrush {
                     argb: canvas.brush_argb,
@@ -212,19 +217,35 @@ impl ResourceGraph {
                     style_bits: canvas.font_style,
                 },
             ];
+            checkpoint.extend(
+                canvas
+                    .polygon_points
+                    .iter()
+                    .copied()
+                    .map(|point| CanvasCommand::PolygonPointAdd { point }),
+            );
             let retained = checkpoint
                 .iter()
                 .map(CanvasCommand::retained_bytes)
                 .fold(0, usize::saturating_add);
             self.ensure_canvas_retained_bytes();
             let previous_retained = self.canvases[&id].retained_command_bytes;
-            if !retained_canvas_bytes_fit(
-                self.retained_canvas_command_bytes
-                    .saturating_sub(previous_retained),
-                0,
-                retained,
-                MAXIMUM_CANVAS_COMMAND_BYTES,
-            ) {
+            let target_is_exact = self
+                .exact_revisions
+                .canvases
+                .get(&id)
+                .is_some_and(|revisions| revisions.contains_key(&self.canvases[&id].revision));
+            let historical_retained = if target_is_exact {
+                previous_retained
+            } else {
+                0
+            };
+            let next_total = self
+                .total_canvas_bytes_with(&self.exact_revisions)
+                .saturating_sub(previous_retained)
+                .saturating_add(retained)
+                .saturating_add(historical_retained);
+            if next_total > MAXIMUM_CANVAS_COMMAND_BYTES {
                 return false;
             }
             let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
@@ -252,27 +273,39 @@ impl ResourceGraph {
         destination: Option<[i32; 4]>,
         color_matrix: Option<Vec<i64>>,
     ) -> bool {
+        if !self.canvases.contains_key(&id) {
+            return false;
+        }
         let Some(sprite) = self.sprite(name) else {
             return false;
         };
+        let resource_revision = sprite.revision;
+        let sprite_size = [sprite.width, sprite.height];
         let destination = destination.unwrap_or([
             0,
             0,
-            i32::try_from(sprite.width).unwrap_or(i32::MAX),
-            i32::try_from(sprite.height).unwrap_or(i32::MAX),
+            i32::try_from(sprite_size[0]).unwrap_or(i32::MAX),
+            i32::try_from(sprite_size[1]).unwrap_or(i32::MAX),
         ]);
-        if !self.push_canvas_command(
-            id,
-            CanvasCommand::DrawSprite {
-                name: name.to_ascii_uppercase(),
-                destination,
-                color_matrix,
-            },
-        ) {
+        let source = era_runtime_protocol::SceneSourceV1::Sprite {
+            sprite_name: name.to_ascii_uppercase(),
+            resource_revision,
+        };
+        let command = CanvasCommand::DrawSprite {
+            name: name.to_ascii_uppercase(),
+            resource_revision,
+            destination,
+            color_matrix,
+        };
+        let Some(exact_revisions) = self.preflight_exact_command(id, &[source], &command) else {
+            return false;
+        };
+        if !self.push_canvas_command(id, command) {
             return false;
         }
         let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
         canvas.revision = canvas.revision.saturating_add(1);
+        self.exact_revisions = exact_revisions;
         true
     }
 
@@ -424,6 +457,50 @@ impl ResourceGraph {
         })
     }
 
+    pub(crate) fn add_canvas_polygon_point(&mut self, id: i64, point: [i32; 2]) -> bool {
+        if !self.push_canvas_command(id, CanvasCommand::PolygonPointAdd { point }) {
+            return false;
+        }
+        let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
+        canvas.polygon_points.push(point);
+        bump_canvas(canvas);
+        true
+    }
+
+    pub(crate) fn clear_canvas_polygon_points(&mut self, id: i64) -> bool {
+        if !self.push_canvas_command(id, CanvasCommand::PolygonPointClear) {
+            return false;
+        }
+        let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
+        canvas.polygon_points.clear();
+        bump_canvas(canvas);
+        true
+    }
+
+    pub(crate) fn draw_canvas_polygon(
+        &mut self,
+        id: i64,
+        fill: bool,
+    ) -> Result<bool, &'static str> {
+        let Some(canvas) = self.canvases.get(&id) else {
+            return Ok(false);
+        };
+        if canvas.polygon_points.is_empty() {
+            return Err("polygon point set is empty");
+        }
+        let command = if fill {
+            CanvasCommand::FillPolygon
+        } else {
+            CanvasCommand::DrawPolygon
+        };
+        if !self.push_canvas_command(id, command) {
+            return Ok(false);
+        }
+        let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
+        bump_canvas(canvas);
+        Ok(true)
+    }
+
     pub(crate) fn draw_canvas_line(&mut self, id: i64, start: [i32; 2], end: [i32; 2]) -> bool {
         self.ensure_canvas_retained_bytes();
         let Some(canvas) = self.canvases.get_mut(&id) else {
@@ -478,26 +555,48 @@ impl ResourceGraph {
             i32::try_from(source_canvas.width).unwrap_or(i32::MAX),
             i32::try_from(source_canvas.height).unwrap_or(i32::MAX),
         ];
-        if mask_canvas_id.is_some_and(|mask| !self.canvases.contains_key(&mask)) {
+        let mask_revision = match mask_canvas_id {
+            Some(mask) => {
+                let Some(mask) = self.canvases.get(&mask) else {
+                    return false;
+                };
+                Some(mask.revision)
+            }
+            None => None,
+        };
+        if !self.canvases.contains_key(&id) {
             return false;
         }
-        if !self.push_canvas_command(
-            id,
-            CanvasCommand::DrawCanvas {
-                source_canvas_id: source_id,
-                source_revision,
-                source: source.unwrap_or(full),
-                destination: destination.unwrap_or(full),
-                color_matrix,
-                mask_canvas_id,
-                rotation_millidegrees,
-                rotation_center,
-            },
-        ) {
+        let mut roots = vec![era_runtime_protocol::SceneSourceV1::Canvas {
+            canvas_id: source_id,
+            resource_revision: source_revision,
+        }];
+        if let Some((canvas_id, resource_revision)) = mask_canvas_id.zip(mask_revision) {
+            roots.push(era_runtime_protocol::SceneSourceV1::Canvas {
+                canvas_id,
+                resource_revision,
+            });
+        }
+        let command = CanvasCommand::DrawCanvas {
+            source_canvas_id: source_id,
+            source_revision,
+            source: source.unwrap_or(full),
+            destination: destination.unwrap_or(full),
+            color_matrix,
+            mask_canvas_id,
+            mask_revision,
+            rotation_millidegrees,
+            rotation_center,
+        };
+        let Some(exact_revisions) = self.preflight_exact_command(id, &roots, &command) else {
+            return false;
+        };
+        if !self.push_canvas_command(id, command) {
             return false;
         }
         let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
         bump_canvas(canvas);
+        self.exact_revisions = exact_revisions;
         true
     }
 
@@ -506,6 +605,8 @@ impl ResourceGraph {
         name: &str,
         canvas_id: i64,
         rectangle: Option<[i32; 4]>,
+        position: [i32; 2],
+        destination_size: Option<[i32; 2]>,
     ) -> bool {
         let key = name.to_ascii_uppercase();
         if name.is_empty() || self.sprites.contains_key(&key) {
@@ -520,23 +621,41 @@ impl ResourceGraph {
             i32::try_from(canvas.width).unwrap_or(i32::MAX),
             i32::try_from(canvas.height).unwrap_or(i32::MAX),
         ]);
-        if rectangle[2] == 0 || rectangle[3] == 0 {
+        if !rectangle_axis_intersects(rectangle[0], rectangle[2], canvas.width)
+            || !rectangle_axis_intersects(rectangle[1], rectangle[3], canvas.height)
+        {
             return false;
         }
+        let size = destination_size.map_or(
+            [rectangle[2].unsigned_abs(), rectangle[3].unsigned_abs()],
+            |size| [size[0].unsigned_abs(), size[1].unsigned_abs()],
+        );
+        let canvas_revision = canvas.revision;
+        let source = era_runtime_protocol::SceneSourceV1::Canvas {
+            canvas_id,
+            resource_revision: canvas_revision,
+        };
+        let Ok((exact_revisions, _)) = self.collect_replay_closure(&[source], false) else {
+            return false;
+        };
+        let revision = self.allocate_sprite_revision();
         self.sprites.insert(
             key.clone(),
             SpriteDefinition {
                 name: key,
-                width: rectangle[2].unsigned_abs(),
-                height: rectangle[3].unsigned_abs(),
+                revision,
+                width: size[0],
+                height: size[1],
                 frames: Vec::new(),
                 dynamic: true,
-                position_x: 0,
-                position_y: 0,
+                position_x: position[0],
+                position_y: position[1],
                 canvas_id: Some(canvas_id),
+                canvas_revision: Some(canvas_revision),
                 canvas_rectangle: Some(rectangle),
             },
         );
+        self.exact_revisions = exact_revisions;
         true
     }
 
@@ -554,10 +673,12 @@ impl ResourceGraph {
         {
             return false;
         }
+        let revision = self.allocate_sprite_revision();
         self.sprites.insert(
             key.clone(),
             SpriteDefinition {
                 name: key,
+                revision,
                 width,
                 height,
                 frames: Vec::new(),
@@ -565,6 +686,7 @@ impl ResourceGraph {
                 position_x: 0,
                 position_y: 0,
                 canvas_id: None,
+                canvas_revision: None,
                 canvas_rectangle: None,
             },
         );
@@ -592,15 +714,28 @@ impl ResourceGraph {
         {
             return false;
         }
-        let Some(sprite) = self.sprites.get_mut(&name.to_ascii_uppercase()) else {
+        let key = name.to_ascii_uppercase();
+        let Some(sprite) = self.sprites.get(&key) else {
             return false;
         };
         if !sprite.dynamic || sprite.canvas_id.is_some() {
             return false;
         }
+        let canvas_revision = canvas.revision;
+        let source = era_runtime_protocol::SceneSourceV1::Canvas {
+            canvas_id,
+            resource_revision: canvas_revision,
+        };
+        let Ok((exact_revisions, _)) = self.collect_replay_closure(&[source], false) else {
+            return false;
+        };
+        let revision = self.allocate_sprite_revision();
+        let sprite = self.sprites.get_mut(&key).expect("sprite was checked");
         sprite.frames.push(SpriteFrame {
             image_path: String::new(),
+            content_digest: None,
             canvas_id: Some(canvas_id),
+            canvas_revision: Some(canvas_revision),
             source_x: rectangle[0],
             source_y: rectangle[1],
             source_width: Some(rectangle[2].cast_unsigned()),
@@ -611,6 +746,8 @@ impl ResourceGraph {
             destination_width: None,
             destination_height: None,
         });
+        sprite.revision = revision;
+        self.exact_revisions = exact_revisions;
         true
     }
 
@@ -630,12 +767,23 @@ impl ResourceGraph {
     }
 
     /// Preserve game-created replay objects while replacing submitted static resources.
-    pub(crate) fn inherit_runtime_graph(&mut self, previous: &Self) {
-        self.canvases.clone_from(&previous.canvases);
-        self.retained_canvas_command_bytes = previous.retained_canvas_command_bytes;
-        self.animation_timer_ms = previous.animation_timer_ms;
+    pub(crate) fn inherit_runtime_graph(
+        &mut self,
+        previous: &Self,
+        roots: &[era_runtime_protocol::SceneSourceV1],
+    ) -> Result<(), String> {
+        let mut candidate = self.clone();
+        candidate.next_sprite_revision = candidate
+            .next_sprite_revision
+            .max(previous.next_sprite_revision);
+        candidate.canvases.clone_from(&previous.canvases);
+        candidate
+            .exact_revisions
+            .clone_from(&previous.exact_revisions);
+        candidate.retained_canvas_command_bytes = previous.retained_canvas_command_bytes;
+        candidate.animation_timer_ms = previous.animation_timer_ms;
         let mut inherited_metadata = Vec::new();
-        for image in self.images.values_mut() {
+        for image in candidate.images.values_mut() {
             if let Some(previous_image) = previous
                 .images
                 .get(&image.relative_path.to_ascii_lowercase())
@@ -648,27 +796,58 @@ impl ResourceGraph {
             }
         }
         for path in inherited_metadata {
-            let _ = self.validate_image_frames(&path);
+            let _ = candidate.validate_image_frames(&path);
         }
         for (name, sprite) in &previous.sprites {
-            if sprite.dynamic {
-                self.sprites.insert(name.clone(), sprite.clone());
+            let resources_still_match = sprite.frames.iter().all(|frame| {
+                frame.content_digest.map_or_else(
+                    || frame.image_path.is_empty(),
+                    |digest| {
+                        candidate
+                            .images
+                            .get(&frame.image_path.to_ascii_lowercase())
+                            .is_some_and(|image| image.digest == digest)
+                    },
+                )
+            });
+            if sprite.dynamic && resources_still_match {
+                candidate.sprites.insert(name.clone(), sprite.clone());
             }
         }
+        candidate.ensure_canvas_retained_bytes();
+        let _ = candidate.replay_for_roots(roots)?;
+        if candidate.total_canvas_bytes_with(&candidate.exact_revisions)
+            > MAXIMUM_CANVAS_COMMAND_BYTES
+        {
+            return Err("hot reload exact replay closure exceeds canvas command budget".into());
+        }
+        *self = candidate;
+        Ok(())
     }
 
     pub(crate) fn reset_runtime_graph(&mut self) {
         self.canvases = std::collections::BTreeMap::default();
+        self.exact_revisions = ExactRevisionStore::default();
         self.retained_canvas_command_bytes = 0;
         self.animation_timer_ms = 0;
         self.sprites.retain(|_, sprite| !sprite.dynamic);
-        for sprite in self.sprites.values_mut() {
+        let moved = self
+            .sprites
+            .iter()
+            .filter_map(|(name, sprite)| {
+                ((sprite.position_x, sprite.position_y) != (0, 0)).then_some(name.clone())
+            })
+            .collect::<Vec<_>>();
+        for name in moved {
+            let revision = self.allocate_sprite_revision();
+            let sprite = self.sprites.get_mut(&name).expect("sprite was retained");
             sprite.position_x = 0;
             sprite.position_y = 0;
+            sprite.revision = revision;
         }
     }
 
-    fn ensure_canvas_retained_bytes(&mut self) {
+    pub(super) fn ensure_canvas_retained_bytes(&mut self) {
         let mut rebuilt_surface = false;
         for canvas in self.canvases.values_mut() {
             if canvas.retained_command_bytes == 0 && !canvas.commands.is_empty() {
@@ -687,10 +866,56 @@ impl ResourceGraph {
                 .map(|canvas| canvas.retained_command_bytes)
                 .fold(0, usize::saturating_add);
         }
+        self.exact_revisions.rebuild_retained_bytes();
+    }
+
+    fn preflight_exact_command(
+        &mut self,
+        target_id: i64,
+        roots: &[era_runtime_protocol::SceneSourceV1],
+        command: &CanvasCommand,
+    ) -> Option<ExactRevisionStore> {
+        self.ensure_canvas_retained_bytes();
+        let target = self.canvases.get(&target_id)?;
+        let (candidate, _) = self.collect_replay_closure(roots, false).ok()?;
+        let target_becomes_historical = candidate
+            .canvases
+            .get(&target_id)
+            .is_some_and(|revisions| revisions.contains_key(&target.revision));
+        let additional_history = if target_becomes_historical {
+            target.retained_command_bytes
+        } else {
+            0
+        };
+        let total = self
+            .total_canvas_bytes_with(&candidate)
+            .saturating_add(additional_history)
+            .saturating_add(command.retained_bytes());
+        (total <= MAXIMUM_CANVAS_COMMAND_BYTES).then_some(candidate)
     }
 
     fn push_canvas_command(&mut self, id: i64, command: CanvasCommand) -> bool {
         self.ensure_canvas_retained_bytes();
+        let Some(target) = self.canvases.get(&id) else {
+            return false;
+        };
+        let target_becomes_historical = self
+            .exact_revisions
+            .canvases
+            .get(&id)
+            .is_some_and(|revisions| revisions.contains_key(&target.revision));
+        let historical_retained = if target_becomes_historical {
+            target.retained_command_bytes
+        } else {
+            0
+        };
+        let next_total = self
+            .total_canvas_bytes_with(&self.exact_revisions)
+            .saturating_add(historical_retained)
+            .saturating_add(command.retained_bytes());
+        if next_total > MAXIMUM_CANVAS_COMMAND_BYTES {
+            return false;
+        }
         let Some(canvas) = self.canvases.get_mut(&id) else {
             return false;
         };
@@ -736,6 +961,15 @@ pub(super) fn opaque_rgb(value: i64) -> u32 {
 
 fn bump_canvas(canvas: &mut CanvasSurface) {
     canvas.revision = canvas.revision.saturating_add(1);
+}
+
+fn rectangle_axis_intersects(origin: i32, extent: i32, limit: u32) -> bool {
+    if extent == 0 {
+        return false;
+    }
+    let origin = i64::from(origin);
+    let end = origin.saturating_add(i64::from(extent));
+    origin.min(end) < i64::from(limit) && origin.max(end) > 0
 }
 
 fn push_canvas_command(

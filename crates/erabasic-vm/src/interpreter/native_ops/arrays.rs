@@ -5,10 +5,17 @@ pub(in super::super) fn execute_strjoin(
     vm: &Vm,
     fiber: &Fiber,
     arguments: &[VmValue],
+    omitted_arguments: &[usize],
 ) -> Result<VmValue, VmError> {
     let place = array_place(arguments)?;
     let values = array_snapshot_any_rank(vm, fiber, place)?;
-    let delimiter = match arguments.get(1) {
+    // Omission is source provenance, never a particular Integer/String value.
+    let argument = |slot| {
+        (!omitted_arguments.contains(&slot))
+            .then(|| arguments.get(slot))
+            .flatten()
+    };
+    let delimiter = match argument(1) {
         None => ",",
         Some(VmValue::String(value)) => value,
         _ => {
@@ -17,10 +24,14 @@ pub(in super::super) fn execute_strjoin(
             ));
         }
     };
-    let start = match arguments.get(2) {
+    let start = match argument(2) {
         None => 0,
-        Some(VmValue::Integer(value)) => usize::try_from(*value)
-            .map_err(|_| VmError::InvalidArguments("STRJOIN start is negative".into()))?,
+        Some(VmValue::Integer(value)) => usize::try_from(*value).map_err(|_| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                "STRJOIN start is negative".into(),
+            )
+        })?,
         _ => {
             return Err(VmError::InvalidArguments(
                 "STRJOIN start must be an integer".into(),
@@ -28,14 +39,19 @@ pub(in super::super) fn execute_strjoin(
         }
     };
     if start > values.len() {
-        return Err(VmError::InvalidArguments(
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Bounds,
             "STRJOIN start exceeds the array".into(),
         ));
     }
-    let count = match arguments.get(3) {
+    let count = match argument(3) {
         None => values.len() - start,
-        Some(VmValue::Integer(value)) => usize::try_from(*value)
-            .map_err(|_| VmError::InvalidArguments("STRJOIN count is negative".into()))?,
+        Some(VmValue::Integer(value)) => usize::try_from(*value).map_err(|_| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                "STRJOIN count is negative".into(),
+            )
+        })?,
         _ => {
             return Err(VmError::InvalidArguments(
                 "STRJOIN count must be an integer".into(),
@@ -45,7 +61,12 @@ pub(in super::super) fn execute_strjoin(
     let end = start
         .checked_add(count)
         .filter(|end| *end <= values.len())
-        .ok_or_else(|| VmError::InvalidArguments("STRJOIN range exceeds the array".into()))?;
+        .ok_or_else(|| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                "STRJOIN range exceeds the array".into(),
+            )
+        })?;
     let joined = values[start..end]
         .iter()
         .map(|value| match value {
@@ -66,7 +87,32 @@ pub(in super::super) fn array_snapshot(
     place: &PlaceDescriptor,
 ) -> Result<Vec<VmValue>, VmError> {
     let array = one_dimensional_array_place(vm, fiber, place)?;
-    vm.read_place_array(fiber, &array)
+    let values = vm.read_place_array(fiber, &array)?;
+    validate_array_storage_values(vm, fiber, &array, &values)?;
+    Ok(values)
+}
+
+pub(in super::super) fn validate_array_storage_values(
+    vm: &Vm,
+    fiber: &Fiber,
+    place: &PlaceDescriptor,
+    values: &[VmValue],
+) -> Result<(), VmError> {
+    let generation = fiber.frames.last().expect("frame exists").generation;
+    let definition = vm
+        .generations
+        .get(&generation)
+        .and_then(|program| program.global(place.variable))
+        .ok_or_else(|| VmError::InvalidState("array variable is missing".into()))?;
+    if values
+        .iter()
+        .any(|value| value.value_type() != definition.value_type)
+    {
+        return Err(VmError::InvalidState(
+            "array storage type differs from its variable".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub(in super::super) fn array_len(
@@ -91,8 +137,14 @@ fn one_dimensional_array_place(
     let definition = program
         .global(place.variable)
         .ok_or_else(|| VmError::InvalidState("array variable is missing".into()))?;
-    if definition.dimensions.len() != 1 || place.indices.len() > 1 {
+    if place.indices.len() > definition.dimensions.len() {
         return Err(VmError::InvalidArguments(
+            "array operation requires a one-dimensional variable".into(),
+        ));
+    }
+    if definition.dimensions.len() != 1 {
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
             "array operation requires a one-dimensional variable".into(),
         ));
     }
@@ -117,6 +169,67 @@ pub(in super::super) fn commit_array(
     vm.write_place_array(fiber, &array, values)
 }
 
+fn shift_array_values(values: &mut [VmValue], arguments: &[VmValue]) -> Result<bool, VmError> {
+    let shift = integer_argument(arguments, 1)?;
+    if shift == 0 {
+        return Ok(false);
+    }
+    let fill = arguments
+        .get(2)
+        .cloned()
+        .ok_or_else(|| VmError::InvalidArguments("ARRAYSHIFT fill value is missing".into()))?;
+    if matches!(fill, VmValue::IntegerPlace(_) | VmValue::StringPlace(_)) {
+        return Err(VmError::InvalidArguments(
+            "ARRAYSHIFT fill type differs".into(),
+        ));
+    }
+    if values
+        .first()
+        .is_some_and(|value| value.value_type() != fill.value_type())
+    {
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
+            "ARRAYSHIFT fill type differs".into(),
+        ));
+    }
+    let start = match optional_integer_argument(arguments, 3, 0)? {
+        i64::MIN => 0,
+        value => usize::try_from(value).map_err(|_| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                "ARRAYSHIFT start is negative".into(),
+            )
+        })?,
+    };
+    if start > values.len() {
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Bounds,
+            "ARRAYSHIFT start exceeds array".into(),
+        ));
+    }
+    let count = match optional_integer_argument(arguments, 4, i64::MIN)? {
+        i64::MIN => values.len() - start,
+        value => usize::try_from(value).map_err(|_| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                "ARRAYSHIFT count is negative".into(),
+            )
+        })?,
+    };
+    let end = start.saturating_add(count).min(values.len());
+    let source = values[start..end].to_vec();
+    for (relative, value) in values[start..end].iter_mut().enumerate() {
+        let source_index = i64::try_from(relative)
+            .ok()
+            .and_then(|index| index.checked_sub(shift));
+        *value = source_index
+            .and_then(|index| usize::try_from(index).ok())
+            .and_then(|source_index| source.get(source_index).cloned())
+            .unwrap_or_else(|| fill.clone());
+    }
+    Ok(true)
+}
+
 pub(in super::super) fn execute_array_mutation(
     vm: &mut Vm,
     fiber: &mut Fiber,
@@ -127,8 +240,12 @@ pub(in super::super) fn execute_array_mutation(
     let mut values = array_snapshot(vm, fiber, &place)?;
     match operation {
         "arrayremove" => {
-            let start = usize::try_from(integer_argument(arguments, 1)?)
-                .map_err(|_| VmError::InvalidArguments("ARRAYREMOVE start is negative".into()))?;
+            let start = usize::try_from(integer_argument(arguments, 1)?).map_err(|_| {
+                script_native_error(
+                    crate::ScriptFaultKind::Bounds,
+                    "ARRAYREMOVE start is negative".into(),
+                )
+            })?;
             let count = integer_argument(arguments, 2)?;
             if count <= 0 || start >= values.len() {
                 return Ok(());
@@ -146,46 +263,8 @@ pub(in super::super) fn execute_array_mutation(
             }
         }
         "arrayshift" => {
-            let shift = integer_argument(arguments, 1)?;
-            if shift == 0 {
+            if !shift_array_values(&mut values, arguments)? {
                 return Ok(());
-            }
-            let fill = arguments.get(2).cloned().ok_or_else(|| {
-                VmError::InvalidArguments("ARRAYSHIFT fill value is missing".into())
-            })?;
-            if values
-                .first()
-                .is_some_and(|value| value.value_type() != fill.value_type())
-            {
-                return Err(VmError::InvalidArguments(
-                    "ARRAYSHIFT fill type differs".into(),
-                ));
-            }
-            let start = match integer_argument(arguments, 3).unwrap_or(0) {
-                i64::MIN => 0,
-                value => usize::try_from(value).map_err(|_| {
-                    VmError::InvalidArguments("ARRAYSHIFT start is negative".into())
-                })?,
-            };
-            if start > values.len() {
-                return Err(VmError::InvalidArguments(
-                    "ARRAYSHIFT start exceeds array".into(),
-                ));
-            }
-            let count = match integer_argument(arguments, 4).unwrap_or(i64::MIN) {
-                i64::MIN => values.len() - start,
-                value => usize::try_from(value).map_err(|_| {
-                    VmError::InvalidArguments("ARRAYSHIFT count is negative".into())
-                })?,
-            };
-            let end = start.saturating_add(count).min(values.len());
-            let source = values[start..end].to_vec();
-            for (relative, value) in values[start..end].iter_mut().enumerate() {
-                let source_index = i64::try_from(relative).unwrap_or(i64::MAX) - shift;
-                *value = usize::try_from(source_index)
-                    .ok()
-                    .and_then(|source_index| source.get(source_index).cloned())
-                    .unwrap_or_else(|| fill.clone());
             }
         }
         "arraysort" => {
@@ -193,19 +272,28 @@ pub(in super::super) fn execute_array_mutation(
                 matches!(value, VmValue::String(value) if value.eq_ignore_ascii_case("BACK"))
                     || matches!(value, VmValue::Integer(value) if *value < 0)
             });
-            let start = match integer_argument(arguments, 2).unwrap_or(0) {
+            let start = match optional_integer_argument(arguments, 2, 0)? {
                 i64::MIN => 0,
-                value => usize::try_from(value)
-                    .map_err(|_| VmError::InvalidArguments("ARRAYSORT start is negative".into()))?,
+                value => usize::try_from(value).map_err(|_| {
+                    script_native_error(
+                        crate::ScriptFaultKind::Bounds,
+                        "ARRAYSORT start is negative".into(),
+                    )
+                })?,
             };
-            let count = match integer_argument(arguments, 3).unwrap_or(i64::MIN) {
+            let count = match optional_integer_argument(arguments, 3, i64::MIN)? {
                 i64::MIN => values.len().saturating_sub(start),
-                value => usize::try_from(value)
-                    .map_err(|_| VmError::InvalidArguments("ARRAYSORT count is negative".into()))?,
+                value => usize::try_from(value).map_err(|_| {
+                    script_native_error(
+                        crate::ScriptFaultKind::Bounds,
+                        "ARRAYSORT count is negative".into(),
+                    )
+                })?,
             };
             let end = start.saturating_add(count).min(values.len());
             if start > end {
-                return Err(VmError::InvalidArguments(
+                return Err(script_native_error(
+                    crate::ScriptFaultKind::Bounds,
                     "ARRAYSORT range is invalid".into(),
                 ));
             }
@@ -246,7 +334,8 @@ pub(in super::super) fn execute_variable_fill(
         .cloned()
         .ok_or_else(|| VmError::InvalidState("VARSET variable is missing".into()))?;
     if !definition.mutable {
-        return Err(VmError::InvalidArguments(
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
             "VARSET destination is read-only".into(),
         ));
     }
@@ -258,8 +347,14 @@ pub(in super::super) fn execute_variable_fill(
             ));
         }
         let value = fill_value_or_default(arguments, 1, default);
-        if value.value_type() != definition.value_type {
+        if matches!(value, VmValue::IntegerPlace(_) | VmValue::StringPlace(_)) {
             return Err(VmError::InvalidArguments(
+                "VARSET value type differs".into(),
+            ));
+        }
+        if value.value_type() != definition.value_type {
+            return Err(script_native_error(
+                crate::ScriptFaultKind::Argument,
                 "VARSET value type differs".into(),
             ));
         }
@@ -277,7 +372,10 @@ pub(in super::super) fn execute_variable_fill(
                 std::mem::swap(&mut start, &mut end);
             }
             if end > length {
-                return Err(VmError::InvalidArguments("VARSET range is invalid".into()));
+                return Err(script_native_error(
+                    crate::ScriptFaultKind::Bounds,
+                    "VARSET range is invalid".into(),
+                ));
             }
             (start, end)
         } else {
@@ -289,14 +387,21 @@ pub(in super::super) fn execute_variable_fill(
     }
 
     if definition.storage != BytecodeStorage::Character || definition.dimensions.len() > 1 {
-        return Err(VmError::InvalidArguments(
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
             "CVARSET requires a scalar or one-dimensional character variable".into(),
         ));
     }
     let element = optional_nonnegative(arguments, 1, 0, "CVARSET element")?;
     let value = fill_value_or_default(arguments, 2, default);
-    if value.value_type() != definition.value_type {
+    if matches!(value, VmValue::IntegerPlace(_) | VmValue::StringPlace(_)) {
         return Err(VmError::InvalidArguments(
+            "CVARSET value type differs".into(),
+        ));
+    }
+    if value.value_type() != definition.value_type {
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Argument,
             "CVARSET value type differs".into(),
         ));
     }
@@ -307,13 +412,17 @@ pub(in super::super) fn execute_variable_fill(
         std::mem::swap(&mut start, &mut end);
     }
     if end > character_count {
-        return Err(VmError::InvalidArguments("CVARSET range is invalid".into()));
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Bounds,
+            "CVARSET range is invalid".into(),
+        ));
     }
     let indices = if definition.dimensions.is_empty() {
         Vec::new()
     } else {
         if element >= usize::try_from(definition.dimensions[0]).unwrap_or(0) {
-            return Err(VmError::InvalidArguments(
+            return Err(script_native_error(
+                crate::ScriptFaultKind::Bounds,
                 "CVARSET element is out of range".into(),
             ));
         }
@@ -356,10 +465,27 @@ pub(in super::super) fn optional_nonnegative(
     default: usize,
     label: &str,
 ) -> Result<usize, VmError> {
-    match integer_argument(arguments, index) {
-        Err(_) | Ok(i64::MIN) => Ok(default),
-        Ok(value) => usize::try_from(value)
-            .map_err(|_| VmError::InvalidArguments(format!("{label} is negative"))),
+    match arguments.get(index) {
+        None | Some(VmValue::Integer(i64::MIN)) => Ok(default),
+        Some(VmValue::Integer(value)) => usize::try_from(*value).map_err(|_| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                format!("{label} is negative"),
+            )
+        }),
+        Some(_) => integer_argument(arguments, index).map(|_| default),
+    }
+}
+
+pub(in super::super) fn optional_integer_argument(
+    arguments: &[VmValue],
+    index: usize,
+    default: i64,
+) -> Result<i64, VmError> {
+    if arguments.get(index).is_none() {
+        Ok(default)
+    } else {
+        integer_argument(arguments, index)
     }
 }
 
@@ -380,22 +506,31 @@ pub(in super::super) fn execute_find_element(
     let needle = arguments
         .get(1)
         .ok_or_else(|| VmError::InvalidArguments("FINDELEMENT target is missing".into()))?;
-    let start = match integer_argument(arguments, 2).unwrap_or(0) {
+    let start = match optional_integer_argument(arguments, 2, 0)? {
         i64::MIN => 0,
-        value => usize::try_from(value)
-            .map_err(|_| VmError::InvalidArguments("FINDELEMENT start is negative".into()))?,
+        value => usize::try_from(value).map_err(|_| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                "FINDELEMENT start is negative".into(),
+            )
+        })?,
     };
-    let end = match integer_argument(arguments, 3).unwrap_or(i64::MIN) {
+    let end = match optional_integer_argument(arguments, 3, i64::MIN)? {
         i64::MIN => array_len,
-        value => usize::try_from(value)
-            .map_err(|_| VmError::InvalidArguments("FINDELEMENT end is negative".into()))?,
+        value => usize::try_from(value).map_err(|_| {
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                "FINDELEMENT end is negative".into(),
+            )
+        })?,
     };
     if start > end || end > array_len {
-        return Err(VmError::InvalidArguments(
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Bounds,
             "FINDELEMENT range is invalid".into(),
         ));
     }
-    let exact = !matches!(integer_argument(arguments, 4), Ok(0) | Err(_));
+    let exact = optional_integer_argument(arguments, 4, 0)? != 0;
     let array_revision = vm.place_array_revision(fiber, &array)?;
     let cache_key = array_revision
         .as_ref()
@@ -437,6 +572,7 @@ pub(in super::super) fn execute_find_element(
     } else {
         vm.read_place_array_range(fiber, &array, start, end)?
     };
+    validate_array_storage_values(vm, fiber, &array, &values)?;
     // FINDELEMENT treats the string needle as one regular expression for the
     // whole query. Compile it lazily so an empty range keeps its historical
     // no-op behavior, but do not rebuild the same automaton for every element.
@@ -463,10 +599,8 @@ pub(in super::super) fn execute_find_element(
                     }
                 }
                 if compiled_regex.is_none() {
-                    compiled_regex = Some(
-                        vm.compile_regex(needle)
-                            .map_err(VmError::InvalidArguments)?,
-                    );
+                    compiled_regex =
+                        Some(vm.compile_regex(needle).map_err(VmError::ScriptFailure)?);
                 }
                 let regex = compiled_regex
                     .as_ref()
@@ -475,6 +609,10 @@ pub(in super::super) fn execute_find_element(
                     .find(value)
                     .is_some_and(|matched| !exact || matched.as_str().len() == value.len()))
             }
+            (_, VmValue::Integer(_) | VmValue::String(_)) => Err(script_native_error(
+                crate::ScriptFaultKind::Argument,
+                "FINDELEMENT types differ".into(),
+            )),
             _ => Err(VmError::InvalidArguments("FINDELEMENT types differ".into())),
         }
     };
@@ -512,11 +650,20 @@ pub(in super::super) fn execute_array_query(
         if arguments.len() < 2
             || arguments
                 .iter()
-                .any(|value| value.value_type() != first.value_type())
+                .any(|value| matches!(value, VmValue::IntegerPlace(_) | VmValue::StringPlace(_)))
         {
             return Err(VmError::InvalidArguments(format!(
                 "{operation} arguments must have one value type"
             )));
+        }
+        if arguments
+            .iter()
+            .any(|value| value.value_type() != first.value_type())
+        {
+            return Err(script_native_error(
+                crate::ScriptFaultKind::Argument,
+                format!("{operation} arguments must have one value type"),
+            ));
         }
         let value = match operation {
             "groupmatch" => i64::try_from(
@@ -547,6 +694,7 @@ pub(in super::super) fn execute_array_query(
     } else {
         array_snapshot(vm, fiber, place)?
     };
+    validate_array_storage_values(vm, fiber, place, &values)?;
     let (start_argument, end_argument) = if matches!(operation, "match" | "cmatch") {
         (2, 3)
     } else if matches!(operation, "inrangearray" | "inrangecarray") {
@@ -557,26 +705,29 @@ pub(in super::super) fn execute_array_query(
     let start = optional_index(arguments, start_argument, 0, operation)?;
     let end = optional_index(arguments, end_argument, values.len(), operation)?;
     if start > end || end > values.len() {
-        return Err(VmError::InvalidArguments(format!(
-            "{operation} range is invalid"
-        )));
+        return Err(script_native_error(
+            crate::ScriptFaultKind::Bounds,
+            format!("{operation} range is invalid"),
+        ));
     }
     let range = &values[start..end];
     let result = match operation {
         "sumarray" | "sumcarray" => range.iter().try_fold(0i64, |sum, value| match value {
             VmValue::Integer(value) => Ok(sum.wrapping_add(*value)),
-            _ => Err(VmError::InvalidArguments(format!(
-                "{operation} requires an integer array"
-            ))),
+            _ => Err(script_native_error(
+                crate::ScriptFaultKind::Argument,
+                format!("{operation} requires an integer array"),
+            )),
         })?,
         "maxarray" | "maxcarray" | "minarray" | "mincarray" => {
             let values = range
                 .iter()
                 .map(|value| match value {
                     VmValue::Integer(value) => Ok(*value),
-                    _ => Err(VmError::InvalidArguments(format!(
-                        "{operation} requires an integer array"
-                    ))),
+                    _ => Err(script_native_error(
+                        crate::ScriptFaultKind::Argument,
+                        format!("{operation} requires an integer array"),
+                    )),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             let value = if operation.starts_with("max") {
@@ -584,19 +735,30 @@ pub(in super::super) fn execute_array_query(
             } else {
                 values.into_iter().min()
             };
-            value.ok_or_else(|| VmError::InvalidArguments(format!("{operation} range is empty")))?
+            value.ok_or_else(|| {
+                script_native_error(
+                    crate::ScriptFaultKind::Bounds,
+                    format!("{operation} range is empty"),
+                )
+            })?
         }
         "match" | "cmatch" => {
             let needle = arguments.get(1).ok_or_else(|| {
                 VmError::InvalidArguments(format!("{operation} target is missing"))
             })?;
+            if matches!(needle, VmValue::IntegerPlace(_) | VmValue::StringPlace(_)) {
+                return Err(VmError::InvalidArguments(format!(
+                    "{operation} target type differs"
+                )));
+            }
             if range
                 .iter()
                 .any(|candidate| candidate.value_type() != needle.value_type())
             {
-                return Err(VmError::InvalidArguments(format!(
-                    "{operation} target type differs"
-                )));
+                return Err(script_native_error(
+                    crate::ScriptFaultKind::Argument,
+                    format!("{operation} target type differs"),
+                ));
             }
             i64::try_from(
                 range
@@ -633,10 +795,47 @@ pub(in super::super) fn optional_index(
     match arguments.get(index) {
         None | Some(VmValue::Integer(i64::MIN)) => Ok(default),
         Some(VmValue::Integer(value)) => usize::try_from(*value).map_err(|_| {
-            VmError::InvalidArguments(format!("{operation} range cannot be negative"))
+            script_native_error(
+                crate::ScriptFaultKind::Bounds,
+                format!("{operation} range cannot be negative"),
+            )
         }),
         _ => Err(VmError::InvalidArguments(format!(
             "{operation} range must be integer"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+
+    #[test]
+    fn optional_array_bounds_do_not_swallow_physical_argument_failures() {
+        assert_eq!(optional_nonnegative(&[], 0, 7, "range").unwrap(), 7);
+        assert_eq!(
+            optional_nonnegative(&[VmValue::Integer(i64::MIN)], 0, 7, "range").unwrap(),
+            7
+        );
+        let failure = optional_nonnegative(&[VmValue::Integer(-1)], 0, 7, "range").unwrap_err();
+        assert!(matches!(
+            failure,
+            VmError::ScriptFailure(crate::ExecutionFailure {
+                category: crate::FaultCategory::Script(crate::ScriptFaultKind::Bounds),
+                ..
+            })
+        ));
+        let failure = optional_nonnegative(
+            &[VmValue::String("range is negative".into())],
+            0,
+            7,
+            "range",
+        )
+        .unwrap_err();
+        assert!(matches!(failure, VmError::InvalidArguments(_)));
+        assert!(matches!(
+            optional_integer_argument(&[VmValue::String("0".into())], 0, 0),
+            Err(VmError::InvalidArguments(_))
+        ));
     }
 }

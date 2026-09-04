@@ -8,6 +8,20 @@ impl RuntimeSession {
         message_id: u64,
         reload: &ReloadProject,
     ) -> Result<(), RuntimeError> {
+        if self.input_controller.pending_sequence.is_some() || !self.queued_input.is_empty() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "project reload cannot discard pending sequence or macro input",
+            );
+        }
+        if !self.operations.html_lines.is_empty() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "ActiveBlocks: project reload cannot cross an active HTML_STRINGLINES expression",
+            );
+        }
         let previous_phase = self.phase;
         if !matches!(
             previous_phase,
@@ -26,6 +40,16 @@ impl RuntimeSession {
                 "project reload cannot cross transient runtime operations",
             );
         }
+        if self.sql.has_inflight()
+            || self.sql.has_active_readers()
+            || self.sql.has_active_transactions()
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "project reload cannot cross SQL pending requests, readers, or transactions",
+            );
+        }
         let current = self
             .project_snapshot
             .as_ref()
@@ -36,6 +60,21 @@ impl RuntimeSession {
                 return self.reject(message_id, CommandErrorCode::InvalidValue, &error);
             }
         };
+        match crate::compatibility::resolve_manifest_compatibility(&manifest) {
+            Ok((identity, _)) if identity == current.manifest.compatibility => {}
+            Ok((identity, _)) => {
+                return self.reject(message_id, CommandErrorCode::VersionMismatch,
+                    &format!("compatibility profile change from {} to {} requires a complete project reopen", current.manifest.compatibility.profile, identity.profile));
+            }
+            Err(diagnostic) => {
+                self.emit(RuntimeMessage::Diagnostic(*diagnostic), Some(message_id))?;
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    "reload compatibility configuration is invalid",
+                );
+            }
+        }
         self.set_phase(RuntimePhase::Reloading)?;
         let previous_artifact = self
             .vm
@@ -58,11 +97,44 @@ impl RuntimeSession {
             )?;
             return self.set_phase(previous_phase);
         }
+        if let Some(next) = build.snapshot.as_ref() {
+            let resources_unchanged = self.sql.connections().all(|(_, connection)| {
+                let Some(seed) = crate::sql::database_source_resource(&connection.identity) else {
+                    return true;
+                };
+                let Some(expected) = connection.resource_digest else {
+                    return false;
+                };
+                next.resources.iter().any(|resource| {
+                    resource.category == FileCategory::Resource
+                        && resource
+                            .relative_path
+                            .eq_ignore_ascii_case(&seed.resource_id)
+                        && resource.payload_digest == expected
+                })
+            });
+            if !resources_unchanged {
+                self.set_phase(previous_phase)?;
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidState,
+                    "project reload changes a Resource seed used by an open SQL connection",
+                );
+            }
+        }
+        let resource_roots = self.presentation.resource_roots();
         if let (Some(next), Some(previous)) =
             (build.snapshot.as_mut(), self.project_snapshot.as_ref())
+            && let Err(error) = next
+                .resource_graph
+                .inherit_runtime_graph(&previous.resource_graph, &resource_roots)
         {
-            next.resource_graph
-                .inherit_runtime_graph(&previous.resource_graph);
+            self.set_phase(previous_phase)?;
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                &format!("project reload breaks the live resource replay closure: {error}"),
+            );
         }
         let replay_origin = if reload.changes.is_empty() {
             None
@@ -95,6 +167,22 @@ impl RuntimeSession {
             {
                 build.report.success = false;
                 build.report.diagnostics.push(ProtocolDiagnostic {
+                    context: Some(Box::new(
+                        era_runtime_protocol::CompatibilityDiagnosticContext {
+                            artifact: None,
+                            project_load_id: None,
+                            runtime_epoch: None,
+                            generation: None,
+                            identity: build.report.compatibility.clone(),
+                            stage: "service".into(),
+                            api: None,
+                            required_capability: Some(era_runtime_protocol::RequiredCapability {
+                                kind: ServiceKind::Image,
+                                operation: IMAGE_METADATA_OPERATION.into(),
+                                version: IMAGE_METADATA_OPERATION_VERSION,
+                            }),
+                        },
+                    )),
                     code: "runtime.missing_image_metadata_service".into(),
                     level: RuntimeLogLevel::Error,
                     message:
@@ -135,6 +223,15 @@ impl RuntimeSession {
         previous_phase: RuntimePhase,
         replay_origin: Option<ReplayOrigin>,
     ) -> Result<(), RuntimeError> {
+        if !self.operations.html_lines.is_empty() {
+            return self.reject_incompatible_project_reload(
+                message_id,
+                build,
+                previous_phase,
+                "ActiveBlocks: project reload cannot cross an active HTML_STRINGLINES expression"
+                    .into(),
+            );
+        }
         let target = build
             .artifact
             .take()
@@ -159,6 +256,7 @@ impl RuntimeSession {
         build.incremental.compact();
         self.incremental = Arc::new(build.incremental);
         self.project_snapshot = build.snapshot;
+        self.bitmap_cache_notice_emitted = false;
         if let (Some(snapshot), Some(preferences)) =
             (&mut self.project_snapshot, &self.client_preferences)
         {
@@ -170,6 +268,10 @@ impl RuntimeSession {
             .iter()
             .filter(|diagnostic| !diagnostic.code.starts_with("runtime.compiled_cache_"))
             .cloned()
+            .map(|mut diagnostic| {
+                crate::compatibility::clear_diagnostic_scope(&mut diagnostic);
+                diagnostic
+            })
             .collect();
         self.compiled_project_cache = None;
         self.compiled_cache_task = None;
@@ -200,6 +302,21 @@ impl RuntimeSession {
             );
         }
         self.sync_resource_replay();
+        self.rebind_reloaded_inputs();
+        self.invalidate_input_undo(Some(
+            "successful bytecode hot reload invalidated the Ctrl-Z checkpoint",
+        ))?;
+        if let Some(origin) = replay_origin {
+            self.install_input_replay(origin);
+        }
+        let generation = self.vm.as_ref().map(|vm| vm.current_generation().0);
+        self.emit_committed_project_report(message_id, build.report, generation)?;
+        self.set_phase(previous_phase)?;
+        self.renew_debug_grant()?;
+        self.emit_presentation()
+    }
+
+    fn rebind_reloaded_inputs(&mut self) {
         let new_epoch = self.epoch.0.saturating_add(1);
         let (tokens, waits) = self.operations.rebind_stable_inputs(
             new_epoch,
@@ -218,19 +335,6 @@ impl RuntimeSession {
         self.epoch = SessionEpoch(new_epoch);
         self.accepted_message_ids.clear();
         self.accepted_debug_message_ids.clear();
-        self.invalidate_input_undo(Some(
-            "successful bytecode hot reload invalidated the Ctrl-Z checkpoint",
-        ))?;
-        if let Some(origin) = replay_origin {
-            self.install_input_replay(origin);
-        }
-        self.emit(
-            RuntimeMessage::ProjectLoadReport(build.report),
-            Some(message_id),
-        )?;
-        self.set_phase(previous_phase)?;
-        self.renew_debug_grant()?;
-        self.emit_presentation()
     }
 
     fn reject_incompatible_project_reload(
@@ -460,9 +564,11 @@ fn report_project_progress_boundary(
 
 pub(super) fn project_payload_required_report(project_revision: u64) -> ProjectLoadReport {
     ProjectLoadReport {
+        compatibility: None,
         project_revision,
         success: false,
         diagnostics: vec![ProtocolDiagnostic {
+            context: None,
             code: "runtime.project_payload_required".into(),
             level: RuntimeLogLevel::Info,
             message: "compiled cache is missing or does not match the project".into(),
@@ -483,10 +589,11 @@ fn exact_cached_project(
     Arc::make_mut(&mut exact.snapshot.manifest).project_revision = project_revision;
     exact.snapshot.configuration_profile = configuration_profile;
     for diagnostic in &mut exact.diagnostics {
+        crate::compatibility::clear_diagnostic_scope(diagnostic);
         diagnostic.notification = crate::project::project_diagnostic_notification(diagnostic.level);
-        diagnostic.message = format!("[cached] {}", diagnostic.message);
     }
     exact.diagnostics.push(ProtocolDiagnostic {
+        context: None,
         code: "runtime.compiled_cache_hit".into(),
         level: RuntimeLogLevel::Debug,
         message: "loaded the exact compiled project cache".into(),
@@ -498,6 +605,7 @@ fn exact_cached_project(
         artifact: Some(exact.artifact),
         incremental: exact.incremental,
         report: ProjectLoadReport {
+            compatibility: Some(exact.snapshot.manifest.compatibility.clone()),
             project_revision,
             success: true,
             diagnostics: exact.diagnostics,

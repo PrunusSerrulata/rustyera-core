@@ -35,11 +35,17 @@ impl VmValue {
     }
 }
 
+/// Opaque VM-issued array capability. Deserialization alone does not authorize it:
+/// live capture/alias provenance is checked before access or Host writeback.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct ArrayBackingId(pub(crate) u64);
+
 /// A place is opaque to the host. It can only be returned in a [`HostWrite`](crate::HostWrite),
 /// where the VM validates its variable, frame, character and indices again.
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct PlaceDescriptor {
     pub variable: SymbolKey,
+    pub backing: Option<ArrayBackingId>,
     pub indices: Vec<u64>,
     pub character: Option<u64>,
     pub fiber: Option<FiberId>,

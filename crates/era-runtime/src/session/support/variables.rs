@@ -279,16 +279,68 @@ pub(in super::super) fn apply_upcheck(
     Ok(lines)
 }
 
+/// Access to trusted source argument presence. Slice-only static callers keep their
+/// existing behavior; dynamic requests distinguish omission from a real Integer MIN.
+pub(in super::super) trait HostArgumentValues {
+    fn argument(&self, index: usize) -> Option<&VmValue>;
+    fn source_omitted(&self, _index: usize) -> bool {
+        false
+    }
+}
+impl HostArgumentValues for [VmValue] {
+    fn argument(&self, index: usize) -> Option<&VmValue> {
+        self.get(index)
+    }
+}
+impl HostArgumentValues for Vec<VmValue> {
+    fn argument(&self, index: usize) -> Option<&VmValue> {
+        self.get(index)
+    }
+}
+impl<const N: usize> HostArgumentValues for [VmValue; N] {
+    fn argument(&self, index: usize) -> Option<&VmValue> {
+        self.get(index)
+    }
+}
+impl HostArgumentValues for VmHostRequest {
+    fn argument(&self, index: usize) -> Option<&VmValue> {
+        VmHostRequest::argument(self, index)
+    }
+    fn source_omitted(&self, index: usize) -> bool {
+        self.omitted_arguments.binary_search(&index).is_ok()
+    }
+}
+fn missing_host_argument(
+    arguments: &(impl HostArgumentValues + ?Sized),
+    index: usize,
+    message: String,
+) -> RuntimeError {
+    if arguments.source_omitted(index) {
+        // Classified at the actual required getter; optional consumers use argument()
+        // and their operation-specific defaults instead of this failure constructor.
+        RuntimeError::Script {
+            kind: erabasic_vm::ScriptFaultKind::Operation,
+            message: format!(
+                "source argument {} is null at a required Host getter",
+                index + 1
+            ),
+        }
+    } else {
+        RuntimeError::Internal(message)
+    }
+}
+
 pub(in super::super) fn integer_argument_value(
-    arguments: &[VmValue],
+    arguments: &(impl HostArgumentValues + ?Sized),
     index: usize,
 ) -> Result<i64, RuntimeError> {
-    match arguments.get(index) {
+    match arguments.argument(index) {
         Some(VmValue::Integer(value)) => Ok(*value),
-        _ => Err(RuntimeError::Internal(format!(
-            "host argument {} must be integer",
-            index + 1
-        ))),
+        _ => Err(missing_host_argument(
+            arguments,
+            index,
+            format!("host argument {} must be integer", index + 1),
+        )),
     }
 }
 
@@ -317,14 +369,15 @@ pub(in super::super) fn vm_place(value: &VmValue) -> Option<PlaceDescriptor> {
 }
 
 pub(in super::super) fn i32_argument_value(
-    arguments: &[VmValue],
+    arguments: &(impl HostArgumentValues + ?Sized),
     index: usize,
 ) -> Result<i32, RuntimeError> {
-    i32::try_from(integer_argument_value(arguments, index)?).map_err(|_| {
-        RuntimeError::Internal(format!(
+    i32::try_from(integer_argument_value(arguments, index)?).map_err(|_| RuntimeError::Script {
+        kind: erabasic_vm::ScriptFaultKind::Bounds,
+        message: format!(
             "host argument {} must fit a signed 32-bit drawing coordinate",
             index + 1
-        ))
+        ),
     })
 }
 
@@ -332,9 +385,25 @@ pub(in super::super) fn checked_argb(value: i64) -> Result<i64, RuntimeError> {
     if (0..=i64::from(u32::MAX)).contains(&value) {
         Ok(value)
     } else {
-        Err(RuntimeError::Internal(
-            "graphics ARGB value must fit an unsigned 32-bit value".into(),
-        ))
+        Err(RuntimeError::Script {
+            kind: erabasic_vm::ScriptFaultKind::Argument,
+            message: "graphics ARGB value must fit an unsigned 32-bit value".into(),
+        })
+    }
+}
+
+// Preserve only a VM failure whose source category was already established by
+// a trusted read. Implicit storage/type/state failures cannot choose Script by text/code.
+pub(in super::super) fn runtime_script_read_error(error: erabasic_vm::VmError) -> RuntimeError {
+    match error {
+        erabasic_vm::VmError::ScriptFailure(failure) => match failure.category {
+            erabasic_vm::FaultCategory::Script(kind) => RuntimeError::Script {
+                kind,
+                message: failure.message,
+            },
+            _ => RuntimeError::Internal(failure.to_string()),
+        },
+        error => RuntimeError::Internal(error.to_string()),
     }
 }
 
@@ -353,27 +422,71 @@ pub(in super::super) fn read_color_matrix(
             "graphics color matrix must have at least two dimensions".into(),
         ));
     }
+    read_color_matrix_place(vm, fiber, &mut place).map(|matrix| matrix.to_vec())
+}
+
+fn read_color_matrix_place(
+    vm: &RuntimeVm,
+    fiber: erabasic_vm::FiberId,
+    place: &mut PlaceDescriptor,
+) -> Result<[i64; 25], RuntimeError> {
     let row = place.indices.len() - 2;
     let column = place.indices.len() - 1;
     let base_row = place.indices[row];
     let base_column = place.indices[column];
-    let mut matrix = Vec::with_capacity(25);
+    let mut matrix = [0_i64; 25];
     for y in 0..5 {
         for x in 0..5 {
-            place.indices[row] = base_row.saturating_add(y);
-            place.indices[column] = base_column.saturating_add(x);
+            place.indices[row] = base_row.checked_add(y).ok_or_else(|| {
+                RuntimeError::Internal("graphics color matrix row index overflowed".into())
+            })?;
+            place.indices[column] = base_column.checked_add(x).ok_or_else(|| {
+                RuntimeError::Internal("graphics color matrix column index overflowed".into())
+            })?;
             let VmValue::Integer(value) = vm
-                .read_host_place(fiber, &place)
-                .map_err(|error| RuntimeError::Internal(error.to_string()))?
+                .read_host_place(fiber, place)
+                .map_err(runtime_script_read_error)?
             else {
                 return Err(RuntimeError::Internal(
                     "graphics color matrix contains a non-integer value".into(),
                 ));
             };
-            matrix.push(value);
+            matrix[usize::try_from(y * 5 + x).expect("5x5 matrix index fits usize")] = value;
         }
     }
     Ok(matrix)
+}
+
+pub(in super::super) fn read_named_color_matrix(
+    vm: &RuntimeVm,
+    fiber: erabasic_vm::FiberId,
+    name: &str,
+    origin: [u64; 3],
+) -> Option<Box<[i64; 25]>> {
+    let global = vm.vm().global_by_name(name)?;
+    if global.value_type != erabasic_bytecode::BytecodeType::Integer {
+        return None;
+    }
+    let (character, indices) = match (global.storage, global.dimensions.len()) {
+        (erabasic_bytecode::BytecodeStorage::Character, 2) => {
+            (Some(origin[0]), vec![origin[1], origin[2]])
+        }
+        (erabasic_bytecode::BytecodeStorage::Character, _) => return None,
+        (_, 2) => (None, vec![origin[0], origin[1]]),
+        (_, 3) => (None, origin.to_vec()),
+        _ => return None,
+    };
+    let mut place = PlaceDescriptor {
+        variable: global.key,
+        backing: None,
+        indices,
+        character,
+        fiber: None,
+        frame: None,
+    };
+    read_color_matrix_place(vm, fiber, &mut place)
+        .ok()
+        .map(Box::new)
 }
 
 pub(in super::super) fn integer_value_or_zero(value: &VmValue) -> i64 {
@@ -384,21 +497,22 @@ pub(in super::super) fn integer_value_or_zero(value: &VmValue) -> i64 {
 }
 
 pub(in super::super) fn string_argument_value<'a>(
-    arguments: &'a [VmValue],
+    arguments: &'a (impl HostArgumentValues + ?Sized),
     index: usize,
     command: &str,
 ) -> Result<&'a str, RuntimeError> {
-    match arguments.get(index) {
+    match arguments.argument(index) {
         Some(VmValue::String(value)) => Ok(value),
-        _ => Err(RuntimeError::Internal(format!(
-            "{command} argument {} must be string",
-            index + 1
-        ))),
+        _ => Err(missing_host_argument(
+            arguments,
+            index,
+            format!("{command} argument {} must be string", index + 1),
+        )),
     }
 }
 
 pub(in super::super) fn save_slot_argument(
-    arguments: &[VmValue],
+    arguments: &(impl HostArgumentValues + ?Sized),
     index: usize,
     command: &str,
 ) -> Result<u32, RuntimeError> {
@@ -554,7 +668,7 @@ pub(in super::super) fn read_runtime_integer(
             indices: indices.to_vec(),
             character,
         }])
-        .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        .map_err(runtime_script_read_error)?;
     match values.as_slice() {
         [VmValue::Integer(value)] => Ok(*value),
         _ => Err(RuntimeError::Internal(format!(

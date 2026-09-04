@@ -404,6 +404,16 @@ impl LegacyEncoding {
     }
 }
 
+/// Exact raw character-name reverse indexes, built before CALLNAME fallback.
+/// Missing name fields are absent; explicitly empty fields retain the empty key.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CharacterNameLookup {
+    pub names: BTreeMap<String, i64>,
+    pub call_names: BTreeMap<String, i64>,
+    pub nick_names: BTreeMap<String, i64>,
+    pub master_names: BTreeMap<String, i64>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProjectStaticData {
     pub legacy_encoding: LegacyEncoding,
@@ -411,6 +421,7 @@ pub struct ProjectStaticData {
     pub name_tables: BTreeMap<NameTableKind, NameTable>,
     pub item_prices: Vec<i64>,
     pub characters: Vec<CharacterTemplate>,
+    pub character_name_lookup: CharacterNameLookup,
     pub relation_lookup: BTreeMap<String, i64>,
     pub extensions: ExtensionData,
     /// Keys include the `[[...]]` delimiters because that is the exact lookup form used

@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+erabasic-ast = { path = "../erabasic-ast" }
+erabasic-compat = { path = "../erabasic-compat" }
 blake3.workspace = true
 erabasic-data = { path = "../erabasic-data" }
 erabasic-hir = { path = "../erabasic-hir" }

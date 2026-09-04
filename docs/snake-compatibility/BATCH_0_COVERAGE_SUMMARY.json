@@ -1,0 +1,593 @@
+{
+  "version": 1,
+  "kind": "batch0_actual_coverage_summary",
+  "validation": "complete JSON streaming parse, every row and diagnostic/API reference, UTF-8 raw spans, counts and EOF",
+  "compatibility_claim": false,
+  "reports": [
+    {
+      "report": "batch-0-work/results/coverage-eraAkumaMaid-emuera-em.json.gz",
+      "validation": "batch-0-work/validation/coverage-initial-stream-validation.json",
+      "compressed_bytes": 24428759,
+      "compressed_sha256": "d4fbcdb2fc7f5f7ae3099457f9b4d23e6fc1839d6a3df673ede58aae9abd8a28",
+      "uncompressed_sha256": "000f5afeadbc8399424a5f222fbeb68b8d6bbb802fd5408f15d7a023f5570e00",
+      "tool_revision": {
+        "dirty_entries": [
+          " M docs/snake-compatibility/SNAKE_EMUERA_BASELINE_MIGRATION_CLASSIFICATION.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_MIGRATION_PLAN.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_TW_RUSTYERA_COMPATIBILITY_RESEARCH.md",
+          " M tools/runtime-tester/COMPATIBILITY_AUDIT.md",
+          " M tools/runtime-tester/src/coverage.rs",
+          " M tools/runtime-tester/src/coverage/pipeline.rs",
+          " M tools/runtime-tester/src/coverage/scan.rs",
+          " M tools/snake-compatibility-oracle/comparison.py",
+          " M tools/snake-compatibility-oracle/run.py",
+          " M tools/snake-compatibility-oracle/test_driver.py",
+          "?? tools/runtime-tester/src/coverage/report.rs",
+          "?? tools/snake-compatibility-oracle/recompare.py"
+        ],
+        "sha": "8862fa957f67bae553cb8e30fa349b113745aa3f",
+        "tracked_patch_blake3": "02ce464515c34a8af8d26af138801770e828f96089a4098af605f41022da3c9e",
+        "untracked_blake3": {
+          "tools/runtime-tester/src/coverage/report.rs": "41cc4286a5a9884cbf59f792dad03b86b94f60ed425af273c97be07926d5d82f",
+          "tools/snake-compatibility-oracle/recompare.py": "0d4ddeb8c49b6d9e5ac9b0fe02ec22c032cb021cce1c4cfce4ab6d2744346d3b"
+        }
+      },
+      "analysis_identity": {
+        "arithmetic": "wrapping_i64_v1",
+        "layout": "unicode_column_v1",
+        "policy_version": 1,
+        "profile": "emuera.em",
+        "rng_algorithm": "sfmt19937",
+        "rng_state_version": 1,
+        "save_codec": "emuera1808",
+        "semantic_version": 1,
+        "services": []
+      },
+      "configuration_valid": true,
+      "input_errors": 0,
+      "inputs": 730,
+      "content_hash": "8eaf605d4158a2d84959e19c9ae1ffa84f855a581d1166f11e1ee3551f861f78",
+      "inventory_files": 2614,
+      "parser_diagnostics": 0,
+      "csv": "diagnostic_errors",
+      "analyzer": "diagnostic_errors",
+      "compiler": "blocked_by_load_diagnostics",
+      "artifact_produced": false,
+      "diagnostics": 186,
+      "profile_override": "emuera.em",
+      "project": "eraAkumaMaid",
+      "rows": 775680,
+      "api_count": 592,
+      "span_status": {
+        "valid_decoded_utf8": 765594,
+        "invalid_parser_span": 10086
+      },
+      "status_counts": {
+        "analyzer": {
+          "unverified_due_to_project_errors": 757333,
+          "unverified": 17992,
+          "unknown": 323,
+          "rejected": 32
+        },
+        "compiler": {
+          "blocked": 757662,
+          "unverified": 18018
+        }
+      }
+    },
+    {
+      "report": "batch-0-work/results/coverage-eraMaouEx-emuera-em.json.gz",
+      "validation": "batch-0-work/validation/coverage-eraMaouEx-stream-validation.json",
+      "compressed_bytes": 9054847,
+      "compressed_sha256": "ec14b84e5ccf555c129beac969e9b6f0a2327b45a26476564bd7c91f06826852",
+      "uncompressed_sha256": "24714045618252a979febf1f4287d261bd7246feda9bef81761f5e3f32116f9d",
+      "tool_revision": {
+        "dirty_entries": [
+          " M docs/snake-compatibility/SNAKE_EMUERA_BASELINE_MIGRATION_CLASSIFICATION.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_MIGRATION_PLAN.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_TW_RUSTYERA_COMPATIBILITY_RESEARCH.md"
+        ],
+        "sha": "5b2c31cf861a25e6e3f650d885eeb315f3a5e901",
+        "tracked_patch_blake3": "4a7f76a48f71c482a24063e50c204e02030cd81221315befd9ec561b0cb70bf5",
+        "untracked_blake3": {}
+      },
+      "analysis_identity": {
+        "arithmetic": "wrapping_i64_v1",
+        "layout": "unicode_column_v1",
+        "policy_version": 1,
+        "profile": "emuera.em",
+        "rng_algorithm": "sfmt19937",
+        "rng_state_version": 1,
+        "save_codec": "emuera1808",
+        "semantic_version": 1,
+        "services": []
+      },
+      "configuration_valid": true,
+      "input_errors": 2,
+      "inputs": 383,
+      "content_hash": "d46bb8b70f20ae3790c02710e4f20c8bfc75a6ed96fb59d395a9b4cdf2caf66f",
+      "inventory_files": 399,
+      "parser_diagnostics": 0,
+      "csv": "diagnostic_errors",
+      "analyzer": "diagnostic_errors",
+      "compiler": "blocked_by_incomplete_input",
+      "artifact_produced": false,
+      "diagnostics": 407,
+      "profile_override": "emuera.em",
+      "project": "eraMaouEx",
+      "rows": 324990,
+      "api_count": 223,
+      "span_status": {
+        "valid_decoded_utf8": 324987,
+        "invalid_parser_span": 3
+      },
+      "status_counts": {
+        "analyzer": {
+          "unverified_due_to_project_errors": 319679,
+          "unverified": 4941,
+          "rejected": 324,
+          "unknown": 46
+        },
+        "compiler": {
+          "blocked": 320045,
+          "unverified": 4945
+        }
+      }
+    },
+    {
+      "report": "batch-0-work/results/coverage-eraTW-emuera-em.json.gz",
+      "validation": "batch-0-work/validation/coverage-eraTW-stream-validation.json",
+      "compressed_bytes": 54795537,
+      "compressed_sha256": "8cf3b40b708f717355462a990f9c9e86cfb3f3db651e291814cd7603c7361a4e",
+      "uncompressed_sha256": "6e7e13dc6bc9146ef7c08234e9654b3f603cd362133f3d986befc3b57640cbbc",
+      "tool_revision": {
+        "dirty_entries": [
+          " M docs/snake-compatibility/SNAKE_EMUERA_BASELINE_MIGRATION_CLASSIFICATION.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_MIGRATION_PLAN.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_TW_RUSTYERA_COMPATIBILITY_RESEARCH.md"
+        ],
+        "sha": "5b2c31cf861a25e6e3f650d885eeb315f3a5e901",
+        "tracked_patch_blake3": "4a7f76a48f71c482a24063e50c204e02030cd81221315befd9ec561b0cb70bf5",
+        "untracked_blake3": {}
+      },
+      "analysis_identity": {
+        "arithmetic": "wrapping_i64_v1",
+        "layout": "unicode_column_v1",
+        "policy_version": 1,
+        "profile": "emuera.em",
+        "rng_algorithm": "sfmt19937",
+        "rng_state_version": 1,
+        "save_codec": "emuera1808",
+        "semantic_version": 1,
+        "services": []
+      },
+      "configuration_valid": true,
+      "input_errors": 0,
+      "inputs": 2430,
+      "content_hash": "42edad57dc74aa214ba7cf5a3bd6a627ff69f5f9109f6bfb62c8ae965e73fc27",
+      "inventory_files": 3406,
+      "parser_diagnostics": 3,
+      "csv": "accepted",
+      "analyzer": "diagnostic_errors",
+      "compiler": "blocked_by_load_diagnostics",
+      "artifact_produced": false,
+      "diagnostics": 2173,
+      "profile_override": "emuera.em",
+      "project": "eraTW",
+      "rows": 1673134,
+      "api_count": 1568,
+      "span_status": {
+        "valid_decoded_utf8": 1672552,
+        "invalid_parser_span": 582
+      },
+      "status_counts": {
+        "analyzer": {
+          "unverified_due_to_project_errors": 1639754,
+          "unverified": 31146,
+          "rejected": 1635,
+          "unknown": 599
+        },
+        "compiler": {
+          "blocked": 1641488,
+          "unverified": 31646
+        }
+      }
+    },
+    {
+      "report": "batch-0-work/results/coverage-erafl-emuera-em.json.gz",
+      "validation": "batch-0-work/validation/coverage-erafl-stream-validation.json",
+      "compressed_bytes": 13067463,
+      "compressed_sha256": "a5f609e42a8bd0d902e61611eb54c4e5ced563ceb38bc17ac38fb1405a301d02",
+      "uncompressed_sha256": "17a87c2c79ae0f67400dd4e4211071ee4fb987cd6fca80df81c5b27266168794",
+      "tool_revision": {
+        "dirty_entries": [
+          " M docs/snake-compatibility/SNAKE_EMUERA_BASELINE_MIGRATION_CLASSIFICATION.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_MIGRATION_PLAN.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_TW_RUSTYERA_COMPATIBILITY_RESEARCH.md",
+          "?? docs/snake-compatibility/BATCH_0_BASELINE_SUMMARY.json",
+          "?? docs/snake-compatibility/BATCH_0_ORACLE_RESULTS.md"
+        ],
+        "sha": "5b2c31cf861a25e6e3f650d885eeb315f3a5e901",
+        "tracked_patch_blake3": "4a7f76a48f71c482a24063e50c204e02030cd81221315befd9ec561b0cb70bf5",
+        "untracked_blake3": {
+          "docs/snake-compatibility/BATCH_0_BASELINE_SUMMARY.json": "f3515e47244d7f94e8de36c1e0f6d30f42485ad2f94220bcff722927032e4747",
+          "docs/snake-compatibility/BATCH_0_ORACLE_RESULTS.md": "9b94f6cded04be0fd2a33da1d0e89b1264582752162d22072c610145316ac57d"
+        }
+      },
+      "analysis_identity": {
+        "arithmetic": "wrapping_i64_v1",
+        "layout": "unicode_column_v1",
+        "policy_version": 1,
+        "profile": "emuera.em",
+        "rng_algorithm": "sfmt19937",
+        "rng_state_version": 1,
+        "save_codec": "emuera1808",
+        "semantic_version": 1,
+        "services": []
+      },
+      "configuration_valid": true,
+      "input_errors": 0,
+      "inputs": 2128,
+      "content_hash": "37a7b8182d39678b7a27a9c5c31a7aa490af438dc9cb554805a873d115551563",
+      "inventory_files": 3330,
+      "parser_diagnostics": 753,
+      "csv": "accepted",
+      "analyzer": "diagnostic_errors",
+      "compiler": "blocked_by_load_diagnostics",
+      "artifact_produced": false,
+      "diagnostics": 5375,
+      "profile_override": "emuera.em",
+      "project": "erafl",
+      "rows": 390266,
+      "api_count": 1171,
+      "span_status": {
+        "valid_decoded_utf8": 387735,
+        "invalid_parser_span": 2531
+      },
+      "status_counts": {
+        "analyzer": {
+          "unknown": 2719,
+          "unverified_due_to_project_errors": 367011,
+          "unverified": 17407,
+          "rejected": 3129
+        },
+        "compiler": {
+          "unverified": 17526,
+          "blocked": 372740
+        }
+      }
+    },
+    {
+      "report": "batch-0-work/results/coverage-erarorona-emuera-em.json.gz",
+      "validation": "batch-0-work/validation/coverage-erarorona-stream-validation.json",
+      "compressed_bytes": 4824162,
+      "compressed_sha256": "bc9a3653d922d3be46a18a7c28c92b41dcb819ccd2517350dce5b5420419c3fc",
+      "uncompressed_sha256": "e94a1478a26be37818d312e91c467679dc3cafc6d2da61e72f7e625194851ff3",
+      "tool_revision": {
+        "dirty_entries": [
+          " M docs/snake-compatibility/SNAKE_EMUERA_BASELINE_MIGRATION_CLASSIFICATION.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_MIGRATION_PLAN.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_TW_RUSTYERA_COMPATIBILITY_RESEARCH.md",
+          "?? docs/snake-compatibility/BATCH_0_BASELINE_SUMMARY.json",
+          "?? docs/snake-compatibility/BATCH_0_ORACLE_RESULTS.md"
+        ],
+        "sha": "5b2c31cf861a25e6e3f650d885eeb315f3a5e901",
+        "tracked_patch_blake3": "1ca148fa75d535a1ad595084a55856d85a6d5fae079db52a7bc8a0102f098ced",
+        "untracked_blake3": {
+          "docs/snake-compatibility/BATCH_0_BASELINE_SUMMARY.json": "f3515e47244d7f94e8de36c1e0f6d30f42485ad2f94220bcff722927032e4747",
+          "docs/snake-compatibility/BATCH_0_ORACLE_RESULTS.md": "9b94f6cded04be0fd2a33da1d0e89b1264582752162d22072c610145316ac57d"
+        }
+      },
+      "analysis_identity": {
+        "arithmetic": "wrapping_i64_v1",
+        "layout": "unicode_column_v1",
+        "policy_version": 1,
+        "profile": "emuera.em",
+        "rng_algorithm": "sfmt19937",
+        "rng_state_version": 1,
+        "save_codec": "emuera1808",
+        "semantic_version": 1,
+        "services": []
+      },
+      "configuration_valid": true,
+      "input_errors": 0,
+      "inputs": 1686,
+      "content_hash": "0f5958d3faa776108afd5adb7fa320e71e4d861ebab4f45f9909c4e894410ece",
+      "inventory_files": 2013,
+      "parser_diagnostics": 42,
+      "csv": "accepted",
+      "analyzer": "diagnostic_errors",
+      "compiler": "blocked_by_load_diagnostics",
+      "artifact_produced": false,
+      "diagnostics": 40,
+      "profile_override": "emuera.em",
+      "project": "erarorona",
+      "rows": 77215,
+      "api_count": 644,
+      "span_status": {
+        "valid_decoded_utf8": 76882,
+        "invalid_parser_span": 333
+      },
+      "status_counts": {
+        "analyzer": {
+          "unverified_due_to_project_errors": 70111,
+          "unverified": 6858,
+          "unknown": 219,
+          "rejected": 27
+        },
+        "compiler": {
+          "blocked": 70189,
+          "unverified": 7026
+        }
+      }
+    },
+    {
+      "report": "batch-0-work/results/coverage-eratohoK-emuera-em.json.gz",
+      "validation": "batch-0-work/validation/coverage-eratohoK-stream-validation.json",
+      "compressed_bytes": 29421117,
+      "compressed_sha256": "36521e2120d7c4de2f5e711c3a9e44287d5e39b0d30167a99054efbcb5bd54c3",
+      "uncompressed_sha256": "1f39827e1b4c1678b3668fcf5b0056466dff7d01496afc8a90c1731e61e6f01f",
+      "tool_revision": {
+        "dirty_entries": [
+          " M docs/snake-compatibility/SNAKE_EMUERA_BASELINE_MIGRATION_CLASSIFICATION.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_MIGRATION_PLAN.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_TW_RUSTYERA_COMPATIBILITY_RESEARCH.md",
+          "?? docs/snake-compatibility/BATCH_0_BASELINE_SUMMARY.json",
+          "?? docs/snake-compatibility/BATCH_0_ORACLE_RESULTS.md"
+        ],
+        "sha": "5b2c31cf861a25e6e3f650d885eeb315f3a5e901",
+        "tracked_patch_blake3": "1ca148fa75d535a1ad595084a55856d85a6d5fae079db52a7bc8a0102f098ced",
+        "untracked_blake3": {
+          "docs/snake-compatibility/BATCH_0_BASELINE_SUMMARY.json": "f3515e47244d7f94e8de36c1e0f6d30f42485ad2f94220bcff722927032e4747",
+          "docs/snake-compatibility/BATCH_0_ORACLE_RESULTS.md": "9b94f6cded04be0fd2a33da1d0e89b1264582752162d22072c610145316ac57d"
+        }
+      },
+      "analysis_identity": {
+        "arithmetic": "wrapping_i64_v1",
+        "layout": "unicode_column_v1",
+        "policy_version": 1,
+        "profile": "emuera.em",
+        "rng_algorithm": "sfmt19937",
+        "rng_state_version": 1,
+        "save_codec": "emuera1808",
+        "semantic_version": 1,
+        "services": []
+      },
+      "configuration_valid": true,
+      "input_errors": 0,
+      "inputs": 2757,
+      "content_hash": "6d123809a539f3ca912ef854ccc6f68a24294625a6d367a2af5df2a60c97a4c6",
+      "inventory_files": 3290,
+      "parser_diagnostics": 6,
+      "csv": "accepted",
+      "analyzer": "diagnostic_errors",
+      "compiler": "blocked_by_load_diagnostics",
+      "artifact_produced": false,
+      "diagnostics": 3381,
+      "profile_override": "emuera.em",
+      "project": "eratohoK",
+      "rows": 1073769,
+      "api_count": 731,
+      "span_status": {
+        "valid_decoded_utf8": 1072991,
+        "invalid_parser_span": 778
+      },
+      "status_counts": {
+        "analyzer": {
+          "unverified_due_to_project_errors": 1056938,
+          "unverified": 13828,
+          "rejected": 2715,
+          "unknown": 288
+        },
+        "compiler": {
+          "blocked": 1059877,
+          "unverified": 13892
+        }
+      }
+    },
+    {
+      "report": "batch-0-work/results/coverage-eratw-sub-emuera-em-r3.json.gz",
+      "validation": "batch-0-work/validation/coverage-initial-stream-validation.json",
+      "compressed_bytes": 120929434,
+      "compressed_sha256": "44fcc1eeb1a52bef37829a954cc937dc6a793eb247477d884b9d5bbd570c0d9a",
+      "uncompressed_sha256": "11e21420aa6b8477f8c725e3a7eb7b66b188107ba9533a44a5995eeff317b195",
+      "tool_revision": {
+        "dirty_entries": [
+          " M docs/snake-compatibility/SNAKE_EMUERA_BASELINE_MIGRATION_CLASSIFICATION.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_MIGRATION_PLAN.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_TW_RUSTYERA_COMPATIBILITY_RESEARCH.md",
+          " M tools/runtime-tester/COMPATIBILITY_AUDIT.md",
+          " M tools/runtime-tester/src/coverage.rs",
+          " M tools/runtime-tester/src/coverage/pipeline.rs",
+          " M tools/runtime-tester/src/coverage/scan.rs",
+          " M tools/snake-compatibility-oracle/run.py",
+          " M tools/snake-compatibility-oracle/test_driver.py",
+          "?? tools/runtime-tester/src/coverage/report.rs"
+        ],
+        "sha": "8862fa957f67bae553cb8e30fa349b113745aa3f",
+        "tracked_patch_blake3": "5a250492a9e07198a0ee86a78508263ddc2e8d0948b699bccaedbe06ebc77a0e",
+        "untracked_blake3": {
+          "tools/runtime-tester/src/coverage/report.rs": "41cc4286a5a9884cbf59f792dad03b86b94f60ed425af273c97be07926d5d82f"
+        }
+      },
+      "analysis_identity": {
+        "arithmetic": "wrapping_i64_v1",
+        "layout": "unicode_column_v1",
+        "policy_version": 1,
+        "profile": "emuera.em",
+        "rng_algorithm": "sfmt19937",
+        "rng_state_version": 1,
+        "save_codec": "emuera1808",
+        "semantic_version": 1,
+        "services": []
+      },
+      "configuration_valid": true,
+      "input_errors": 0,
+      "inputs": 4328,
+      "content_hash": "9e06614d965c0454a95770c9870842c48bfec8a8f7e7766f9e79590010a52862",
+      "inventory_files": 16662,
+      "parser_diagnostics": 6,
+      "csv": "accepted",
+      "analyzer": "diagnostic_errors",
+      "compiler": "blocked_by_load_diagnostics",
+      "artifact_produced": false,
+      "diagnostics": 8680,
+      "profile_override": "emuera.em",
+      "project": "eratw-sub-modding",
+      "rows": 3310758,
+      "api_count": 3216,
+      "span_status": {
+        "valid_decoded_utf8": 3306562,
+        "invalid_parser_span": 4196
+      },
+      "status_counts": {
+        "analyzer": {
+          "unverified_due_to_project_errors": 3210315,
+          "unverified": 89838,
+          "unknown": 2352,
+          "rejected": 8253
+        },
+        "compiler": {
+          "blocked": 3219330,
+          "unverified": 91428
+        }
+      }
+    },
+    {
+      "report": "batch-0-work/results/coverage-eratw-sub-emuera-skia-snake.json.gz",
+      "validation": "batch-0-work/validation/coverage-eratw-sub-snake-stream-validation.json",
+      "compressed_bytes": 120929476,
+      "compressed_sha256": "495106b5e592e68a3c76c3d1ffaff9e0faf898a6274724d2490f99f766b677c5",
+      "uncompressed_sha256": "dfc6eef2be0e8af9d7ab93e7c7eccb0b9f5f16c4de2999bfdb213372a5cc69dd",
+      "tool_revision": {
+        "dirty_entries": [
+          " M docs/snake-compatibility/SNAKE_EMUERA_BASELINE_MIGRATION_CLASSIFICATION.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_MIGRATION_PLAN.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_TW_RUSTYERA_COMPATIBILITY_RESEARCH.md",
+          "?? docs/snake-compatibility/BATCH_0_BASELINE_SUMMARY.json",
+          "?? docs/snake-compatibility/BATCH_0_ORACLE_RESULTS.md"
+        ],
+        "sha": "5b2c31cf861a25e6e3f650d885eeb315f3a5e901",
+        "tracked_patch_blake3": "c961fee82594191fe9cf2b22dbeb962ecccdcbbde3b3a9570c85a0e9eee7396a",
+        "untracked_blake3": {
+          "docs/snake-compatibility/BATCH_0_BASELINE_SUMMARY.json": "f3515e47244d7f94e8de36c1e0f6d30f42485ad2f94220bcff722927032e4747",
+          "docs/snake-compatibility/BATCH_0_ORACLE_RESULTS.md": "9b94f6cded04be0fd2a33da1d0e89b1264582752162d22072c610145316ac57d"
+        }
+      },
+      "analysis_identity": {
+        "arithmetic": "wrapping_i64_v1",
+        "layout": "unicode_column_v1",
+        "policy_version": 1,
+        "profile": "emuera.skia.snake",
+        "rng_algorithm": "sfmt19937",
+        "rng_state_version": 1,
+        "save_codec": "rustyera_envelope_v1:emuera1808",
+        "semantic_version": 1,
+        "services": []
+      },
+      "configuration_valid": true,
+      "input_errors": 0,
+      "inputs": 4328,
+      "content_hash": "9e06614d965c0454a95770c9870842c48bfec8a8f7e7766f9e79590010a52862",
+      "inventory_files": 16662,
+      "parser_diagnostics": 6,
+      "csv": "accepted",
+      "analyzer": "diagnostic_errors",
+      "compiler": "blocked_by_load_diagnostics",
+      "artifact_produced": false,
+      "diagnostics": 8680,
+      "profile_override": "emuera.skia.snake",
+      "project": "eratw-sub-modding",
+      "rows": 3310758,
+      "api_count": 3216,
+      "span_status": {
+        "valid_decoded_utf8": 3306562,
+        "invalid_parser_span": 4196
+      },
+      "status_counts": {
+        "analyzer": {
+          "unverified_due_to_project_errors": 3210315,
+          "unverified": 89838,
+          "unknown": 2352,
+          "rejected": 8253
+        },
+        "compiler": {
+          "blocked": 3219330,
+          "unverified": 91428
+        }
+      }
+    },
+    {
+      "report": "batch-0-work/results/coverage-erafarm-emuera-em.json.gz",
+      "validation": "batch-0-work/validation/coverage-erafarm-stream-validation.json",
+      "compressed_bytes": 4056372,
+      "compressed_sha256": "bd24f3a91cb12e525d866442389c314f2f937d73b5e1b183b4c4099fd1207e2f",
+      "uncompressed_sha256": "adced49dede6b80d64f9775aa4daa3437b9462933c60bc927a82f5cca3ab7a3c",
+      "tool_revision": {
+        "dirty_entries": [
+          " M docs/snake-compatibility/SNAKE_EMUERA_BASELINE_MIGRATION_CLASSIFICATION.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_MIGRATION_PLAN.md",
+          " M docs/snake-compatibility/SNAKE_EMUERA_TW_RUSTYERA_COMPATIBILITY_RESEARCH.md",
+          "?? docs/snake-compatibility/BATCH_0_BASELINE_SUMMARY.json",
+          "?? docs/snake-compatibility/BATCH_0_ORACLE_RESULTS.md"
+        ],
+        "sha": "5b2c31cf861a25e6e3f650d885eeb315f3a5e901",
+        "tracked_patch_blake3": "c961fee82594191fe9cf2b22dbeb962ecccdcbbde3b3a9570c85a0e9eee7396a",
+        "untracked_blake3": {
+          "docs/snake-compatibility/BATCH_0_BASELINE_SUMMARY.json": "f3515e47244d7f94e8de36c1e0f6d30f42485ad2f94220bcff722927032e4747",
+          "docs/snake-compatibility/BATCH_0_ORACLE_RESULTS.md": "9b94f6cded04be0fd2a33da1d0e89b1264582752162d22072c610145316ac57d"
+        }
+      },
+      "analysis_identity": {
+        "arithmetic": "wrapping_i64_v1",
+        "layout": "unicode_column_v1",
+        "policy_version": 1,
+        "profile": "emuera.em",
+        "rng_algorithm": "sfmt19937",
+        "rng_state_version": 1,
+        "save_codec": "emuera1808",
+        "semantic_version": 1,
+        "services": []
+      },
+      "configuration_valid": true,
+      "input_errors": 0,
+      "inputs": 942,
+      "content_hash": "18c7f0eca682dfcd00196e90d65fbd41e776e05a8e3eaa21afa36af776807a72",
+      "inventory_files": 1448,
+      "parser_diagnostics": 0,
+      "csv": "diagnostic_errors",
+      "analyzer": "accepted",
+      "compiler": "blocked_by_load_diagnostics",
+      "artifact_produced": false,
+      "diagnostics": 15,
+      "profile_override": "emuera.em",
+      "project": "era魔界牧場1.050_tc8",
+      "rows": 117939,
+      "api_count": 218,
+      "span_status": {
+        "valid_decoded_utf8": 111951,
+        "invalid_parser_span": 5988
+      },
+      "status_counts": {
+        "analyzer": {
+          "accepted_under_reported_audit_options": 109513,
+          "unverified": 8285,
+          "unknown": 141
+        },
+        "compiler": {
+          "blocked": 109654,
+          "unverified": 8285
+        }
+      }
+    }
+  ]
+}

@@ -22,7 +22,7 @@ mod planning;
 use builder::Builder;
 use encoding::{
     assign_tag, binary_tag, compiler_native_contract, compiler_variable_mutation_contract,
-    runtime_import, unary_tag,
+    unary_tag,
 };
 use planning::{
     DataBlock, DataLine, TryListBlock, TryListLine, add_control_flow, argument_place,
@@ -43,6 +43,7 @@ pub(crate) struct LoweringContext<'a> {
 
 pub(crate) struct LoweringProgram<'a> {
     pub variables: &'a [Variable],
+    pub snake_input: bool,
     pub call_compatibility: erabasic_hir::CallCompatibility,
 }
 
@@ -258,6 +259,17 @@ pub(crate) fn lower_function(
                         ControlFlowKind::Continue | ControlFlowKind::Break
                     )
                 });
+                if loop_edge.is_none() {
+                    builder.emit(
+                        EncodedInstruction::new(
+                            Opcode::Trap,
+                            format!("{} outside loop", structural_name.unwrap_or_default())
+                                .into_bytes(),
+                        ),
+                        line.location,
+                    );
+                    continue;
+                }
                 let opener = loop_edge.and_then(|edge| edge.to);
                 let closer = opener.and_then(|opener| loop_closers.get(opener.0).copied());
                 let opener_name = opener.and_then(|opener| {
@@ -525,6 +537,8 @@ fn append_source_entry(entries: &mut Vec<LoweredSourceMapEntry>, entry: LoweredS
         entries.push(entry);
     }
 }
+
+pub(crate) use encoding::runtime_import;
 
 #[cfg(test)]
 mod tests {

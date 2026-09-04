@@ -243,6 +243,14 @@ pub(super) fn memoized_indexed_read(
         {
             continue;
         }
+        if artifact.manifest.compatibility.integer_arithmetic_policy()
+            == erabasic_compat::IntegerArithmeticPolicy::SnakeSaturatingV1
+            && !has_exact_indexed_getter_prefix(code, variables, tail, call_index, scratch_global)
+        {
+            // A warm selector does not prove that skipped getter instructions are safe.
+            // Unknown prefixes must execute so their diagnostics and faults remain visible.
+            continue;
+        }
         let length = read_payload_u32(&prefix.payload, 0)? as usize;
         let bytes = prefix.payload.get(4..4 + length)?;
         if prefix.payload.len() != 4 + length {
@@ -258,6 +266,41 @@ pub(super) fn memoized_indexed_read(
         });
     }
     None
+}
+
+fn has_exact_indexed_getter_prefix(
+    code: &[erabasic_bytecode::EncodedInstruction],
+    variables: &[u32],
+    tail: usize,
+    call_index: usize,
+    scratch_global: usize,
+) -> bool {
+    let mut prefix = code[..tail]
+        .iter()
+        .enumerate()
+        .filter(|(_, instruction)| Opcode::try_from(instruction.opcode).ok() != Some(Opcode::Nop));
+    let Some((_, text)) = prefix.next() else {
+        return false;
+    };
+    let Some((_, selector)) = prefix.next() else {
+        return false;
+    };
+    let Some((call, _)) = prefix.next() else {
+        return false;
+    };
+    let Some((store_index, store)) = prefix.next() else {
+        return false;
+    };
+    // The entire prefix is: literal prefix, parameter, memoized selector call,
+    // plain scratch assignment. The tail's loads and return were checked above.
+    prefix.next().is_none()
+        && Opcode::try_from(text.opcode).ok() == Some(Opcode::PushString)
+        && Opcode::try_from(selector.opcode).ok() == Some(Opcode::LoadVariable)
+        && call == call_index
+        && Opcode::try_from(store.opcode).ok() == Some(Opcode::StoreVariable)
+        && read_payload_u16(&store.payload, 16) == Some(0)
+        && store.payload.get(18).copied() == Some(0)
+        && compact_global_index(variables, store_index) == Some(scratch_global)
 }
 
 pub(super) fn path_memo_result_reads(
@@ -462,10 +505,27 @@ fn analyze_function_memo(
             Opcode::ForStart | Opcode::ForNext | Opcode::ForBreak if !scratch.is_empty() => {
                 return None;
             }
-            Opcode::StorePlace
+            Opcode::BeginMatchCall
+            | Opcode::MatchCallRange
+            | Opcode::FinishMatchCall
+            | Opcode::StorePlace
             | Opcode::Call
-            | Opcode::ResolveFunction
-            | Opcode::InvokeDynamic
+            | Opcode::ResolveUserCall
+            | Opcode::SelectUserArgument
+            | Opcode::CaptureUserArgument
+            | Opcode::InvokeUserCall
+            | Opcode::GuardUserArgument
+            | Opcode::AdvanceUserArgument
+            | Opcode::AbandonUserCall
+            | Opcode::InvokeCallText
+            | Opcode::ProbeVariableName
+            | Opcode::BeginBitCall
+            | Opcode::FinishBitCall
+            | Opcode::BeginExistVarProbe
+            | Opcode::FinishExistVarProbe
+            | Opcode::BeginMapCall
+            | Opcode::FinishMapCall
+            | Opcode::AbandonMapCall
             | Opcode::JumpDynamicLabel
             | Opcode::InvokeEvent
             | Opcode::Yield

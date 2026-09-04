@@ -2,6 +2,12 @@
 #[allow(clippy::wildcard_imports)]
 use super::super::*;
 
+struct PreparedTraditionalStart {
+    vm: RuntimeVm,
+    opaque_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
+    replay_origin: ReplayOrigin,
+}
+
 impl RuntimeSession {
     pub(in super::super) fn start(
         &mut self,
@@ -22,10 +28,28 @@ impl RuntimeSession {
                 "start requires a loaded project in a replaceable state",
             );
         }
+        if self.pending_sql_snapshot_restore.is_some() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "start cannot replace a pending exact SQL restore",
+            );
+        }
+        if let Some(identity) = self
+            .project_snapshot
+            .as_ref()
+            .map(|project| project.manifest.compatibility.clone())
+            && identity.is_experimental()
+        {
+            self.emit(
+                RuntimeMessage::Diagnostic(crate::compatibility::experimental_profile_diagnostic(
+                    &identity,
+                )),
+                Some(message_id),
+            )?;
+        }
         if matches!(request.mode, StartMode::NewGame { .. }) {
             self.advance_epoch();
-        } else {
-            self.retained_title_program = None;
         }
         match request.mode {
             StartMode::NewGame { seed: Some(seed) } => self.start_new_game(seed),
@@ -76,7 +100,6 @@ impl RuntimeSession {
         message_id: u64,
         bytes: &[u8],
     ) -> Result<(), RuntimeError> {
-        self.retained_title_program = None;
         let artifact = self
             .artifact
             .as_ref()
@@ -91,6 +114,12 @@ impl RuntimeSession {
                 );
             }
         };
+        let DecodedEraSave {
+            state,
+            description,
+            opaque_extensions,
+            structured_extensions,
+        } = decoded;
         let mut vm = RuntimeVm::new(
             self.artifact
                 .clone()
@@ -101,8 +130,7 @@ impl RuntimeSession {
         vm.set_character_width_mode(configured_character_width_mode(
             self.project_snapshot.as_ref(),
         ));
-        let version = decoded.state.version;
-        let description = decoded.description.clone();
+        let version = state.version;
         let replay_digest = crate::input_replay::digest_hex(bytes);
         let replay_origin = self.prepare_input_replay(ReplayOriginDetails::TraditionalSave {
             payload_digest: replay_digest,
@@ -110,9 +138,9 @@ impl RuntimeSession {
             save_version: version.to_string(),
         })?;
         let prepared = match vm.prepare_runtime_state_with_extensions(
-            VmRuntimeStateTransaction::RestoreOrdinary(Box::new(decoded.state)),
+            VmRuntimeStateTransaction::RestoreOrdinary(Box::new(state)),
             StructuredScope::Ordinary,
-            &decoded.structured_extensions,
+            &structured_extensions,
         ) {
             Ok((prepared, _)) => prepared,
             Err(error) => {
@@ -134,7 +162,25 @@ impl RuntimeSession {
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
         vm.commit_runtime_state(last_load)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
-        self.save_extensions = decoded.opaque_extensions;
+        let load = PreparedTraditionalStart {
+            vm,
+            opaque_extensions,
+            replay_origin,
+        };
+        self.complete_traditional_start(load)
+    }
+
+    fn complete_traditional_start(
+        &mut self,
+        load: PreparedTraditionalStart,
+    ) -> Result<(), RuntimeError> {
+        let PreparedTraditionalStart {
+            mut vm,
+            opaque_extensions,
+            replay_origin,
+        } = load;
+        self.retained_title_program = None;
+        self.save_extensions = opaque_extensions;
         if let Some(project) = &mut self.project_snapshot {
             project.resource_graph.reset_runtime_graph();
         }
@@ -159,7 +205,9 @@ impl RuntimeSession {
         self.vm = Some(vm);
         self.set_phase(RuntimePhase::Running)?;
         self.install_input_replay(replay_origin);
-        self.renew_debug_grant()
+        self.renew_debug_grant()?;
+        self.emit_snake_save_load_diagnostic(SaveLoadScope::Ordinary);
+        Ok(())
     }
 
     #[allow(clippy::too_many_lines)]
@@ -168,7 +216,6 @@ impl RuntimeSession {
         message_id: u64,
         bytes: &[u8],
     ) -> Result<(), RuntimeError> {
-        self.retained_title_program = None;
         let maximum =
             usize::try_from(self.options.limits.maximum_transfer_bytes).unwrap_or(usize::MAX);
         let mut payload = match runtime_snapshot::decode(bytes, maximum) {
@@ -182,6 +229,35 @@ impl RuntimeSession {
             }
         };
         let replay_digest = crate::input_replay::digest_hex(bytes);
+        if payload.input_controller.pending_sequence.is_some()
+            || payload.input_controller.next_admission == 0
+            || payload.undo_checkpoint.as_ref().is_some_and(|checkpoint| {
+                checkpoint.input_controller.pending_sequence.is_some()
+                    || checkpoint.input_controller.next_admission == 0
+            })
+            || payload.operations.has_device_pump()
+        {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidValue,
+                "snapshot contains unconsumed sequence or device pump",
+            );
+        }
+        if let Some(checkpoint) = &payload.undo_checkpoint {
+            let bytes = checkpoint.inputs.iter().try_fold(0_u64, |total, record| {
+                total.checked_add(record.storage_bytes()?)
+            });
+            if bytes != Some(checkpoint.input_history_bytes)
+                || bytes.is_none_or(|bytes| bytes > self.options.limits.maximum_transfer_bytes)
+                || checkpoint.inputs.len() > self.options.limits.maximum_journal_entries as usize
+            {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    "snapshot input provenance limit differs",
+                );
+            }
+        }
         let replay_snapshot_format = format!("runtime_snapshot_v{}", payload.format_version);
         let replay_snapshot_origin = match payload.origin {
             RuntimeSnapshotOrigin::Normal => "normal",
@@ -204,6 +280,17 @@ impl RuntimeSession {
             .project_snapshot
             .as_ref()
             .ok_or_else(|| RuntimeError::Internal("loaded project identity is missing".into()))?;
+        if payload.compatibility != artifact.artifact().manifest.compatibility {
+            return self.reject(
+                message_id,
+                CommandErrorCode::VersionMismatch,
+                &format!(
+                    "runtime snapshot profile {} does not match active profile {}",
+                    payload.compatibility.profile,
+                    artifact.artifact().manifest.compatibility.profile
+                ),
+            );
+        }
         if payload.artifact_id != artifact.artifact().manifest.artifact_id
             || payload.project_identity != project.project_identity
             || payload.resource_count != u64::try_from(project.resources.len()).unwrap_or(u64::MAX)
@@ -267,6 +354,13 @@ impl RuntimeSession {
                 );
             }
         };
+        if vm_snapshot.compatibility() != &payload.compatibility {
+            return self.reject(
+                message_id,
+                CommandErrorCode::VersionMismatch,
+                "embedded VM snapshot compatibility identity does not match runtime snapshot",
+            );
+        }
         let prepared =
             match RuntimeVm::prepare_restore(artifact.clone(), self.options.vm_config, vm_snapshot)
             {
@@ -293,12 +387,66 @@ impl RuntimeSession {
                 "runtime and VM snapshot waits do not correspond",
             );
         }
+        let snapshot_digest = *blake3::hash(bytes).as_bytes();
         let mut vm = RuntimeVm::commit_restore(prepared)
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
+        if let Err(error) = payload
+            .operations
+            .html_lines
+            .validate_snapshot(&vm, payload.epoch)
+        {
+            return self.reject(message_id, CommandErrorCode::InvalidValue, &error);
+        }
         vm.set_line_columns(self.line_columns);
         vm.set_character_width_mode(configured_character_width_mode(
             self.project_snapshot.as_ref(),
         ));
+        let sql_restore_ready = self
+            .ready_sql_snapshot_restore
+            .as_ref()
+            .is_some_and(|ready| ready.digest == snapshot_digest);
+        if !payload.sql.connections.is_empty() && !sql_restore_ready {
+            if self.sql.snapshot().is_err() {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidState,
+                    "runtime snapshot replacement cannot cross active SQL state",
+                );
+            }
+            return self.begin_sql_snapshot_restore(
+                message_id,
+                bytes.to_vec(),
+                payload.sql.connections.clone(),
+            );
+        }
+        if payload.sql.connections.is_empty() && self.sql.snapshot().is_err() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "runtime snapshot replacement cannot cross active SQL state",
+            );
+        }
+        let replacement_sql = if payload.sql.connections.is_empty() {
+            let mut candidate = self.sql.clone();
+            candidate.reset_for_project_boundary();
+            candidate
+        } else {
+            self.ready_sql_snapshot_restore
+                .take()
+                .filter(|ready| ready.digest == snapshot_digest)
+                .ok_or_else(|| {
+                    RuntimeError::Internal("validated SQL snapshot candidate is missing".into())
+                })?
+                .candidate_sql
+        };
+        let old_sql = std::mem::replace(&mut self.sql, replacement_sql);
+        let sql_cleanup = (
+            old_sql.provider(),
+            old_sql
+                .connections()
+                .map(|(_, connection)| connection.handle)
+                .collect::<Vec<_>>(),
+        );
 
         let new_epoch = self.epoch.0.max(payload.epoch).saturating_add(1);
         let mut operations = payload.operations;
@@ -318,10 +466,15 @@ impl RuntimeSession {
                 .collect()
         };
 
+        self.retained_title_program = None;
         self.epoch = SessionEpoch(new_epoch);
+        self.device_input = crate::device_input::DeviceInput::default();
         self.accepted_message_ids.clear();
         self.vm = Some(vm);
         self.presentation = presentation;
+        self.presentation
+            .clear_transient_sound_compatibility_state();
+        self.audio.recover_bgm(self.presentation.bgm_revision());
         self.presentation
             .set_character_width_mode(configured_character_width_mode(
                 self.project_snapshot.as_ref(),
@@ -343,6 +496,8 @@ impl RuntimeSession {
         self.force_kana_mode = payload.force_kana_mode;
         self.hotkey_state = payload.hotkey_state;
         self.key_macros = payload.key_macros;
+        self.input_controller = payload.input_controller;
+        self.active_input_source = None;
         self.queued_input.clear();
         self.deferred_input_completion = None;
         self.text_box = payload.text_box;
@@ -385,6 +540,7 @@ impl RuntimeSession {
         if let Some((code, message)) = origin_warning {
             self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    context: None,
                     code: code.into(),
                     level: RuntimeLogLevel::Warning,
                     message: message.into(),
@@ -400,6 +556,7 @@ impl RuntimeSession {
         ) {
             let save = self.system_menu == SystemMenuState::SaveSlots;
             self.operations.clear();
+            self.emit_sql_cleanup_for(sql_cleanup.0, &sql_cleanup.1)?;
             return self.issue_storage(
                 if save {
                     PendingStorage::ListSaveSlots
@@ -414,6 +571,7 @@ impl RuntimeSession {
                 String::new(),
             );
         }
+        self.emit_sql_cleanup_for(sql_cleanup.0, &sql_cleanup.1)?;
         self.set_phase(RuntimePhase::WaitingInput)?;
         self.renew_debug_grant()?;
         self.install_input_replay(replay_origin);
@@ -544,6 +702,7 @@ impl RuntimeSession {
         // previous game's long history during this memory-retirement transaction.
         self.pending_presentation_update = false;
         self.presentation.reset_preserving_projection();
+        self.audio.reset_all();
         if let Some(project) = &self.project_snapshot {
             self.presentation.configure_project(project);
         }
@@ -601,8 +760,11 @@ impl RuntimeSession {
         // Drop them here so they cannot retain large payloads or act on the new timeline.
         self.inbound = VecDeque::new();
         self.key_toggle_state = [0; 256];
+        self.device_input = crate::device_input::DeviceInput::default();
         self.hotkey_state = Vec::new();
         self.queued_input = VecDeque::new();
+        self.input_controller = InputController::default();
+        self.active_input_source = None;
         self.deferred_input_completion = None;
         self.text_box = String::new();
         self.text_box_layout = TextBoxLayout::default();
@@ -743,6 +905,7 @@ impl RuntimeSession {
             timeout_message: None,
             submission_token,
             countdown_remaining_ms: None,
+            viewport_policy: era_runtime_protocol::InputViewportPolicy::FollowOutput,
         }
     }
 }

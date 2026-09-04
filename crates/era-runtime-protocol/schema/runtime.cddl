@@ -1,3 +1,4 @@
+; Runtime channel version: 46.0.
 ; RuntimeMessage is encoded as a minicbor enum [stable-tag, typed-body].
 runtime-message =
   [0, client-hello] /
@@ -24,16 +25,16 @@ runtime-message =
   [30, frontend-input] /
   [31, advance-time] /
   [32, wait-change] /
-  [33, any] /
-  [34, any] /
+  [33, device-state-changed] /
+  [34, client-state-changed] /
   [35, projection-observation] /
   [36, projection-state] /
   [37, input-undo-request] /
   [38, input-undo-state] /
   [40, presentation-snapshot] /
   [41, presentation-delta] /
-  [42, any] /
-  [43, any] /
+  [42, effect-batch] /
+  [43, effect-acknowledgement] /
   [50, storage-request] /
   [51, storage-response] /
   [52, service-request] /
@@ -51,6 +52,8 @@ runtime-message =
   [69, state-transfer-cancel] /
   [70, full-project-manifest] /
   [71, state-export-cancel] /
+  [72, resolve-project-compatibility] /
+  [73, project-compatibility-resolved] /
   [90, shutdown-request] /
   [91, shutdown-ready] /
   [92, runtime-fault] /
@@ -62,22 +65,53 @@ runtime-message =
   [98, runtime-log]
 
 configuration-client-profile = 0..3
+protocol-version = { 0: uint, 1: uint }
+version-range = { 0: protocol-version, 1: protocol-version }
+environment-capability = { 0: tstr, 1: version-range }
+service-kind = 0..11
+service-capability = { 0: service-kind, 1: tstr, 2: version-range }
+storage-capabilities = { 0: bool, 1: bool, 2: bool, 3: bool }
+client-capabilities = {
+  0: [* uint], 1: bool, 2: bool, 3: bool, 4: bool, 5: bool, 6: bool,
+  7: bool, 8: bool, 9: [* tstr], 10: [* service-capability],
+  11: storage-capabilities, 12: [* environment-capability]
+}
 client-hello = {
-  0: any, 1: tstr, 2: [* uint], 3: runtime-limits, 4: any, 5: [* tstr],
+  0: version-range, 1: tstr, 2: [* uint], 3: runtime-limits,
+  4: client-capabilities, 5: [* tstr],
   ? 6: configuration-client-profile / null
 }
 server-hello = {
-  0: any, 1: any, 2: [* uint], 3: runtime-limits, 4: uint, 5: any, 6: tstr,
+  0: protocol-version, 1: any, 2: [* uint], 3: runtime-limits, 4: uint,
+  5: client-capabilities, 6: tstr,
   ? 7: configuration-client-profile / null
 }
 runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint, 6: uint }
 version-rejected = { 0: any, 1: tstr }
-project-manifest = { 0: uint, 1: [* any] }
-project-identity = { 0: uint, 1: bstr }
+compatibility-profile-id = 0..1 ; emuera.em, emuera.skia.snake
+compatibility-service-contract = { 0: tstr, 1: uint }
+compatibility-identity = {
+  0: compatibility-profile-id, 1: uint, 2: uint, 3: tstr, 4: tstr,
+  5: uint, 6: tstr, 7: tstr, 8: [* compatibility-service-contract]
+}
+resolve-project-compatibility = { 0: uint, ? 1: any / null }
+project-compatibility-resolved = {
+  0: uint, ? 1: compatibility-identity / null, ? 2: bstr / null, 3: [* protocol-diagnostic]
+}
+required-capability = { 0: service-kind, 1: tstr, 2: { 0: uint, 1: uint } }
+compatibility-diagnostic-context = {
+  ? 0: compatibility-identity / null, 1: tstr, ? 2: tstr / null,
+  ? 3: required-capability / null, ? 4: bstr / null,
+  ? 5: uint / null, ? 6: uint / null, ? 7: uint / null
+}
+file-category = 0..7 ; Csv, Erh, Erb, ResourceManifest, Resource, Configuration, Als, Erd
+submitted-file = { 0: tstr, 1: file-category, 2: any, ? 3: bstr / null }
+project-manifest = { 0: uint, 1: [* submitted-file], 2: compatibility-identity }
+project-identity = { 0: uint, 1: bstr, 2: compatibility-identity, ? 3: bstr / null }
 project-load-request = { 0: project-identity, ? 1: project-manifest / null, ? 2: uint / null }
 project-load-report = {
   0: uint, 1: bool, 2: [* any], 3: bool, ? 4: project-configuration-snapshot / null,
-  ? 5: project-game-information / null
+  ? 5: project-game-information / null, ? 6: compatibility-identity / null
 }
 project-game-information = {
   ? 0: tstr / null, ? 1: tstr / null, ? 2: tstr / null,
@@ -85,7 +119,7 @@ project-game-information = {
 }
 reload-project = { 0: uint, 1: uint, 2: [* any] }
 project-analysis-request = { 0: project-manifest, 1: [* tstr], 2: bool }
-project-analysis-report = { 0: uint, 1: bool, 2: [* any], 3: [* tstr] }
+project-analysis-report = { 0: uint, 1: bool, 2: [* protocol-diagnostic], 3: [* tstr], ? 4: compatibility-identity / null }
 key-macro-profile-submit = { 0: tstr, 1: any }
 key-macro-command = [0, uint] / [1, { 0: uint, 1: uint, 2: tstr }] / [2, { 0: uint, 1: uint }]
 key-macro-state = { 0: bool, 1: uint, 2: [* tstr], 3: [* tstr], 4: tstr }
@@ -104,7 +138,7 @@ project-configuration-entry = {
 }
 project-configuration-snapshot = {
   0: uint, 1: bstr, 2: [* project-configuration-entry], 3: bool,
-  4: tstr / null
+  4: tstr / null, 5: compatibility-identity
 }
 configuration-change = { 0: tstr, 1: tstr }
 prepare-configuration-update = { 0: uint, 1: bstr, 2: [* configuration-change] }
@@ -113,6 +147,18 @@ finalize-configuration-update = { 0: uint, 1: 0..1 }
 configuration-update-committed = { 0: project-configuration-snapshot }
 frontend-input = { 0: uint, 1: interaction-token, 2: uint, 3: any, 4: bool }
 advance-time = { 0: uint }
+input-wait = {
+  0: uint, 1: uint, 2: uint, 3: bool, 4: bool, 5: bool, 6: bool,
+  7: any / null, 8: uint / null, 9: bool, 10: tstr / null,
+  11: interaction-token, 12: uint / null, 13: 0..1
+}
+device-state-changed = {
+  0: 0..3, 1: uint, 2: bool, 3: int, 4: int, 5: uint,
+  6: uint, 7: bool, 8: bool
+}
+client-state-changed = {
+  0: bool, 1: bool, 2: bool, 3: bool, 4: bool, 5: bool
+}
 wait-change = any
 input-undo-request = { 0: interaction-token }
 input-undo-state = { 0: bool, 1: uint, 2: bool, 3: uint, 4: interaction-token / null }
@@ -130,29 +176,180 @@ text-box-layout = { 0: int, 1: int, 2: int }
 projection-state = { 0: uint, 1: tstr, 2: [* int], 3: uint, 4: text-box-layout }
 presentation-history = { 0: [* any], 1: [* any] }
 redraw-state = { 0: bool }
-presentation-snapshot = {
-  0: uint, 1: tstr, 2: presentation-history, 3: [* any], 4: [* any],
-  5: any / null, 6: any, 7: any, 8: any, 9: [* any], 10: redraw-state
+color = { 0: uint, 1: uint, 2: uint, 3: uint }
+presentation-settings = {
+  0: int, 1: int, 2: color, 3: color, 4: uint, 5: bool, 6: bool, 7: int,
+  8: color / null
 }
-display-line = any
+cell-width-intent = [0, [uint]] / [1, [uint]]
+html-length = [0, [int]] / [1, [int]]
+html-attribute = { 0: tstr, 1: tstr }
+html-interaction = {
+  0: uint, 1: uint, ? 2: int, ? 3: tstr, 4: uint, 5: bool
+}
+html-text-render-intent = { ? 0: 0..1, ? 1: 0..2, ? 2: 0..3 }
+html-color-matrix =
+  [0, [tstr, [uint, uint, uint]]] /
+  [1, [[int, int, int, int, int, int, int, int, int, int,
+        int, int, int, int, int, int, int, int, int, int,
+        int, int, int, int, int]]]
+html-box-model = {
+  ? 0: [html-length, html-length, html-length, html-length],
+  ? 1: [html-length, html-length, html-length, html-length],
+  ? 2: [html-length, html-length, html-length, html-length],
+  ? 3: [html-length, html-length, html-length, html-length],
+  ? 4: [uint, uint, uint, uint]
+}
+html-semantic =
+  [0, []] / ; Style
+  [1, [tstr / null, uint / null, uint / null, uint / null, 0..2 / null,
+       html-text-render-intent]] / ; Font
+  [2, [0..2]] / ; Paragraph
+  [3, []] / ; NoBreak
+  [4, [tstr / null, tstr / null, int / null]] / ; Button
+  [5, [tstr / null, int / null]] / ; NonButton
+  [6, [bool]] / ; ClearButton
+  [7, [tstr, tstr / null, tstr / null, html-length / null, html-length / null,
+       html-length / null, html-length / null, 0..3, html-color-matrix / null]] / ; Image
+  [8, [tstr, [* html-length], uint / null, uint / null]] / ; Shape
+  [9, [html-length / null, html-length / null, html-length, html-length / null,
+       int, uint / null, 0..3, html-box-model]] / ; Division
+  [10, []] ; Break
+html-node =
+  [0, [tstr, uint, uint]] /
+  [1, [0..13, [* html-attribute], [* html-node], html-interaction / null,
+       uint, uint, html-semantic]]
+html-document = { 0: [* html-node] }
+display-run =
+  [0, any] /
+  [1, any] /
+  [2, [html-document]] /
+  [3, any] /
+  [4, any] /
+  [5, [[* display-run], 0..1, cell-width-intent]] /
+  [6, any] /
+  [7, any] /
+  [8, any]
+scene-source-v1 =
+  [0, [tstr, uint]] / ; Resource
+  [1, [tstr, uint]] / ; Sprite
+  [2, [int, uint]]    ; Canvas
+scene-anchor-v1 = [0, []] / [1, [uint]]
+scene-scroll-policy-v1 = 0..1
+scene-offset-v1 = { 0: int, 1: int }
+scene-size-v1 = { 0: int, 1: int }
+scene-interaction-v1 = {
+  0: interaction-token, 1: any, 2: bool,
+  ? 3: scene-source-v1, ? 4: scene-source-v1, ? 5: tstr
+}
+scene-layer-v1 = {
+  0: uint, 1: uint, 2: scene-source-v1, 3: int, 4: scene-anchor-v1,
+  5: scene-offset-v1, 6: scene-size-v1, 7: 0..255,
+  ? 8: [int, int, int, int, int, int, int, int, int, int,
+      int, int, int, int, int, int, int, int, int, int,
+      int, int, int, int, int],
+  9: scene-scroll-policy-v1, ? 10: scene-interaction-v1, 11: uint,
+  12: uint ; canonical document origin, zero unless viewport/follow-content
+}
+scene-state-v1 = { 0: uint, 1: [* scene-layer-v1] }
+scene-operation-v1 =
+  [0, [scene-layer-v1]] /
+  [1, [uint]] /
+  [2, [int]] /
+  [3, [uint]] /
+  [4, [scene-state-v1]]
+scene-delta-v1 = { 0: uint, 1: uint, 2: [* scene-operation-v1] }
+projection-query-context = { 0: uint, 1: uint, 2: uint }
+get-line-geometry-v1-request = { 0: projection-query-context, 1: uint }
+get-line-geometry-v1-response = {
+  0: projection-query-context, 1: uint, 2: int, 3: int, 4: int
+}
+presentation-snapshot = {
+  0: uint, 1: tstr, 2: presentation-history, 3: scene-state-v1, 4: [* audio-state],
+  5: any / null, 6: presentation-settings, 7: any, 8: resource-replay,
+  9: [* html-document], 10: redraw-state
+}
+display-line = {
+  0: uint, 1: bool, 2: bool, 3: bool, 4: uint, 5: [* display-run], 6: bool
+}
+sprite-frame-replay = {
+  ; 5 and 7 are an atomic exact canvas reference and must appear together.
+  0: tstr, 1: [int, int, int, int], 2: [int, int], 3: uint,
+  ? 4: [uint, uint], ? 5: int, ? 6: bstr, ? 7: uint
+}
+canvas-point = { 0: int, 1: int }
+canvas-size = { 0: uint, 1: uint }
+canvas-rect = { 0: int, 1: int, 2: int, 3: int }
+canvas-replay-command =
+  [0, [uint, canvas-rect / null]] / ; Clear
+  [1, [tstr, canvas-rect, [* int] / null, uint]] / ; DrawSprite
+  [2, [canvas-point, uint]] / ; SetPixel
+  [3, [canvas-rect, uint]] / ; FillRectangle
+  [4, [uint]] / ; SetBrush
+  [5, [uint, int]] / ; SetPen
+  [6, [int, int]] / ; SetDashStyle
+  [7, [tstr, int, uint]] / ; SetFont
+  [8, [canvas-point, canvas-point]] / ; DrawLine
+  [9, [tstr, canvas-point]] / ; DrawText
+  ; DrawCanvas mask id/revision (positions 5 and 8) are both null or both present.
+  [10, [int, uint, canvas-rect, canvas-rect, [* int] / null,
+        int / null, int, canvas-point / null, uint / null]] / ; DrawCanvas
+  [11, [bstr, bstr]] / ; LoadEncodedImage
+  [12, [canvas-point]] / ; PolygonPointAdd
+  [13, []] / ; PolygonPointClear
+  [14, []] / ; DrawPolygon
+  [15, []] ; FillPolygon
+canvas-replay = {
+  0: int, 1: canvas-size, 2: [* canvas-replay-command], 3: uint
+}
+sprite-replay = {
+  ; 4 and 7 are an atomic exact canvas reference and must appear together.
+  0: tstr, 1: [uint, uint], 2: [int, int], 3: [* sprite-frame-replay],
+  ? 4: int, ? 5: canvas-rect, 6: uint, ? 7: uint
+}
+resource-replay = { 0: [* sprite-replay], 1: [* canvas-replay], 2: int }
 presentation-delta = { 0: uint, 1: uint, 2: [* presentation-operation] }
 presentation-operation =
   [0, [display-line]] /
   [1, [uint]] /
   [2, []] /
   [3, [tstr]] /
-  [4, [[* any]]] /
-  [5, [[* any]]] /
+  [4, [scene-delta-v1]] /
+  [5, [[* audio-state]]] /
   [6, [any / null]] /
   [7, [uint, display-line]] /
-  [8, [any]] /
+  [8, [presentation-settings]] /
   [9, [any]] /
   [10, [any]] /
   [11, [[* any]]] /
   [12, [redraw-state]] /
   [13, [uint]] /
   [14, [uint]]
-storage-request = { 0: uint, 1: uint, 2: tstr, 3: storage-operation, 4: tstr, 5: uint / null }
+audio-channel-v1 = [0, [0..9]] / [1, []]
+audio-playback-state-v1 = 0..2
+audio-state = {
+  0: audio-channel-v1, 1: tstr, 2: int, 3: uint,
+  4: audio-playback-state-v1, 5: uint, 6: uint, 7: bool
+}
+audio-effect-action = 0..5
+audio-effect = {
+  0: audio-channel-v1, 1: audio-effect-action, 2: tstr / null, 3: int,
+  4: uint, 5: uint, 6: uint, 7: bool
+}
+effect-kind =
+  [0, [audio-effect]] /
+  [1, [tstr]] /
+  [2, [{ 0: tstr, 1: bool }]] /
+  [3, [tstr, any]] /
+  [4, []] /
+  [5, [uint]]
+effect-event = { 0: uint, 1: effect-kind }
+effect-batch = { 0: [* effect-event] }
+effect-outcome-status = 0..2
+effect-outcome = { 0: uint, 1: effect-outcome-status, 2: tstr / null }
+effect-acknowledgement = { 0: [* effect-outcome] }
+storage-namespace = 0..5
+storage-request = { 0: uint, 1: storage-namespace, 2: tstr, 3: storage-operation, 4: tstr, 5: uint / null }
 storage-response = { 0: uint, 1: any }
 storage-operation =
   [0] /
@@ -162,9 +359,71 @@ storage-operation =
   [4] /
   [5, uint, uint, tstr / null]
 storage-precondition = [0] / [1] / [2, tstr]
-service-request = { 0: uint, 1: uint, 2: tstr, 3: any, 4: bstr, 5: uint / null }
+service-request = { 0: uint, 1: service-kind, 2: tstr, 3: any, 4: bstr, 5: uint / null }
 service-response = { 0: uint, 1: any }
-; Protocol 29 adds export-only input replay while retaining the existing descriptor,
+audio-observation-request-v1 = { 0: audio-channel-v1, 1: uint }
+audio-observation-response-v1 = {
+  0: audio-channel-v1, 1: uint, 2: uint, 3: uint, 4: audio-playback-state-v1,
+  5: uint, 6: uint, 7: bool, 8: uint
+}
+sql-limits-v1 = {
+  0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint,
+  6: uint, 7: uint, 8: uint, 9: uint, 10: uint
+}
+sql-provider-handle-v1 = { 0: uint, 1: uint }
+sql-connection-handle-v1 = { 0: uint, 1: uint }
+sql-reader-handle-v1 = { 0: uint, 1: uint }
+sql-resource-seed-v1 = { 0: tstr, 1: bstr }
+sql-database-source-v1 = [0] / [1, sql-resource-seed-v1]
+sql-database-identity-v1 = { 0: sql-database-source-v1, 1: tstr, 2: uint }
+sql-revision-v1 = { 0: bstr }
+sql-open-revision-v1 = [0] / [1, sql-revision-v1]
+sql-value-v1 = [0] / [1, int] / [2, tstr]
+sql-execute-mode-v1 = 0..3
+sql-reader-value-mode-v1 = 0..1
+sql-map-row-v1 = { 0: tstr, 1: tstr }
+sql-operation-v1 =
+  [0, sql-connection-handle-v1, tstr, sql-database-identity-v1,
+      sql-open-revision-v1, sql-limits-v1] /
+  [1, sql-connection-handle-v1, sql-execute-mode-v1, tstr, [* sql-value-v1]] /
+  [2, sql-reader-handle-v1] /
+  [3, sql-reader-handle-v1, uint, sql-reader-value-mode-v1] /
+  [4, sql-reader-handle-v1, uint] /
+  [5, sql-reader-handle-v1] /
+  [6, sql-connection-handle-v1, tstr, [* sql-map-row-v1]] /
+  [7, sql-connection-handle-v1]
+sql-request-v1 = { 0: sql-provider-handle-v1, 1: sql-operation-v1 }
+sql-reader-status-v1 = 0..3
+sql-database-state-v1 = { 0: sql-connection-handle-v1, 1: bool, 2: bool, 3: sql-revision-v1 / null }
+sql-reader-state-v1 = { 0: sql-reader-handle-v1, 1: sql-reader-status-v1, 2: uint }
+sql-operation-kind-v1 = 0..7
+sql-error-code-v1 = 0..29
+sql-error-context-v1 = { 0: tstr, 1: tstr }
+sql-error-v1 = { 0: sql-error-code-v1, 1: sql-operation-kind-v1, 2: [* sql-error-context-v1], 3: int / null, 4: tstr / null }
+sql-result-v1 =
+  [0, tstr, sql-limits-v1] /
+  [1, int] /
+  [2, sql-value-v1] /
+  [3, sql-reader-handle-v1] /
+  [4, bool] /
+  [5, sql-value-v1] /
+  [6, bool] /
+  [7] /
+  [8, uint] /
+  [9] /
+  [10, sql-error-v1]
+sql-response-v1 = {
+  0: sql-provider-handle-v1, 1: sql-database-state-v1 / null,
+  2: sql-reader-state-v1 / null, 3: sql-result-v1
+}
+; Protocol 42 adds canonical scene v1 snapshots/deltas and pixel/column cell width intents.
+; Protocol 43 adds digest-bound sprite frames and deterministic polygon canvas replay.
+; Protocol 44 adds CBG hover/hit-map scene interactions and revision-bound line geometry.
+; Protocol 45 makes scene document origins and every mutable resource dependency exact-revision
+; bound, including historical replay closure.
+; Protocol 46 adds exact audio targets, revisioned pause/resume/rate effects, and
+; audio_observation v1 request/response payloads.
+; It retains Protocol 41 safe SQL v1 payloads and ServiceKind 11 with the existing descriptor,
 ; digest, chunking, and cancellation flow. It retains Protocol 24 authoritative logs,
 ; Protocol 23 snapshot purposes, source-identity-first project loading,
 ; bounded storage range reads,
@@ -188,17 +447,19 @@ full-project-manifest = { 0: project-manifest }
 state-export-cancel = { 0: state-export-kind }
 shutdown-request = { 0: bool }
 shutdown-ready = { 0: uint, 1: uint }
-runtime-fault = { 0: uint, 1: tstr, 2: any / null }
+runtime-fault = { 0: uint, 1: tstr, 2: any / null, ? 3: compatibility-diagnostic-context / null, ? 4: runtime-vm-fault / null }
+runtime-vm-fault = { 0: runtime-vm-fault-detail, 1: runtime-vm-fault-detail / null }
+runtime-vm-fault-detail = { 0: uint, 1: uint / null, 2: 0..14, 3: 0..10, 4: tstr, 5: any / null }
 sequence-acknowledgement = { 0: uint }
 resynchronize-request = { 0: uint / null }
 runtime-resynchronized = {
   0: uint, 1: uint, 2: uint, 3: presentation-snapshot, 4: exit-requested / null,
   5: tstr, 6: input-undo-state, 7: key-macro-state,
-  ? 8: project-configuration-snapshot / null
+  ? 8: project-configuration-snapshot / null, ? 9: compatibility-identity / null
 }
-command-rejected = { 0: uint, 1: tstr, 2: bool, 3: any / null }
+command-rejected = { 0: uint, 1: tstr, 2: bool, 3: any / null, ? 4: compatibility-diagnostic-context / null }
 ; Runtime protocol 30 publishes parsed GameBase information in project load reports.
 runtime-log-level = 0..3 ; Debug, Info, Warning, Error
 diagnostic-notification = 0..1 ; Default, LogOnly
-protocol-diagnostic = { 0: tstr, 1: runtime-log-level, 2: tstr, 3: any / null, 4: diagnostic-notification }
+protocol-diagnostic = { 0: tstr, 1: runtime-log-level, 2: tstr, 3: any / null, 4: diagnostic-notification, ? 5: compatibility-diagnostic-context / null }
 runtime-log = { 0: runtime-log-level, 1: tstr }

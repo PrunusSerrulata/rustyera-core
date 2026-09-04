@@ -1,5 +1,7 @@
 //! eraFL's portable, namespace-free `XPath` 1.0 subset.
 
+use crate::ExecutionFailure;
+use crate::structured::argument_failure;
 use std::collections::HashMap;
 
 use super::{XmlChild, XmlDocument, XmlSelection};
@@ -14,7 +16,7 @@ use value::{
 };
 
 impl XmlDocument {
-    pub(crate) fn select(&self, path: &str) -> Result<Vec<XmlSelection>, String> {
+    pub(crate) fn select(&self, path: &str) -> Result<Vec<XmlSelection>, ExecutionFailure> {
         let path = path.trim();
         if path.is_empty() || path == "." {
             return Ok(vec![XmlSelection {
@@ -33,7 +35,7 @@ struct XPathEvaluator<'a> {
 }
 
 impl<'a> XPathEvaluator<'a> {
-    fn new(document: &'a XmlDocument) -> Result<Self, String> {
+    fn new(document: &'a XmlDocument) -> Result<Self, ExecutionFailure> {
         let mut order = vec![XPathNode::Document];
         append_xpath_document_order(document, &[], &mut order)?;
         let document_ranks = order
@@ -47,7 +49,7 @@ impl<'a> XPathEvaluator<'a> {
         })
     }
 
-    fn select(&self, expression: &XPathExpression) -> Result<Vec<XmlSelection>, String> {
+    fn select(&self, expression: &XPathExpression) -> Result<Vec<XmlSelection>, ExecutionFailure> {
         let mut nodes = Vec::new();
         for location in &expression.paths {
             nodes.extend(self.evaluate_path(location, &XPathNode::Document)?);
@@ -64,9 +66,9 @@ impl<'a> XPathEvaluator<'a> {
                     element_path,
                     attribute: Some(attribute),
                 }),
-                XPathNode::Document | XPathNode::Text(_, _) => Err(
-                    "native.xpath.unsupported: XML_GET cannot return document or text nodes".into(),
-                ),
+                XPathNode::Document | XPathNode::Text(_, _) => Err(argument_failure(
+                    "native.xpath.unsupported: XML_GET cannot return document or text nodes",
+                )),
             })
             .collect()
     }
@@ -75,7 +77,7 @@ impl<'a> XPathEvaluator<'a> {
         &self,
         path: &XPathPath,
         context: &XPathNode,
-    ) -> Result<Vec<XPathNode>, String> {
+    ) -> Result<Vec<XPathNode>, ExecutionFailure> {
         let mut current = if path.absolute || matches!(context, &XPathNode::Document) {
             vec![XPathNode::Document]
         } else {
@@ -121,7 +123,7 @@ impl<'a> XPathEvaluator<'a> {
         &self,
         parent: &XPathNode,
         step: &XPathStep,
-    ) -> Result<Vec<XPathNode>, String> {
+    ) -> Result<Vec<XPathNode>, ExecutionFailure> {
         let mut output = Vec::new();
         match step.axis {
             XPathAxis::Child => self.xpath_child_nodes(parent, &step.test, &mut output)?,
@@ -171,7 +173,7 @@ impl<'a> XPathEvaluator<'a> {
         parent: &XPathNode,
         test: &XPathTest,
         output: &mut Vec<XPathNode>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecutionFailure> {
         match parent {
             XPathNode::Document => {
                 if let XPathTest::Element(name) = test
@@ -208,7 +210,7 @@ impl<'a> XPathEvaluator<'a> {
         parent: &XPathNode,
         test: &XPathTest,
         output: &mut Vec<XPathNode>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecutionFailure> {
         match parent {
             XPathNode::Document => {
                 self.xpath_descendant_or_self_element(&[], test, output)?;
@@ -233,7 +235,7 @@ impl<'a> XPathEvaluator<'a> {
         path: &[usize],
         test: &XPathTest,
         output: &mut Vec<XPathNode>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecutionFailure> {
         let element = self.element(path)?;
         if let XPathTest::Element(name) = test
             && xpath_name_matches(name, &element.name)
@@ -261,7 +263,7 @@ impl<'a> XPathEvaluator<'a> {
         path: &[usize],
         name: &str,
         output: &mut Vec<XPathNode>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecutionFailure> {
         let element = self.element(path)?;
         for (index, (candidate, _)) in element.attributes.iter().enumerate() {
             if xpath_name_matches(name, candidate) {
@@ -275,7 +277,7 @@ impl<'a> XPathEvaluator<'a> {
         &self,
         predicate: &XPathPredicate,
         context: XPathContext<'_>,
-    ) -> Result<XPathValue, String> {
+    ) -> Result<XPathValue, ExecutionFailure> {
         match predicate {
             XPathPredicate::Or(parts) => {
                 for part in parts {
@@ -346,7 +348,7 @@ impl<'a> XPathEvaluator<'a> {
         comparison: XPathComparison,
         left: &XPathValue,
         right: &XPathValue,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, ExecutionFailure> {
         if let XPathValue::Nodes(left_nodes) = left {
             if let XPathValue::Nodes(right_nodes) = right {
                 for left in left_nodes {
@@ -451,7 +453,7 @@ impl<'a> XPathEvaluator<'a> {
         }
     }
 
-    fn xpath_string(&self, value: &XPathValue) -> Result<String, String> {
+    fn xpath_string(&self, value: &XPathValue) -> Result<String, ExecutionFailure> {
         match value {
             XPathValue::Nodes(nodes) => nodes
                 .first()
@@ -468,7 +470,7 @@ impl<'a> XPathEvaluator<'a> {
         }
     }
 
-    fn xpath_number(&self, value: &XPathValue) -> Result<f64, String> {
+    fn xpath_number(&self, value: &XPathValue) -> Result<f64, ExecutionFailure> {
         Ok(match value {
             XPathValue::Nodes(_) | XPathValue::String(_) => {
                 xpath_parse_number(&self.xpath_string(value)?)
@@ -478,7 +480,7 @@ impl<'a> XPathEvaluator<'a> {
         })
     }
 
-    fn xpath_node_string(&self, node: &XPathNode) -> Result<String, String> {
+    fn xpath_node_string(&self, node: &XPathNode) -> Result<String, ExecutionFailure> {
         match node {
             XPathNode::Document => Ok(self.document.root.inner_text()),
             XPathNode::Element(path) => Ok(self.element(path)?.inner_text()),
@@ -500,7 +502,7 @@ impl<'a> XPathEvaluator<'a> {
         nodes.dedup();
     }
 
-    fn element(&self, path: &[usize]) -> Result<&super::XmlElement, String> {
+    fn element(&self, path: &[usize]) -> Result<&super::XmlElement, ExecutionFailure> {
         self.document.element(path)
     }
 
@@ -509,7 +511,7 @@ impl<'a> XPathEvaluator<'a> {
         start: &[usize],
         name: &str,
         output: &mut Vec<Vec<usize>>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecutionFailure> {
         self.document.descendant_paths(start, name, output)
     }
 }
@@ -518,7 +520,7 @@ fn append_xpath_document_order(
     document: &XmlDocument,
     path: &[usize],
     output: &mut Vec<XPathNode>,
-) -> Result<(), String> {
+) -> Result<(), ExecutionFailure> {
     output.push(XPathNode::Element(path.to_vec()));
     let element = document.element(path)?;
     for index in 0..element.attributes.len() {

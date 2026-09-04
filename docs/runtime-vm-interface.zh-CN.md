@@ -5,7 +5,7 @@
 
 - `erabasic-vm` 的 crate 根重导出、`runtime_port.rs`、`runtime_vm.rs`；
 - `era-runtime::RuntimeSession` 的 `drive`、Host 分派、状态事务、存档与热重载调用点；
-- 当前 VM snapshot 格式版本 `9`，magic 为 `RERAVMS\0`。
+- 当前 VM snapshot 格式版本 `17`，magic 为 `RERAVMS\0`；容器版本 `19`、ISA `9`、compiler ABI `44`、Native ABI `20`、Host ABI `15`、VM ABI `19`。
 
 相关源码：
 
@@ -480,10 +480,24 @@ pub fn inspect_snapshot(
 
 `VmSnapshot` 内部字段私有；公开查询只有 `program_version()`、`artifact_id()`、
 `encode()`。容器包含版本、精确 artifact、memory、非回收 fiber、primary fiber、ID
-分配状态和按 key 排序的 Native state。稳定 Host wait 要求 primary 指向等待 fiber；完全
-静止且 fiber 集合为空也可做 snapshot。恢复旧 v9 终止历史后会回收 Completed/Cancelled
-并把 fiber 分配提示规范化为最小空闲 ID。`decode` 校验大小、header、格式版本、压缩长度、
+分配状态、按 key 排序的 Native state，以及算术诊断的 generation/函数/指令/类别去重集合。
+稳定 Host wait 要求 primary 指向等待 fiber；完全静止且 fiber 集合为空也可做 snapshot。
+恢复时回收 Completed/Cancelled 并把 fiber 分配提示规范化为最小空闲 ID。
+`decode` 校验大小、header、格式版本、压缩长度、
 checksum 和序列化数据。
+
+算术策略由 artifact 的 `CompatibilityIdentity` 选择。原版保持已有 wrapping 行为；
+snake semantic/policy `3/3` 使用 `snake_saturating_i64_v1`，包含固定参考的减法、
+postfix 和除法边界，不等同于所有操作统一数学饱和。普通表达式、复合赋值、循环步进及
+动态表达式共用策略；`UNCHECKED_ADD/SUB/MUL/NEG` 始终 wrapping。
+`compat.arithmetic.overflow` 与 `compat.arithmetic.divide_by_zero` 在同 generation
+同执行位置按类别去重；产生诊断的执行不可写入不包含诊断的 memo。恢复 snapshot 保留
+去重状态；不兼容的身份及旧 snapshot 格式明确拒绝，不静默迁移。
+
+两种 profile 的随机状态均为同一 SFMT19937 权威状态，`RANDDATA` 为 625 项。
+`DUMPRAND/INITRAND`、snapshot 与现有保存路径不能引入第二条随机流；非法状态在完整
+校验后才允许替换，拒绝时不得部分修改。snake 不复刻临时副本写入缺陷，也不实现
+`UseNewRandom` 的 .NET Random 双状态，因此不保证该配置下与参考同 seed 同结果。
 
 `inspect_snapshot` 与 `decode` 使用同一套验证逻辑，将容器元数据和全部序列化执行状态
 投影为可序列化的检查结果。不透明 Native state 与稳定 Host wait 的重新绑定 payload
@@ -771,3 +785,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+
+## 批次 2B：调用、受控捕获与错误完成
+
+- snake policy/semantic identity `4/4` 启用完整 CALLSTR 文本、STRFORMCHECK 和非 variadic
+  用户函数多余实参策略。旧 snake identity、旧字节码与旧 VM snapshot 明确拒绝，没有静默迁移。
+- 用户调用解析、逐实参保留/省略/丢弃、REF 捕获和调用由统一指令与 continuation 处理。
+  动态 JUMP 保留 caller LOCAL/REF 至 callee 成功返回，再展开 caller；不能提前释放引用。
+- `ExecutionFailure` 在失败源处区分脚本、资源、取消、内部不变量、Host 契约、协议、权限和
+  基础设施。旧 fault code 与消息不足以取得可捕获权限。Native/Host 返回错误保持分类；
+  无效返回值、写集合与 rollback 失败强制属于不可捕获的契约失败。
+- `STRFORMCHECK` 的外层字符串先求值，再建立捕获范围并实际展开。脚本解析或展开失败返回
+  0，成功返回 1；已经提交的脚本/服务副作用不回滚。嵌套范围按最近 owner 恢复，执行与资源
+  限额不会因捕获而重置；资源、取消、权限、坏字节码等失败继续终止。
+- 异步 `VmHostCompletion::Error` 经同一恢复路径进入捕获或排队一个原始 fault 事件。必须先
+  `drive` 交付排队结果，再执行 snapshot、reload、isolated fork 或候选状态提交。
+  `into_candidate_state` 因此返回 `Result`，不能丢弃尚未观测的终态。
+- 静态诊断缓存保存无活动 generation 的模板；发布时绑定实际作用域。动态诊断继续按位置、
+  generation 和稳定 code 去重，并阻止 memo 隐藏其副作用。诊断不进入游戏历史文本。
+- 该版本不包含 BEFORE_* 故障钩子；钩子由后续 2D 接入最终故障生命周期。
+
+### 批次 2B 的缓存与诊断身份
+
+HIR 格式为 `15`，编译缓存/项目容器执行版本为 `11`。运行时表达式所需的完整内置函数签名
+作为 `runtime_builtins` 保存在字节码及缓存元数据中，参与内容身份与增量补丁；该表只允许
+解析和类型检查，不授予服务执行权限。旧项目容器仍可提取源码，但旧字节码必须重建。
+
+Runtime 协议 `37.1` 为兼容诊断 context 增加可选 CBOR 字段 4–7：artifact、project_load_id、
+runtime_epoch、generation。静态多余实参警告在成功加载/重载发布时绑定当前作用域；冷加载
+尚无 VM 时 generation 为空，重载使用实际 VM generation。只保留当前作用域的已发布位置，
+失败发布不消费去重记录。可复用缓存中的诊断不包含这些会话身份，快照和 undo 不回退发布身份。

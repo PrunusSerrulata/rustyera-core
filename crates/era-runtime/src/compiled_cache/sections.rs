@@ -1,6 +1,22 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+pub(super) fn encode_diagnostic_templates(
+    diagnostics: &[ProtocolDiagnostic],
+    kind: ProjectContainerKind,
+    cancelled: Option<&AtomicBool>,
+) -> Result<Vec<u8>, String> {
+    let templates = diagnostics
+        .iter()
+        .cloned()
+        .map(|mut diagnostic| {
+            crate::compatibility::clear_diagnostic_scope(&mut diagnostic);
+            diagnostic
+        })
+        .collect::<Vec<_>>();
+    encode_section(&templates, kind, cancelled)
+}
+
 pub(super) fn encode_section<T: Serialize + ?Sized>(
     value: &T,
     kind: ProjectContainerKind,
@@ -14,6 +30,7 @@ pub(super) fn encode_section<T: Serialize + ?Sized>(
 pub(super) fn decode_manifest_section(
     section: &EncodedSectionRef<'_>,
     project_revision: u64,
+    version: u8,
 ) -> Result<ProjectManifest, String> {
     decode_raw_section(section, |reader| {
         let mut magic = [0_u8; 4];
@@ -21,9 +38,36 @@ pub(super) fn decode_manifest_section(
             .read_exact(&mut magic)
             .map_err(|error| error.to_string())?;
         let compact = match &magic {
-            value if value == MANIFEST_SECTION_MAGIC => false,
-            value if value == COMPACT_MANIFEST_SECTION_MAGIC => true,
+            value if value == MANIFEST_SECTION_MAGIC && version >= PROFILED_PROJECT_VERSION => {
+                false
+            }
+            value
+                if value == COMPACT_MANIFEST_SECTION_MAGIC
+                    && version >= PROFILED_PROJECT_VERSION =>
+            {
+                true
+            }
+            value
+                if value == LEGACY_MANIFEST_SECTION_MAGIC && version < PROFILED_PROJECT_VERSION =>
+            {
+                false
+            }
+            value
+                if value == LEGACY_COMPACT_MANIFEST_SECTION_MAGIC
+                    && version < PROFILED_PROJECT_VERSION =>
+            {
+                true
+            }
             _ => return Err("project manifest has invalid magic".into()),
+        };
+        let compatibility = if version >= PROFILED_PROJECT_VERSION {
+            let bytes = read_bytes(reader, 4096)?;
+            let identity: erabasic_compat::CompatibilityIdentity =
+                serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+            identity.validate().map_err(|error| error.to_string())?;
+            identity
+        } else {
+            erabasic_compat::CompatibilityIdentity::default()
         };
         let count = read_count(reader, section.decoded_length, "project manifest file")?;
         let mut files = Vec::new();
@@ -58,6 +102,7 @@ pub(super) fn decode_manifest_section(
         }
         Ok(ProjectManifest {
             project_revision,
+            compatibility,
             files,
         })
     })
@@ -138,6 +183,32 @@ pub(super) fn manifest_payload_hash(payload: &FilePayload) -> blake3::Hash {
     }
 }
 
+/// Compact caches retain validated source offsets alongside manifest hashes, but
+/// intentionally omit source payloads. Re-exporting such a cache must compare the
+/// retained identity rather than treating the omitted text as an empty source.
+fn compact_source_matches_manifest(
+    source: &SourceRecord,
+    file: &SubmittedFile,
+) -> Result<bool, String> {
+    let omitted = !matches!(
+        file.category,
+        FileCategory::Configuration | FileCategory::ResourceManifest
+    ) && matches!(&file.payload, FilePayload::Utf8(text) if text.is_empty())
+        && file
+            .content_hash
+            .as_ref()
+            .is_some_and(|hash| hash.as_slice() != blake3::hash(&[]).as_bytes());
+    if omitted {
+        return Ok(file
+            .content_hash
+            .as_ref()
+            .is_some_and(|hash| hash.as_slice() == source.content_hash.0)
+            && validate_relative_path(&file.relative_path).map_err(|error| error.to_string())?
+                == source.relative_path);
+    }
+    Ok(source_record_from_file(file)? == *source)
+}
+
 pub(super) fn encode_compact_source_record_section(
     sources: &[SourceRecord],
     manifest: &ProjectManifest,
@@ -161,7 +232,7 @@ pub(super) fn encode_compact_source_record_section(
                 .get(&source.relative_path)
                 .ok_or_else(|| "bytecode source is missing from the project manifest".to_owned())?;
             let file = &manifest.files[index];
-            if source_record_from_file(file)? != *source {
+            if !compact_source_matches_manifest(source, file)? {
                 return Err("bytecode source differs from the project manifest".into());
             }
             Ok((index, source))
@@ -223,7 +294,11 @@ pub(super) fn decode_compact_source_record_section(
                 .ok_or("manifest source index is out of range")?;
             if !matches!(
                 file.category,
-                FileCategory::Csv | FileCategory::Erh | FileCategory::Erb
+                FileCategory::Csv
+                    | FileCategory::Erh
+                    | FileCategory::Erb
+                    | FileCategory::Als
+                    | FileCategory::Erd
             ) {
                 return Err("compact source record refers to a non-source manifest file".into());
             }
@@ -478,6 +553,8 @@ pub(super) fn decode_file_category(value: u8) -> Result<FileCategory, String> {
         3 => Ok(FileCategory::ResourceManifest),
         4 => Ok(FileCategory::Resource),
         5 => Ok(FileCategory::Configuration),
+        6 => Ok(FileCategory::Als),
+        7 => Ok(FileCategory::Erd),
         _ => Err("project manifest file category is invalid".into()),
     }
 }

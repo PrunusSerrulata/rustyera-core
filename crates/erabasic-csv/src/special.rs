@@ -42,9 +42,9 @@ pub(crate) fn load_replace(
                 code,
                 CsvDiagnosticSeverity::Warning,
                 1,
-                &file.path,
+                &file.source_path,
                 Some(crate::input::source(
-                    &file.path,
+                    &file.source_path,
                     u32::try_from(line_no).unwrap_or(u32::MAX),
                     0,
                     raw.len(),

@@ -1,0 +1,941 @@
+{
+  "status": "fixed-snake-reference-golden",
+  "projection": {
+    "cases": {
+      "cbg": {
+        "diagnostics": [],
+        "ok": true,
+        "output": [
+          "Now Loading...",
+          "B4_ORACLE_READY"
+        ],
+        "processExitCode": 0,
+        "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+        "schemaVersion": 2,
+        "state": "WaitInput",
+        "termination": "completed",
+        "watches": {
+          "RESULT:0": 0,
+          "RESULT:1": 1,
+          "RESULT:2": 1,
+          "RESULT:3": 1,
+          "RESULT:4": 1,
+          "RESULT:5": 1,
+          "RESULT:6": 1
+        }
+      },
+      "error-cbg-zero": {
+        "diagnostics": [],
+        "ok": true,
+        "output": [
+          "Now Loading...",
+          "B4_ORACLE_READY",
+          "batch4.erb at line 80Error has occurred:Emuera.NET SkiaSharp 0.0.0.0",
+          "RESULT:2 = CBGSETSPRITE(\"B4_CBG_ZERO\", 0, 0, 0)",
+          "Error description: CBGSETSPRITE: The 4 argument (0) is out of -2147483648-2147483647(except 0) range",
+          "Function: @B4_ERROR_CBG_ZERO（file:batch4.erb in line 77）",
+          "Function call stack:"
+        ],
+        "position": {
+          "file": "batch4.erb",
+          "line": "80"
+        },
+        "processExitCode": 0,
+        "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+        "schemaVersion": 2,
+        "state": "Error",
+        "termination": "error",
+        "watches": {}
+      },
+      "error-image-layer-headless": {
+        "diagnostics": [],
+        "ok": true,
+        "output": [
+          "Now Loading...",
+          "B4_ORACLE_READY",
+          "batch4.erb at line 67Unexpected error has occurred: Emuera.NET SkiaSharp 0.0.0.0",
+          "System.NullReferenceException:Object reference not set to an instance of an object.",
+          "   at MinorShift.Emuera.GameView.EmueraConsole.SetImageLayer(String spriteName, Int64 depth, Int32 x, Int32 y, Int32 width, Int32 height, Int32 opacity, Single[] colorMatrix, Boolean followScroll) in /Users/edwardl/Projects/rustyera/emuera_lazyloading_selfmodified_version/Emuera/UI/Game/EmueraConsole.cs:line 285\r",
+          "   at MinorShift.Emuera.GameProc.Function.FunctionIdentifier.SETIMAGELAYER_Instruction.DoInstruction(ExpressionMediator exm, InstructionLine func, ProcessState state) in /Users/edwardl/Projects/rustyera/emuera_lazyloading_selfmodified_version/Emuera/Runtime/Script/Statements/Instraction.Child.cs:line 4148\r",
+          "   at MinorShift.Emuera.GameProc.Process.runScriptProc() in /Users/edwardl/Projects/rustyera/emuera_lazyloading_selfmodified_version/Emuera/Runtime/Script/Process.ScriptProc.cs:line 71\r",
+          "   at MinorShift.Emuera.GameProc.Process.DoScript() in /Users/edwardl/Projects/rustyera/emuera_lazyloading_selfmodified_version/Emuera/Runtime/Script/Process.cs:line 367"
+        ],
+        "position": {
+          "file": "batch4.erb",
+          "line": "67"
+        },
+        "processExitCode": 0,
+        "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+        "schemaVersion": 2,
+        "state": "Error",
+        "termination": "error",
+        "watches": {
+          "RESULT:0": 1,
+          "RESULT:1": 1
+        }
+      },
+      "error-image-layer-line-headless": {
+        "diagnostics": [],
+        "ok": true,
+        "output": [
+          "Now Loading...",
+          "B4_ORACLE_READY",
+          "B4_LAYER_ANCHOR",
+          "batch4.erb at line 74Unexpected error has occurred: Emuera.NET SkiaSharp 0.0.0.0",
+          "System.NullReferenceException:Object reference not set to an instance of an object.",
+          "   at MinorShift.Emuera.GameView.EmueraConsole.GetLinePointY(Int32 lineNo) in /Users/edwardl/Projects/rustyera/emuera_lazyloading_selfmodified_version/Emuera/UI/Game/EmueraConsole.cs:line 1914\r",
+          "   at MinorShift.Emuera.GameProc.Function.FunctionIdentifier.SETIMAGELAYERL_Instruction.DoInstruction(ExpressionMediator exm, InstructionLine func, ProcessState state) in /Users/edwardl/Projects/rustyera/emuera_lazyloading_selfmodified_version/Emuera/Runtime/Script/Statements/Instraction.Child.cs:line 4200\r",
+          "   at MinorShift.Emuera.GameProc.Process.runScriptProc() in /Users/edwardl/Projects/rustyera/emuera_lazyloading_selfmodified_version/Emuera/Runtime/Script/Process.ScriptProc.cs:line 71\r",
+          "   at MinorShift.Emuera.GameProc.Process.DoScript() in /Users/edwardl/Projects/rustyera/emuera_lazyloading_selfmodified_version/Emuera/Runtime/Script/Process.cs:line 367"
+        ],
+        "position": {
+          "file": "batch4.erb",
+          "line": "74"
+        },
+        "processExitCode": 0,
+        "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+        "schemaVersion": 2,
+        "state": "Error",
+        "termination": "error",
+        "watches": {
+          "RESULT:0": 1,
+          "RESULT:1": 1
+        }
+      },
+      "error-polygon-empty": {
+        "diagnostics": [],
+        "ok": true,
+        "output": [
+          "Now Loading...",
+          "B4_ORACLE_READY",
+          "batch4.erb at line 85Error has occurred:Emuera.NET SkiaSharp 0.0.0.0",
+          "RESULT:1 = G_POLYGON_DRAW(915)",
+          "Error description: G_POLYGON_DRAW: System.NullReferenceException: DrawPolygonに渡されるPointsが空です\r\n   at MinorShift.Emuera.UI.Game.Image.GraphicsImage.GDrawPolygon() in /Users/edwardl/Projects/rustyera/emuera_lazyloading_selfmodified_version/Emuera/UI/Game/image/GraphicsImage.cs:line 344\r\n   at MinorShift.Emuera.GameData.Function.FunctionMethodCreator.GraphicsDrawPolygonMethod.GetIntValue(ExpressionMediator exm, List`1 arguments) in /Users/edwardl/Projects/rustyera/emuera_lazyloading_selfmodified_version/Emuera/Runtime/Script/Statements/Function/Creator.Method.cs:line 8218",
+          "Function: @B4_ERROR_POLYGON_EMPTY（file:batch4.erb in line 83）",
+          "Function call stack:"
+        ],
+        "position": {
+          "file": "batch4.erb",
+          "line": "85"
+        },
+        "processExitCode": 0,
+        "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+        "schemaVersion": 2,
+        "state": "Error",
+        "termination": "error",
+        "watches": {}
+      },
+      "extended-html": {
+        "diagnostics": [],
+        "ok": true,
+        "output": [
+          "Now Loading...",
+          "B4_ORACLE_READY",
+          "B4",
+          "<img src='B4_HTML' height='2px' width='4px' ypos='2px' xpos='3px'>",
+          "D<div xpos='5px' ypos='1px' width='80px' color='#FFFFFF' height='24px' margin='1px' padding='2px' border='1px' radius='2px' bcolor='#00FF00'>D\r\n</div>"
+        ],
+        "presentation": {
+          "animationTimer": 0,
+          "dotnetVersion": "8.0.28",
+          "drawableWidth": 316,
+          "drawingMode": "TEXTRENDERER",
+          "fontByteSource": "unverified-installed-source",
+          "fontEvidence": "supplied file hash and observed family; not proof of selected font bytes",
+          "fontSize": 16,
+          "lineHeight": 20,
+          "lines": [
+            {
+              "alignment": "LEFT",
+              "buttons": [
+                {
+                  "input": null,
+                  "isButton": false,
+                  "isInteger": false,
+                  "nodes": [
+                    {
+                      "bottom": 16,
+                      "error": false,
+                      "font": {
+                        "fallbackRuns": [
+                          {
+                            "resolvedFamily": "BIZ UDGothic",
+                            "text": "Now Loading...",
+                            "width": 112
+                          }
+                        ],
+                        "provider": "skia-measure-text",
+                        "providerVersion": "3.119.0.0",
+                        "requestedFamily": "BIZ UDGothic",
+                        "resolvedFamily": "BIZ UDGothic",
+                        "size": 16,
+                        "style": "Regular"
+                      },
+                      "kind": "ConsoleStyledString",
+                      "subpixel": 0,
+                      "text": "Now Loading...",
+                      "top": 0,
+                      "width": 112,
+                      "widthFloat": 0,
+                      "x": 0
+                    }
+                  ],
+                  "subpixel": 0,
+                  "width": 112,
+                  "x": 0
+                }
+              ],
+              "lineEnd": true,
+              "lineNo": 0,
+              "logical": true,
+              "temporary": false,
+              "textBackgroundEligible": true
+            },
+            {
+              "alignment": "LEFT",
+              "buttons": [
+                {
+                  "input": null,
+                  "isButton": false,
+                  "isInteger": false,
+                  "nodes": [
+                    {
+                      "bottom": 16,
+                      "error": false,
+                      "font": {
+                        "fallbackRuns": [
+                          {
+                            "resolvedFamily": "BIZ UDGothic",
+                            "text": "B4_ORACLE_READY",
+                            "width": 120
+                          }
+                        ],
+                        "provider": "skia-measure-text",
+                        "providerVersion": "3.119.0.0",
+                        "requestedFamily": "BIZ UDGothic",
+                        "resolvedFamily": "BIZ UDGothic",
+                        "size": 16,
+                        "style": "Regular"
+                      },
+                      "kind": "ConsoleStyledString",
+                      "subpixel": 0,
+                      "text": "B4_ORACLE_READY",
+                      "top": 0,
+                      "width": 120,
+                      "widthFloat": 0,
+                      "x": 0
+                    }
+                  ],
+                  "subpixel": 0,
+                  "width": 120,
+                  "x": 0
+                }
+              ],
+              "lineEnd": true,
+              "lineNo": 1,
+              "logical": true,
+              "temporary": false,
+              "textBackgroundEligible": true
+            },
+            {
+              "alignment": "LEFT",
+              "buttons": [
+                {
+                  "input": null,
+                  "isButton": false,
+                  "isInteger": false,
+                  "nodes": [
+                    {
+                      "bottom": 16,
+                      "error": false,
+                      "font": {
+                        "fallbackRuns": [
+                          {
+                            "resolvedFamily": "BIZ UDGothic",
+                            "text": "B4",
+                            "width": 18
+                          }
+                        ],
+                        "provider": "skia-measure-text",
+                        "providerVersion": "3.119.0.0",
+                        "requestedFamily": "BIZ UDGothic",
+                        "resolvedFamily": "BIZ UDGothic",
+                        "size": 18,
+                        "style": "Regular"
+                      },
+                      "kind": "ConsoleStyledString",
+                      "subpixel": 0,
+                      "text": "B4",
+                      "top": 0,
+                      "width": 18,
+                      "widthFloat": 0,
+                      "x": 0
+                    }
+                  ],
+                  "subpixel": 0,
+                  "width": 18,
+                  "x": 0
+                }
+              ],
+              "lineEnd": true,
+              "lineNo": 2,
+              "logical": true,
+              "temporary": false,
+              "textBackgroundEligible": true
+            },
+            {
+              "alignment": "LEFT",
+              "buttons": [
+                {
+                  "input": null,
+                  "isButton": false,
+                  "isInteger": false,
+                  "nodes": [
+                    {
+                      "bottom": 4,
+                      "error": false,
+                      "kind": "ConsoleImagePart",
+                      "subpixel": 0,
+                      "text": "",
+                      "top": 2,
+                      "width": 4,
+                      "widthFloat": 0,
+                      "x": 0
+                    }
+                  ],
+                  "subpixel": 0,
+                  "width": 4,
+                  "x": 0
+                }
+              ],
+              "lineEnd": true,
+              "lineNo": 3,
+              "logical": true,
+              "temporary": false,
+              "textBackgroundEligible": false
+            },
+            {
+              "alignment": "LEFT",
+              "buttons": [
+                {
+                  "input": null,
+                  "isButton": false,
+                  "isInteger": false,
+                  "nodes": [
+                    {
+                      "bottom": 25,
+                      "error": false,
+                      "kind": "ConsoleDivPart",
+                      "subpixel": 0,
+                      "text": "",
+                      "top": 1,
+                      "width": 0,
+                      "widthFloat": 0,
+                      "x": 0
+                    }
+                  ],
+                  "subpixel": 0,
+                  "width": 0,
+                  "x": 0
+                }
+              ],
+              "lineEnd": true,
+              "lineNo": 4,
+              "logical": true,
+              "temporary": false,
+              "textBackgroundEligible": false
+            }
+          ],
+          "pending": false,
+          "printCLength": 25,
+          "provider": "skia-measure-text",
+          "providerVersions": {
+            "skia-measure-text": "3.119.0.0"
+          },
+          "requestedFont": "BIZ UDGothic",
+          "suppliedFontFileSha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+          "textBackground": null,
+          "version": 1
+        },
+        "processExitCode": 0,
+        "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+        "schemaVersion": 2,
+        "state": "WaitInput",
+        "termination": "completed",
+        "watches": {
+          "RESULT:0": 0,
+          "RESULT:1": 1,
+          "RESULT:2": 1,
+          "RESULT:3": 1
+        }
+      },
+      "file-sprite": {
+        "diagnostics": [],
+        "ok": true,
+        "output": [
+          "Now Loading...",
+          "B4_ORACLE_READY"
+        ],
+        "processExitCode": 0,
+        "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+        "schemaVersion": 2,
+        "state": "WaitInput",
+        "termination": "completed",
+        "watches": {
+          "RESULT:0": 0,
+          "RESULT:1": 0,
+          "RESULT:2": 0,
+          "RESULT:3": 0,
+          "RESULT:4": 0
+        }
+      },
+      "html-columns": {
+        "diagnostics": [],
+        "ok": true,
+        "output": [
+          "Now Loading...",
+          "B4_ORACLE_READY",
+          "RLD"
+        ],
+        "presentation": {
+          "animationTimer": 0,
+          "dotnetVersion": "8.0.28",
+          "drawableWidth": 316,
+          "drawingMode": "TEXTRENDERER",
+          "fontByteSource": "unverified-installed-source",
+          "fontEvidence": "supplied file hash and observed family; not proof of selected font bytes",
+          "fontSize": 16,
+          "lineHeight": 20,
+          "lines": [
+            {
+              "alignment": "LEFT",
+              "buttons": [
+                {
+                  "input": null,
+                  "isButton": false,
+                  "isInteger": false,
+                  "nodes": [
+                    {
+                      "bottom": 16,
+                      "error": false,
+                      "font": {
+                        "fallbackRuns": [
+                          {
+                            "resolvedFamily": "BIZ UDGothic",
+                            "text": "Now Loading...",
+                            "width": 112
+                          }
+                        ],
+                        "provider": "skia-measure-text",
+                        "providerVersion": "3.119.0.0",
+                        "requestedFamily": "BIZ UDGothic",
+                        "resolvedFamily": "BIZ UDGothic",
+                        "size": 16,
+                        "style": "Regular"
+                      },
+                      "kind": "ConsoleStyledString",
+                      "subpixel": 0,
+                      "text": "Now Loading...",
+                      "top": 0,
+                      "width": 112,
+                      "widthFloat": 0,
+                      "x": 0
+                    }
+                  ],
+                  "subpixel": 0,
+                  "width": 112,
+                  "x": 0
+                }
+              ],
+              "lineEnd": true,
+              "lineNo": 0,
+              "logical": true,
+              "temporary": false,
+              "textBackgroundEligible": true
+            },
+            {
+              "alignment": "LEFT",
+              "buttons": [
+                {
+                  "input": null,
+                  "isButton": false,
+                  "isInteger": false,
+                  "nodes": [
+                    {
+                      "bottom": 16,
+                      "error": false,
+                      "font": {
+                        "fallbackRuns": [
+                          {
+                            "resolvedFamily": "BIZ UDGothic",
+                            "text": "B4_ORACLE_READY",
+                            "width": 120
+                          }
+                        ],
+                        "provider": "skia-measure-text",
+                        "providerVersion": "3.119.0.0",
+                        "requestedFamily": "BIZ UDGothic",
+                        "resolvedFamily": "BIZ UDGothic",
+                        "size": 16,
+                        "style": "Regular"
+                      },
+                      "kind": "ConsoleStyledString",
+                      "subpixel": 0,
+                      "text": "B4_ORACLE_READY",
+                      "top": 0,
+                      "width": 120,
+                      "widthFloat": 0,
+                      "x": 0
+                    }
+                  ],
+                  "subpixel": 0,
+                  "width": 120,
+                  "x": 0
+                }
+              ],
+              "lineEnd": true,
+              "lineNo": 1,
+              "logical": true,
+              "temporary": false,
+              "textBackgroundEligible": true
+            },
+            {
+              "alignment": "LEFT",
+              "buttons": [
+                {
+                  "input": null,
+                  "isButton": false,
+                  "isInteger": false,
+                  "nodes": [
+                    {
+                      "bottom": 16,
+                      "error": false,
+                      "kind": "ConsoleSpacePart",
+                      "subpixel": 0,
+                      "text": "",
+                      "top": 0,
+                      "width": 32,
+                      "widthFloat": 32,
+                      "x": 0
+                    }
+                  ],
+                  "subpixel": 0,
+                  "width": 32,
+                  "x": 0
+                },
+                {
+                  "input": null,
+                  "isButton": false,
+                  "isInteger": false,
+                  "nodes": [
+                    {
+                      "bottom": 16,
+                      "error": false,
+                      "font": {
+                        "fallbackRuns": [
+                          {
+                            "resolvedFamily": "BIZ UDGothic",
+                            "text": "R",
+                            "width": 8
+                          }
+                        ],
+                        "provider": "skia-measure-text",
+                        "providerVersion": "3.119.0.0",
+                        "requestedFamily": "BIZ UDGothic",
+                        "resolvedFamily": "BIZ UDGothic",
+                        "size": 16,
+                        "style": "Bold"
+                      },
+                      "kind": "ConsoleStyledString",
+                      "subpixel": 0,
+                      "text": "R",
+                      "top": 0,
+                      "width": 8,
+                      "widthFloat": 0,
+                      "x": 32
+                    }
+                  ],
+                  "subpixel": 0,
+                  "width": 8,
+                  "x": 32
+                },
+                {
+                  "input": null,
+                  "isButton": false,
+                  "isInteger": false,
+                  "nodes": [
+                    {
+                      "bottom": 16,
+                      "error": false,
+                      "font": {
+                        "fallbackRuns": [
+                          {
+                            "resolvedFamily": "BIZ UDGothic",
+                            "text": "L",
+                            "width": 8
+                          }
+                        ],
+                        "provider": "skia-measure-text",
+                        "providerVersion": "3.119.0.0",
+                        "requestedFamily": "BIZ UDGothic",
+                        "resolvedFamily": "BIZ UDGothic",
+                        "size": 16,
+                        "style": "Italic"
+                      },
+                      "kind": "ConsoleStyledString",
+                      "subpixel": 0,
+                      "text": "L",
+                      "top": 0,
+                      "width": 8,
+                      "widthFloat": 0,
+                      "x": 40
+                    }
+                  ],
+                  "subpixel": 0,
+                  "width": 8,
+                  "x": 40
+                },
+                {
+                  "input": null,
+                  "isButton": false,
+                  "isInteger": false,
+                  "nodes": [
+                    {
+                      "bottom": 16,
+                      "error": false,
+                      "kind": "ConsoleSpacePart",
+                      "subpixel": 0,
+                      "text": "",
+                      "top": 0,
+                      "width": 32,
+                      "widthFloat": 32,
+                      "x": 48
+                    }
+                  ],
+                  "subpixel": 0,
+                  "width": 32,
+                  "x": 48
+                },
+                {
+                  "input": null,
+                  "isButton": false,
+                  "isInteger": false,
+                  "nodes": [
+                    {
+                      "bottom": 16,
+                      "error": false,
+                      "kind": "ConsoleSpacePart",
+                      "subpixel": 0,
+                      "text": "",
+                      "top": 0,
+                      "width": 192,
+                      "widthFloat": 192,
+                      "x": 80
+                    }
+                  ],
+                  "subpixel": 0,
+                  "width": 192,
+                  "x": 80
+                },
+                {
+                  "input": null,
+                  "isButton": false,
+                  "isInteger": false,
+                  "nodes": [
+                    {
+                      "bottom": 16,
+                      "error": false,
+                      "font": {
+                        "fallbackRuns": [
+                          {
+                            "resolvedFamily": "BIZ UDGothic",
+                            "text": "D",
+                            "width": 8
+                          }
+                        ],
+                        "provider": "skia-measure-text",
+                        "providerVersion": "3.119.0.0",
+                        "requestedFamily": "BIZ UDGothic",
+                        "resolvedFamily": "BIZ UDGothic",
+                        "size": 16,
+                        "style": "Regular"
+                      },
+                      "kind": "ConsoleStyledString",
+                      "subpixel": 0,
+                      "text": "D",
+                      "top": 0,
+                      "width": 8,
+                      "widthFloat": 0,
+                      "x": 272
+                    }
+                  ],
+                  "subpixel": 0,
+                  "width": 8,
+                  "x": 272
+                }
+              ],
+              "lineEnd": true,
+              "lineNo": 2,
+              "logical": true,
+              "temporary": false,
+              "textBackgroundEligible": true
+            }
+          ],
+          "pending": false,
+          "printCLength": 25,
+          "provider": "skia-measure-text",
+          "providerVersions": {
+            "skia-measure-text": "3.119.0.0"
+          },
+          "requestedFont": "BIZ UDGothic",
+          "suppliedFontFileSha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+          "textBackground": null,
+          "version": 1
+        },
+        "processExitCode": 0,
+        "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+        "schemaVersion": 2,
+        "state": "WaitInput",
+        "termination": "completed",
+        "watches": {
+          "RESULT:0": 0
+        }
+      },
+      "polygon": {
+        "diagnostics": [],
+        "ok": true,
+        "output": [
+          "Now Loading...",
+          "B4_ORACLE_READY"
+        ],
+        "processExitCode": 0,
+        "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+        "schemaVersion": 2,
+        "state": "WaitInput",
+        "termination": "completed",
+        "watches": {
+          "RESULT:0": 0,
+          "RESULT:1": 1,
+          "RESULT:2": 1,
+          "RESULT:3": 1,
+          "RESULT:4": 1,
+          "RESULT:5": 1,
+          "RESULT:6": 1
+        }
+      },
+      "sprite-overloads": {
+        "diagnostics": [],
+        "ok": true,
+        "output": [
+          "Now Loading...",
+          "B4_ORACLE_READY"
+        ],
+        "processExitCode": 0,
+        "referenceCommit": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+        "schemaVersion": 2,
+        "state": "WaitInput",
+        "termination": "completed",
+        "watches": {
+          "RESULT:0": 0,
+          "RESULT:1": 1,
+          "RESULT:10": 9,
+          "RESULT:11": 1,
+          "RESULT:12": 2,
+          "RESULT:13": 1,
+          "RESULT:2": 1,
+          "RESULT:3": 1,
+          "RESULT:4": 1,
+          "RESULT:5": 2,
+          "RESULT:6": 1,
+          "RESULT:7": -3,
+          "RESULT:8": 4,
+          "RESULT:9": 7
+        }
+      }
+    },
+    "fixtureManifest": [
+      {
+        "exists": true,
+        "path": "cases.json",
+        "sha256": "ce7dbaaaf67ad30082d97cb51b4863dc90b00e89e7d2133ac69567c238352a83",
+        "size": 3255
+      },
+      {
+        "exists": true,
+        "path": "csv/GAMEBASE.CSV",
+        "sha256": "cdbe8dbd1fa2b8b4405b9ed9c948dd21539543659c068e1fb10a81f477f409b3",
+        "size": 58
+      },
+      {
+        "exists": true,
+        "path": "emuera.config",
+        "sha256": "9006cb5db32bef51d23b23167738cb442603f70b3210a06ba35bdf3936eac8c7",
+        "size": 432
+      },
+      {
+        "exists": true,
+        "path": "erb/base.erb",
+        "sha256": "463f482fbbe12fc6b4a39aad2db3b4fbab9c8ee898caa82760967c5b4f0779d6",
+        "size": 50
+      },
+      {
+        "exists": true,
+        "path": "erb/batch4.erb",
+        "sha256": "a7312b4ee339ea0ef575988fad9db465761890983ed8e603f9b9e81becf0b165",
+        "size": 2835
+      },
+      {
+        "exists": true,
+        "path": "setting.json",
+        "sha256": "b3586bda68d77ab73eb59e6c6260ee963b572d6262f52629a687e637c23b241c",
+        "size": 23
+      },
+      {
+        "destination": "service-pixels.png",
+        "exists": true,
+        "path": "external:../fixture-snake-service-oracle/resources/service-pixels.png",
+        "sha256": "5a43ec1305804c9be3f99944cc19630ecb0839f0743c32deffd29357409efe54",
+        "size": 71
+      },
+      {
+        "destination": "font/BIZUDGothic-Regular.ttf",
+        "exists": true,
+        "path": "external:../../../../emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf",
+        "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+        "size": 4486740
+      }
+    ],
+    "formatVersion": 1,
+    "implementation": "emuera_lazyloading_selfmodified_version",
+    "loadPresentationEvidence": {
+      "animationTimer": 0,
+      "dotnetVersion": "8.0.28",
+      "drawableWidth": 316,
+      "drawingMode": "TEXTRENDERER",
+      "fontByteSource": "unverified-installed-source",
+      "fontEvidence": "supplied file hash and observed family; not proof of selected font bytes",
+      "fontSize": 16,
+      "lineHeight": 20,
+      "lines": [
+        {
+          "alignment": "LEFT",
+          "buttons": [
+            {
+              "input": null,
+              "isButton": false,
+              "isInteger": false,
+              "nodes": [
+                {
+                  "bottom": 16,
+                  "error": false,
+                  "font": {
+                    "fallbackRuns": [
+                      {
+                        "resolvedFamily": "BIZ UDGothic",
+                        "text": "Now Loading...",
+                        "width": 112
+                      }
+                    ],
+                    "provider": "skia-measure-text",
+                    "providerVersion": "3.119.0.0",
+                    "requestedFamily": "BIZ UDGothic",
+                    "resolvedFamily": "BIZ UDGothic",
+                    "size": 16,
+                    "style": "Regular"
+                  },
+                  "kind": "ConsoleStyledString",
+                  "subpixel": 0,
+                  "text": "Now Loading...",
+                  "top": 0,
+                  "width": 112,
+                  "widthFloat": 0,
+                  "x": 0
+                }
+              ],
+              "subpixel": 0,
+              "width": 112,
+              "x": 0
+            }
+          ],
+          "lineEnd": true,
+          "lineNo": 0,
+          "logical": true,
+          "temporary": false,
+          "textBackgroundEligible": true
+        },
+        {
+          "alignment": "LEFT",
+          "buttons": [
+            {
+              "input": null,
+              "isButton": false,
+              "isInteger": false,
+              "nodes": [
+                {
+                  "bottom": 16,
+                  "error": false,
+                  "font": {
+                    "fallbackRuns": [
+                      {
+                        "resolvedFamily": "BIZ UDGothic",
+                        "text": "B4_ORACLE_READY",
+                        "width": 120
+                      }
+                    ],
+                    "provider": "skia-measure-text",
+                    "providerVersion": "3.119.0.0",
+                    "requestedFamily": "BIZ UDGothic",
+                    "resolvedFamily": "BIZ UDGothic",
+                    "size": 16,
+                    "style": "Regular"
+                  },
+                  "kind": "ConsoleStyledString",
+                  "subpixel": 0,
+                  "text": "B4_ORACLE_READY",
+                  "top": 0,
+                  "width": 120,
+                  "widthFloat": 0,
+                  "x": 0
+                }
+              ],
+              "subpixel": 0,
+              "width": 120,
+              "x": 0
+            }
+          ],
+          "lineEnd": true,
+          "lineNo": 1,
+          "logical": true,
+          "temporary": false,
+          "textBackgroundEligible": true
+        }
+      ],
+      "pending": false,
+      "printCLength": 25,
+      "provider": "skia-measure-text",
+      "providerVersions": {
+        "skia-measure-text": "3.119.0.0"
+      },
+      "requestedFont": "BIZ UDGothic",
+      "suppliedFontFileSha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+      "textBackground": null,
+      "version": 1
+    },
+    "referenceExecutable": {
+      "exists": true,
+      "sha256": "6caa1eebb7a781e6c42fed97e3109d33da27dfd2e7d8c7f22cba1b88d9d1c642",
+      "size": 151552
+    },
+    "semanticBaseline": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+    "viewport": {
+      "font": "BIZ UDGothic",
+      "fontSize": 16,
+      "lineHeight": 20,
+      "width": 320
+    },
+    "wrapper": {
+      "commit": "0c50ccbe0c2434567ef527d72a54c967bd576f2a",
+      "dirty": false
+    }
+  }
+}

@@ -86,12 +86,21 @@ pub struct BytecodeParameter {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct BytecodeCallCompatibility {
+    pub user_argument_policy: erabasic_compat::UserCallArgumentPolicy,
     pub allow_event_as_normal: bool,
     pub allow_omitted_arguments: bool,
     pub auto_convert_integer_to_string: bool,
     pub allow_full_width_space: bool,
     pub debug_semicolon: bool,
     pub ignore_triple_symbols: bool,
+    /// Parse-time RAND argument compatibility used by runtime expression probes.
+    pub compatible_rand: bool,
+    /// Do not infer omitted character indices in runtime expression probes.
+    pub system_no_target: bool,
+    /// Config.IgnoreCase for runtime variable-name token lookup.
+    pub ignore_case: bool,
+    /// Run snake `BEFORE_ERROR`/`BEFORE_THROW` before publishing a final script fault.
+    pub before_error_throw_hooks: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -140,6 +149,7 @@ pub struct BytecodeEventGroup {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ArtifactManifest {
+    pub compatibility: erabasic_compat::CompatibilityIdentity,
     pub container_version: FormatVersion,
     pub isa_version: FormatVersion,
     pub compiler_abi: u32,
@@ -154,6 +164,7 @@ impl ArtifactManifest {
     #[must_use]
     pub fn new(compiler_options: Digest) -> Self {
         Self {
+            compatibility: erabasic_compat::CompatibilityIdentity::default(),
             container_version: CONTAINER_VERSION,
             isa_version: ISA_VERSION,
             compiler_abi: COMPILER_ABI_VERSION,
@@ -174,6 +185,11 @@ impl ArtifactManifest {
 pub struct BytecodeArtifact {
     pub manifest: ArtifactManifest,
     pub call_compatibility: BytecodeCallCompatibility,
+    pub runtime_builtins: Vec<crate::RuntimeBuiltinSymbol>,
+    pub runtime_variables: Vec<crate::RuntimeVariableSymbol>,
+    pub runtime_native_authorizations: Vec<crate::RuntimeNativeAuthorization>,
+    pub runtime_host_authorizations: Vec<crate::RuntimeHostAuthorization>,
+    pub runtime_staged_authorizations: Vec<crate::RuntimeStagedAuthorization>,
     pub project_data: ProjectData,
     pub globals: Vec<BytecodeGlobal>,
     pub native_imports: Vec<NativeImport>,
@@ -188,6 +204,11 @@ impl BytecodeArtifact {
     pub fn canonicalize(&mut self) {
         sort_if_needed_by_key(&mut self.manifest.required_features, Clone::clone);
         self.manifest.required_features.dedup();
+        sort_if_needed_by_key(&mut self.runtime_builtins, |symbol| symbol.name.clone());
+        sort_if_needed_by_key(&mut self.runtime_variables, |symbol| symbol.key);
+        sort_if_needed_by_key(&mut self.runtime_native_authorizations, |symbol| symbol.key);
+        sort_if_needed_by_key(&mut self.runtime_host_authorizations, |symbol| symbol.key);
+        sort_if_needed_by_key(&mut self.runtime_staged_authorizations, |symbol| symbol.key);
         sort_if_needed_by_key(&mut self.globals, |global| global.key);
         sort_if_needed_by_key(&mut self.native_imports, |import| import.import.key);
         sort_if_needed_by_key(&mut self.host_imports, |import| import.import.key);
@@ -265,15 +286,7 @@ impl BytecodeArtifact {
                                     &self.host_imports,
                                 )
                             },
-                            || {
-                                parallel_binary_digest(
-                                    "rustyera.bytecode.identity.functions.v4",
-                                    "rustyera.bytecode.identity.function-chunk.v4",
-                                    &self.functions,
-                                    256,
-                                    encode_function_chunk,
-                                )
-                            },
+                            || self.functions_identity(),
                         )
                     },
                     || {
@@ -287,7 +300,14 @@ impl BytecodeArtifact {
                             || {
                                 canonical_digest(
                                     "rustyera.bytecode.identity.call-compatibility.v2",
-                                    &self.call_compatibility,
+                                    &(
+                                        &self.call_compatibility,
+                                        &self.runtime_builtins,
+                                        &self.runtime_variables,
+                                        &self.runtime_native_authorizations,
+                                        &self.runtime_host_authorizations,
+                                        &self.runtime_staged_authorizations,
+                                    ),
                                 )
                             },
                         )
@@ -306,6 +326,10 @@ impl BytecodeArtifact {
             events?,
             call_compatibility?,
         );
+        let runtime_builtins = canonical_digest(
+            "rustyera.bytecode.identity.runtime-builtins.v1",
+            &self.runtime_builtins,
+        )?;
         Ok(Digest::hash(
             "rustyera.bytecode.execution.v2",
             &[
@@ -317,14 +341,26 @@ impl BytecodeArtifact {
                 &functions.0,
                 &events.0,
                 &call_compatibility.0,
+                &runtime_builtins.0,
             ],
         ))
     }
 
+    fn functions_identity(&self) -> Digest {
+        parallel_binary_digest(
+            "rustyera.bytecode.identity.functions.v4",
+            "rustyera.bytecode.identity.function-chunk.v4",
+            &self.functions,
+            256,
+            encode_function_chunk,
+        )
+    }
+
     fn versions_identity(&self) -> Result<Digest, serde_json::Error> {
         canonical_digest(
-            "rustyera.bytecode.identity.versions.v2",
+            "rustyera.bytecode.identity.versions.v3",
             &(
+                &self.manifest.compatibility,
                 self.manifest.isa_version,
                 self.manifest.compiler_abi,
                 self.manifest.native_abi,

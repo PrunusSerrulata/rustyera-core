@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "status": "batch-4.0-source-and-oracle-contract",
+  "semanticBaseline": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+  "contracts": {
+    "HTML_PRINTC_HTML_PRINTLC": {
+      "arity": "one string plus optional integer cellWidth",
+      "defaultCellWidth": "PrintCLength * FontSize / 2 when cellWidth <= 0",
+      "alignment": {"HTML_PRINTC": "right", "HTML_PRINTLC": "left"},
+      "wrap": "wrap before the cell when current pixel x is nonzero and current x + cell width exceeds drawable width",
+      "oversize": "negative padding is clamped to zero; content is not truncated",
+      "source": ["Instraction.Child.cs:415-433", "EmueraConsole.cs PrintHtmlC"]
+    },
+    "extendedHtml": {
+      "font": ["color", "bcolor", "face", "render", "edging", "hinting", "size", "valign"],
+      "img": ["src", "srcb", "srcm", "xpos", "ypos", "width", "height", "display", "cm"],
+      "div": ["xpos", "ypos", "width", "height", "size", "rect", "depth", "color", "bcolor", "display", "border", "radius", "margin", "padding"],
+      "divBackground": "bcolor uses one to four color tokens expanded by ParseParam4IntNum; each token is parsed by stringToColorInt32",
+      "lengthUnits": "plain numeric values are FontSize/100 units; px values are logical pixels",
+      "unknownOrDuplicateAttributes": "parse error",
+      "source": ["HtmlManager.cs", "ConsoleImagePart.cs", "ConsoleDivPart.cs"]
+    },
+    "sprite": {
+      "arities": [2, 6, 8, 10],
+      "eightParameters": "source rectangle followed by destination position x/y",
+      "tenParameters": "eight-parameter form followed by destination width/height; negative destination sizes become absolute",
+      "negativeSourceExtent": "accepted when the source rectangle intersects the canvas and represents a flip in rendering",
+      "fileDefaultBase": "ContentDir when isRelative is omitted or zero; process-relative when nonzero in the reference",
+      "rustOwnedSafetyDecision": "batch 4.2 will instead use project content root or declaring script directory and reject absolute/traversal/symlink escape",
+      "source": ["Creator.Method.cs:7916-8100"]
+    },
+    "polygon": {
+      "pointState": "per-canvas ordered point list",
+      "drawAndFill": "return 1 for a created canvas with a nonempty point set; draw closes to the first point and fill closes the path",
+      "empty": "reference runtime error",
+      "source": ["Creator.Method.cs:8199-8315"]
+    },
+    "cbg": {
+      "coordinates": "viewport anchor; x from left and y in the reference bottom-oriented composition transform",
+      "depthZero": "runtime error",
+      "defaults": {"x": 0, "y": 0, "depth": 1, "width": 0, "height": 0, "opacity": 255},
+      "sameDepth": "the source uses List.Sort and does not prove stable insertion order; batch 4 must obtain deterministic sequence evidence rather than assume .NET sort stability",
+      "colorMatrix": "25 signed integer elements in 1/256 fixed point; reference converts to a Skia 4x5 matrix at render time",
+      "source": ["Creator.Method.cs:8671-8905", "EmueraConsole.cs CBG_*", "ConsoleDisplayLine.cs"]
+    },
+    "imageLayer": {
+      "defaults": {"x": 0, "y": 0, "width": 0, "height": 0, "opacity": 255, "followScroll": false},
+      "sameDepth": "multiple layers are allowed and clear-depth removes all of them",
+      "lineAnchor": "SETIMAGELAYERL captures the current display-line index in the reference; batch 4.3 will normalize this to stable line_id",
+      "getLineY": "GetLinePointY(displayIndex) + LineHeight - ClientHeight; negative index is an error",
+      "depthZero": "accepted by the reference ImageLayer manager; unlike CBG, no zero-depth rejection is present",
+      "offscreenDifference": "reference pauses SpriteAnime offscreen; batch 4 intentionally preserves logical animation time and only suppresses drawing",
+      "headlessReference": "the fixed reference CLI reaches EmueraConsole.SetImageLayer for both viewport and line-relative calls but terminates the ERA run with NullReferenceException because its headless console has no native window ScrollBar; successful rendering semantics are therefore source-derived, while that runtime error is frozen by the oracle",
+      "source": ["Instraction.Child.cs:4128-4239", "Creator.Method.cs:10766-10791", "ImageLayerManager.cs"]
+    },
+    "ownedSaveV2": {
+      "authority": "RustyEra-owned contract; external snake saves remain out of scope",
+      "innerPayload": ["Text1808", "Binary1808", "GZip"],
+      "state": ["canonical identity", "variables/characters/custom arrays/GLOBAL", "complete 624-word SFMT state plus index", "SQL identities sorted with exact 32-byte durable SHA-256 revisions"],
+      "atomicity": "restore into candidate state and commit only after variables, RNG, and every exact SQL revision succeed",
+      "preconditions": "no pending SQL operation, reader, or transaction",
+      "databaseBytes": "not embedded",
+      "compatibility": "bare 1808 remains original-profile output; snake envelope v1 and external snake saves are explicitly rejected"
+    }
+  },
+  "bbas": {
+    "requiredPresent": ["plugins/schema.xml", "plugins/bbas_dataset.xml"],
+    "knownMissing": ["plugins/bbas_map_schema.xml", "plugins/bbas_map.xml"],
+    "policy": "do not fabricate or modify resources; preserve the reference zero-row result if it remains executable"
+  },
+  "reusedEvidence": {
+    "rng": "fixture-snake-batch2-policy already freezes the legal 624-word SFMT state plus index, replay sequence, and invalid-index rejection",
+    "sql": "fixture-snake-batch3-sql-oracle already freezes connection, transaction, reader, scalar, parameter, MAP XML, BBAS zero-row, and resource behavior",
+    "saveV2Boundary": "batch 4.0 freezes the Rust-owned state/envelope contract only; no reference capture may be represented as external snake-save compatibility"
+  }
+}

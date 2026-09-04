@@ -6,8 +6,10 @@ use super::*;
 
 mod control;
 mod graphics;
+mod input_extensions;
 mod presentation;
 mod services;
+mod sql;
 mod storage;
 
 pub(in crate::session) use services::immediate_tag_split_targets;
@@ -22,6 +24,7 @@ enum HostDispatchStatus {
 struct RuntimeQueryState {
     skip_print: bool,
     message_skip: bool,
+    snake_display_state: bool,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -47,6 +50,93 @@ struct PreparedHtmlPrint {
     document: erabasic_html::HtmlDocument,
     warnings: Vec<erabasic_html::HtmlWarning>,
     inline: bool,
+}
+
+struct PreparedHtmlColumnPrint {
+    document: erabasic_html::HtmlDocument,
+    warnings: Vec<erabasic_html::HtmlWarning>,
+    alignment: CellAlignment,
+    requested_pixels: i64,
+    empty: bool,
+}
+
+fn document_has_unresolved_color_matrix(document: &erabasic_html::HtmlDocument) -> bool {
+    fn node_has_unresolved_color_matrix(node: &erabasic_html::HtmlNode) -> bool {
+        match node {
+            erabasic_html::HtmlNode::Text { .. } => false,
+            erabasic_html::HtmlNode::Element {
+                semantic, children, ..
+            } => {
+                matches!(
+                    semantic,
+                    erabasic_html::HtmlElementSemantic::Image {
+                        color_matrix: Some(erabasic_html::HtmlColorMatrix::Variable { .. }),
+                        ..
+                    }
+                ) || children.iter().any(node_has_unresolved_color_matrix)
+            }
+        }
+    }
+
+    document.nodes.iter().any(node_has_unresolved_color_matrix)
+}
+
+fn resolve_document_color_matrices(
+    vm: &RuntimeVm,
+    fiber: erabasic_vm::FiberId,
+    document: &mut erabasic_html::HtmlDocument,
+) {
+    fn resolve_node(
+        vm: &RuntimeVm,
+        fiber: erabasic_vm::FiberId,
+        node: &mut erabasic_html::HtmlNode,
+    ) {
+        let erabasic_html::HtmlNode::Element {
+            semantic, children, ..
+        } = node
+        else {
+            return;
+        };
+        if let erabasic_html::HtmlElementSemantic::Image { color_matrix, .. } = semantic
+            && let Some(erabasic_html::HtmlColorMatrix::Variable { name, indices }) = color_matrix
+        {
+            *color_matrix = read_named_color_matrix(vm, fiber, name, *indices)
+                .map(erabasic_html::HtmlColorMatrix::Fixed);
+        }
+        for child in children {
+            resolve_node(vm, fiber, child);
+        }
+    }
+
+    for node in &mut document.nodes {
+        resolve_node(vm, fiber, node);
+    }
+}
+
+impl PreparedHtmlColumnPrint {
+    fn prepare(name: &str, arguments: &[VmValue]) -> Result<Self, erabasic_html::HtmlError> {
+        let markup = arguments.first().map_or_else(String::new, display_value);
+        let (document, warnings) = erabasic_html::parse_document_with_warnings(&markup)?;
+        Ok(Self {
+            document,
+            warnings,
+            alignment: if name == "HTML_PRINTC" {
+                CellAlignment::Right
+            } else {
+                CellAlignment::Left
+            },
+            requested_pixels: arguments.get(1).map_or(0, integer_value_or_zero),
+            empty: markup.is_empty(),
+        })
+    }
+
+    fn apply(self, presentation: &mut PresentationModel) -> bool {
+        if self.empty {
+            return false;
+        }
+        presentation.append_html_column_cell(self.document, self.alignment, self.requested_pixels);
+        true
+    }
 }
 
 impl PreparedHtmlPrint {
@@ -193,7 +283,7 @@ impl HtmlInteractionBindings<'_> {
 
 fn evaluate_runtime_query(
     name: &str,
-    arguments: &[VmValue],
+    arguments: &(impl HostArgumentValues + ?Sized),
     presentation: &PresentationModel,
     state: RuntimeQueryState,
 ) -> Result<RuntimeQueryEvaluation, RuntimeError> {
@@ -228,16 +318,14 @@ fn evaluate_runtime_query(
         "GETFOCUSCOLOR" => VmValue::Integer(presentation.focus_rgb()),
         "GETSTYLE" => VmValue::Integer(presentation.style_bits()),
         "GETDISPLAYLINE" => {
-            let index = match arguments.first() {
-                Some(VmValue::Integer(value)) => usize::try_from(*value).ok(),
-                Some(_) | None => Some(0),
+            let index = match arguments.argument(0) {
+                Some(VmValue::Integer(value)) => *value,
+                Some(_) | None => 0,
             };
-            VmValue::String(
-                index.map_or_else(String::new, |index| presentation.display_line(index)),
-            )
+            VmValue::String(presentation.display_line(index, state.snake_display_state))
         }
         "HTML_GETPRINTEDSTR" => {
-            let raw_index = match arguments.first() {
+            let raw_index = match arguments.argument(0) {
                 Some(VmValue::Integer(value)) => *value,
                 Some(_) | None => 0,
             };
@@ -261,6 +349,20 @@ fn evaluate_runtime_query(
 impl RuntimeSession {
     #[allow(clippy::single_match_else, clippy::too_many_lines)]
     pub(super) fn handle_host_call(
+        &mut self,
+        vm: &mut RuntimeVm,
+        request: &VmHostRequest,
+    ) -> Result<(), RuntimeError> {
+        match self.handle_host_call_inner(vm, request) {
+            Err(RuntimeError::Script { kind, message }) => {
+                complete_script_fault(vm, request, kind, message)
+            }
+            result => result,
+        }
+    }
+
+    #[allow(clippy::single_match_else, clippy::too_many_lines)]
+    fn handle_host_call_inner(
         &mut self,
         vm: &mut RuntimeVm,
         request: &VmHostRequest,
@@ -289,9 +391,20 @@ impl RuntimeSession {
         {
             return self.issue_extension(vm, request);
         }
+        if request
+            .import
+            .import
+            .namespace
+            .eq_ignore_ascii_case(SQL_OPERATION)
+        {
+            return self.dispatch_sql(vm, request);
+        }
         let name = request.import.import.name.to_ascii_uppercase();
+        if self.dispatch_input_extensions(vm, request, &name)? {
+            return Ok(());
+        }
         if name == "SKIPDISP" {
-            self.skip_print = integer_argument_value(&request.arguments, 0)? != 0;
+            self.skip_print = integer_argument_value(request, 0)? != 0;
             self.user_defined_skip = self.skip_print;
             // Host calls execute while the caller-pumped drive loop temporarily
             // owns the VM, so RESULT must be resolved through that VM rather than
@@ -299,7 +412,7 @@ impl RuntimeSession {
             return commit_host_result_write(vm, request.id, i64::from(self.skip_print));
         }
         if name == "SKIPLOG" {
-            self.message_skip = integer_argument_value(&request.arguments, 0)? != 0;
+            self.message_skip = integer_argument_value(request, 0)? != 0;
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
         }
         if name == "NOSKIP" {
@@ -313,13 +426,29 @@ impl RuntimeSession {
             }
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
         }
+        if matches!(name.as_str(), "GETDISPLAYLINE" | "HTML_GETPRINTEDSTR")
+            && request.omitted_arguments.contains(&0)
+        {
+            return complete_script_fault(
+                vm,
+                request,
+                erabasic_vm::ScriptFaultKind::Operation,
+                "display query dereferenced an omitted source argument",
+            );
+        }
         match evaluate_runtime_query(
             &name,
-            &request.arguments,
+            request,
             &self.presentation,
             RuntimeQueryState {
                 skip_print: self.skip_print,
                 message_skip: self.message_skip,
+                snake_display_state: self.project_snapshot.as_ref().is_some_and(|project| {
+                    project
+                        .manifest
+                        .compatibility
+                        .supports_snake_display_state()
+                }),
             },
         )? {
             RuntimeQueryEvaluation::Ready(value) => {
@@ -333,52 +462,59 @@ impl RuntimeSession {
                 );
             }
             RuntimeQueryEvaluation::MalformedHtml => {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Parse,
                     "malformed HTML text",
-                    Some(request.origin.clone()),
                 );
             }
             RuntimeQueryEvaluation::InvalidPrintedHtmlIndex => {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
                     "HTML_GETPRINTEDSTR line number must be non-negative",
-                    Some(request.origin.clone()),
                 );
             }
             RuntimeQueryEvaluation::Unhandled => {}
         }
         if name == "ASSERT" {
-            if integer_argument_value(&request.arguments, 0)? == 0 {
-                return self.fault(
-                    FaultCode::VmFault,
+            if integer_argument_value(request, 0)? == 0 {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Assertion,
                     "ASSERT failed",
-                    Some(request.origin.clone()),
                 );
             }
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
         }
         if name == "THROW" {
-            let message = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
-            return self.fault(FaultCode::VmFault, &message, Some(request.origin.clone()));
+            let message = request.argument(0).map_or_else(String::new, display_value);
+            return complete_script_fault(
+                vm,
+                request,
+                erabasic_vm::ScriptFaultKind::ExplicitThrow,
+                &message,
+            );
         }
         if name == "FORCEKANA" {
-            let mode = integer_argument_value(&request.arguments, 0)?;
+            let mode = integer_argument_value(request, 0)?;
             let Ok(mode) = u8::try_from(mode) else {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Argument,
                     "FORCEKANA mode must be between 0 and 3",
-                    Some(request.origin.clone()),
                 );
             };
             if mode > 3 {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Argument,
                     "FORCEKANA mode must be between 0 and 3",
-                    Some(request.origin.clone()),
                 );
             }
             self.force_kana_mode = mode;
@@ -386,8 +522,14 @@ impl RuntimeSession {
         }
         if matches!(name.as_str(), "UPCHECK" | "CUPCHECK") {
             let (character, character_scoped) = if name == "CUPCHECK" {
-                let character = u64::try_from(integer_argument_value(&request.arguments, 0)?)
-                    .map_err(|_| RuntimeError::Internal("character index is negative".into()))?;
+                let Ok(character) = u64::try_from(integer_argument_value(request, 0)?) else {
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Bounds,
+                        "character index is negative",
+                    );
+                };
                 (character, true)
             } else {
                 let target = read_runtime_integer(vm, "TARGET", &[], None)?;
@@ -422,15 +564,46 @@ impl RuntimeSession {
             );
         }
         if name == "SETANIMETIMER" {
-            let milliseconds = integer_argument_value(&request.arguments, 0)?;
-            self.project_snapshot
-                .as_mut()
-                .ok_or_else(|| RuntimeError::Internal("SETANIMETIMER has no project".into()))?
-                .resource_graph
-                .set_animation_timer(milliseconds);
-            self.sync_resource_replay();
-            commit_integer_result(vm, request.id, 1)?;
+            let milliseconds = integer_argument_value(request, 0)?;
+            let (snake, normalized) = {
+                let project = self
+                    .project_snapshot
+                    .as_mut()
+                    .ok_or_else(|| RuntimeError::Internal("SETANIMETIMER has no project".into()))?;
+                if !project.resource_graph.set_animation_timer(milliseconds) {
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Bounds,
+                        "SETANIMETIMER expects a value between i32::MIN and 32767",
+                    );
+                }
+                (
+                    project
+                        .manifest
+                        .compatibility
+                        .supports_snake_display_state(),
+                    project.resource_graph.animation_timer(),
+                )
+            };
+            // The timer is logical runtime state, so publish it immediately instead of
+            // waiting for a graphics replay boundary that may never occur before a fault.
+            self.presentation.set_animation_timer(normalized);
+            if snake {
+                commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            } else {
+                commit_integer_result(vm, request.id, 1)?;
+            }
             return self.emit_presentation();
+        }
+        if name == "GETANIMETIMER" {
+            let value = self
+                .project_snapshot
+                .as_ref()
+                .ok_or_else(|| RuntimeError::Internal("GETANIMETIMER has no project".into()))?
+                .resource_graph
+                .animation_timer();
+            return commit_integer_result(vm, request.id, i64::from(value));
         }
         if self.controller.step == SystemStep::TrainEventComEnd
             && matches!(name.as_str(), "WAIT" | "WAITANYKEY" | "FORCEWAIT" | "TWAIT")
@@ -439,10 +612,11 @@ impl RuntimeSession {
         }
         if self.skip_print && is_runtime_print_command(&name) {
             if self.user_defined_skip && is_input_command(&name) {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Operation,
                     "an input command cannot execute while user SKIPDISP is active; wrap it in NOSKIP/ENDNOSKIP",
-                    Some(request.origin.clone()),
                 );
             }
             return commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()));
@@ -467,6 +641,46 @@ impl RuntimeSession {
         self.dispatch_services(vm, request, &name)
     }
 
+    pub(in crate::session) fn require_host_service(
+        &mut self,
+        request: &VmHostRequest,
+        kind: ServiceKind,
+        operation: &str,
+        operation_version: ProtocolVersion,
+    ) -> Result<bool, RuntimeError> {
+        if self.service_capabilities.get(&(kind, operation.to_owned())) != Some(&operation_version)
+        {
+            self.fault_with_context(
+                FaultCode::UnsupportedRuntimeFeature,
+                &format!(
+                    "frontend did not negotiate service {kind:?}/{operation} {operation_version:?}"
+                ),
+                Some(request.origin.clone()),
+                Some(Box::new(
+                    era_runtime_protocol::CompatibilityDiagnosticContext {
+                        artifact: None,
+                        project_load_id: None,
+                        runtime_epoch: None,
+                        generation: None,
+                        identity: self
+                            .project_snapshot
+                            .as_ref()
+                            .map(|project| project.manifest.compatibility.clone()),
+                        stage: "service".into(),
+                        api: Some(request.import.import.name.clone()),
+                        required_capability: Some(era_runtime_protocol::RequiredCapability {
+                            kind,
+                            operation: operation.into(),
+                            version: operation_version,
+                        }),
+                    },
+                )),
+            )?;
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
     // The typed operation tuple is deliberately explicit at this single protocol edge.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn issue_host_service<T: minicbor::Encode<()>>(
@@ -479,15 +693,8 @@ impl RuntimeSession {
         operation_version: ProtocolVersion,
         payload: &T,
     ) -> Result<(), RuntimeError> {
-        if self.service_capabilities.get(&(kind, operation.to_owned())) != Some(&operation_version)
-        {
-            return self.fault(
-                FaultCode::UnsupportedRuntimeFeature,
-                &format!(
-                    "frontend did not negotiate service {kind:?}/{operation} {operation_version:?}"
-                ),
-                Some(request.origin.clone()),
-            );
+        if !self.require_host_service(request, kind, operation, operation_version)? {
+            return Ok(());
         }
         commit_completion(
             vm,
@@ -513,7 +720,7 @@ impl RuntimeSession {
         )
     }
 
-    fn projection_query_context(&self) -> ProjectionQueryContext {
+    pub(in crate::session) fn projection_query_context(&self) -> ProjectionQueryContext {
         ProjectionQueryContext {
             presentation_revision: self.presentation.revision(),
             environment_revision: self.projection_environment_revision,
@@ -521,7 +728,9 @@ impl RuntimeSession {
         }
     }
 
-    fn presentation_observation_context(&mut self) -> Result<ProjectionQueryContext, RuntimeError> {
+    pub(in crate::session) fn presentation_observation_context(
+        &mut self,
+    ) -> Result<ProjectionQueryContext, RuntimeError> {
         // A presentation query is an observation barrier: its frontend response must describe
         // the canonical state that existed when the request was issued, even while ordinary
         // animation frames are being collapsed during a continuous message skip.
@@ -613,6 +822,25 @@ impl RuntimeSession {
         {
             return self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    context: Some(Box::new(
+                        era_runtime_protocol::CompatibilityDiagnosticContext {
+                            artifact: None,
+                            project_load_id: None,
+                            runtime_epoch: None,
+                            generation: None,
+                            identity: self
+                                .project_snapshot
+                                .as_ref()
+                                .map(|project| project.manifest.compatibility.clone()),
+                            stage: "service".into(),
+                            api: None,
+                            required_capability: Some(era_runtime_protocol::RequiredCapability {
+                                kind,
+                                operation: operation.into(),
+                                version: operation_version,
+                            }),
+                        },
+                    )),
                     code: "runtime.platform_capability_unavailable".into(),
                     level: RuntimeLogLevel::Warning,
                     message: format!("frontend did not negotiate service {kind:?}/{operation}"),
@@ -752,6 +980,7 @@ fn emit_html_warnings(
         };
         session.emit(
             RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                context: None,
                 code: code.into(),
                 level: RuntimeLogLevel::Warning,
                 message,
@@ -762,6 +991,51 @@ fn emit_html_warnings(
         )?;
     }
     Ok(())
+}
+
+fn emit_html_profile_error(
+    session: &mut RuntimeSession,
+    command: &str,
+    error: &erabasic_html::HtmlError,
+    origin: &erabasic_vm::VmExecutionOrigin,
+    identity: &erabasic_compat::CompatibilityIdentity,
+) -> Result<(), RuntimeError> {
+    let attribute_error = matches!(
+        error.kind,
+        erabasic_html::HtmlErrorKind::InvalidAttribute
+            | erabasic_html::HtmlErrorKind::DuplicateAttribute
+            | erabasic_html::HtmlErrorKind::InvalidAttributeValue
+    );
+    session.emit(
+        RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+            context: Some(Box::new(
+                era_runtime_protocol::CompatibilityDiagnosticContext {
+                    identity: Some(identity.clone()),
+                    artifact: None,
+                    project_load_id: None,
+                    runtime_epoch: Some(session.epoch.0),
+                    generation: Some(origin.generation.0),
+                    stage: "runtime.html".into(),
+                    api: Some(command.into()),
+                    required_capability: None,
+                },
+            )),
+            code: if attribute_error {
+                "runtime.html.profile_attribute_rejected"
+            } else {
+                "runtime.html.profile_markup_rejected"
+            }
+            .into(),
+            level: RuntimeLogLevel::Error,
+            message: format!(
+                "{command} rejected {:?} for profile {} at UTF-8 bytes {}..{}",
+                error.kind, identity.profile, error.start, error.end
+            ),
+            source: protocol_execution_origin(origin.clone()).source,
+            notification: DiagnosticNotification::default(),
+        }),
+        None,
+    )
 }
 
 fn bind_last_output_buttons(session: &mut RuntimeSession) {

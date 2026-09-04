@@ -1,0 +1,1668 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "original": {
+      "semantic_version": 1,
+      "policy_version": 1
+    },
+    "snake": {
+      "semantic_version": 2,
+      "policy_version": 2
+    }
+  },
+  "loadExpect": {
+    "ok": true,
+    "result": {
+      "termination": "waitingInput"
+    }
+  },
+  "cases": [
+    {
+      "id": "method-integer",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_INTEGER",
+            "watch": [
+              "RESULT:0",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 42,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 42,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-string",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_STRING",
+            "watch": [
+              "RESULTS:0",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:0": "zero",
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:0": "zero",
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-present-skips-fallback",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_PRESENT_SKIPS_FALLBACK",
+            "watch": [
+              "RESULT:0",
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 23,
+                  "METHOD_TRACE:0": 1234,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 23,
+                  "METHOD_TRACE:0": 1234,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-missing-only-fallback",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_MISSING_ONLY_FALLBACK",
+            "watch": [
+              "RESULT:0",
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 90,
+                  "METHOD_TRACE:0": 19,
+                  "METHOD_BODY_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 90,
+                  "METHOD_TRACE:0": 19,
+                  "METHOD_BODY_COUNT:0": 0
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-string-present-skips-fallback",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_STRING_PRESENT_SKIPS_FALLBACK",
+            "watch": [
+              "RESULTS:0",
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:0": "text:2",
+                  "METHOD_TRACE:0": 124,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:0": "text:2",
+                  "METHOD_TRACE:0": 124,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-string-missing-only-fallback",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_STRING_MISSING_ONLY_FALLBACK",
+            "watch": [
+              "RESULTS:0",
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:0": "fallback",
+                  "METHOD_TRACE:0": 19,
+                  "METHOD_BODY_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:0": "fallback",
+                  "METHOD_TRACE:0": 19,
+                  "METHOD_BODY_COUNT:0": 0
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-missing-no-fallback",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_MISSING_NO_FALLBACK",
+            "watch": [
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0",
+              "METHOD_INDEX_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "missing user method without a fallback",
+            "snake": "missing user method without a fallback"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-missing-omitted-fallback",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_MISSING_OMITTED_FALLBACK",
+            "watch": [
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0",
+              "METHOD_INDEX_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "omitted fallback does not become zero",
+            "snake": "omitted fallback does not become zero"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-ordinary-function",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_ORDINARY_FUNCTION",
+            "watch": [
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0",
+              "METHOD_INDEX_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "ordinary function is not a method; fallback and arguments remain unevaluated",
+            "snake": "ordinary function is not a method; fallback and arguments remain unevaluated"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-wrong-integer-return",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_WRONG_INTEGER_RETURN",
+            "watch": [
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0",
+              "METHOD_INDEX_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "string method is not an integer method",
+            "snake": "string method is not an integer method"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-wrong-string-return",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_WRONG_STRING_RETURN",
+            "watch": [
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0",
+              "METHOD_INDEX_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "integer method is not a string method",
+            "snake": "integer method is not a string method"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-wrong-argument-type",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_WRONG_ARGUMENT_TYPE",
+            "watch": [
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0",
+              "METHOD_INDEX_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "string actual cannot bind to integer formal; no actual evaluation",
+            "snake": "string actual cannot bind to integer formal; no actual evaluation"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-missing-required-argument",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_MISSING_REQUIRED_ARGUMENT",
+            "watch": [
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0",
+              "METHOD_INDEX_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "required formal cannot be omitted when CompatiFuncArgOptional is false",
+            "snake": "required formal cannot be omitted when CompatiFuncArgOptional is false"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-missing-ref",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_MISSING_REF",
+            "watch": [
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0",
+              "METHOD_INDEX_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "whole-array REF formal cannot be omitted",
+            "snake": "whole-array REF formal cannot be omitted"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-expression-not-ref",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_EXPRESSION_NOT_REF",
+            "watch": [
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0",
+              "METHOD_INDEX_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "value expression cannot bind to whole-array REF",
+            "snake": "value expression cannot bind to whole-array REF"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-wrong-ref-type",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_WRONG_REF_TYPE",
+            "watch": [
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0",
+              "METHOD_INDEX_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "string array cannot bind to integer array REF",
+            "snake": "string array cannot bind to integer array REF"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-wrong-ref-rank",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_WRONG_REF_RANK",
+            "watch": [
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0",
+              "METHOD_INDEX_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_INDEX_COUNT:0": 0
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "rank-two array cannot bind to rank-one REF",
+            "snake": "rank-two array cannot bind to rank-one REF"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-explicit-omitted-slot",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_EXPLICIT_OMITTED_SLOT",
+            "watch": [
+              "RESULT:0",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 57,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 57,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-trailing-defaults",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_TRAILING_DEFAULTS",
+            "watch": [
+              "RESULT:0",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 56,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 56,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-i64-min-is-value",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_I64_MIN_IS_VALUE",
+            "watch": [
+              "RESULT:0",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": -9223372036854775808,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": -9223372036854775808,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-whole-array-ref-writeback",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_WHOLE_ARRAY_REF_WRITEBACK",
+            "watch": [
+              "RESULT:0",
+              "METHOD_VALUES:0",
+              "METHOD_VALUES:2",
+              "METHOD_WORDS:1",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 11,
+                  "METHOD_VALUES:0": 11,
+                  "METHOD_VALUES:2": 30,
+                  "METHOD_WORDS:1": "changed",
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 11,
+                  "METHOD_VALUES:0": 11,
+                  "METHOD_VALUES:2": 30,
+                  "METHOD_WORDS:1": "changed",
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-whole-array-ref-skips-index",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_WHOLE_ARRAY_REF_SKIPS_INDEX",
+            "watch": [
+              "RESULT:0",
+              "METHOD_VALUES:0",
+              "METHOD_VALUES:2",
+              "METHOD_WORDS:1",
+              "METHOD_INDEX_COUNT:0",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 11,
+                  "METHOD_VALUES:0": 11,
+                  "METHOD_VALUES:2": 30,
+                  "METHOD_WORDS:1": "changed",
+                  "METHOD_INDEX_COUNT:0": 0,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 11,
+                  "METHOD_VALUES:0": 11,
+                  "METHOD_VALUES:2": 30,
+                  "METHOD_WORDS:1": "changed",
+                  "METHOD_INDEX_COUNT:0": 0,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-exist-zero-argument-resolution",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_EXIST_ZERO_ARGUMENT_RESOLUTION",
+            "watch": [
+              "RESULT:0",
+              "RESULT:1",
+              "RESULT:2",
+              "RESULT:3",
+              "RESULT:4",
+              "RESULT:5",
+              "RESULT:6",
+              "RESULT:7",
+              "RESULT:8",
+              "METHOD_BODY_COUNT:0",
+              "METHOD_EVENT_COUNT:0",
+              "METHOD_TRACE:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 1,
+                  "RESULT:1": 2,
+                  "RESULT:2": 0,
+                  "RESULT:3": 0,
+                  "RESULT:4": 0,
+                  "RESULT:5": 1,
+                  "RESULT:6": 0,
+                  "RESULT:7": 0,
+                  "RESULT:8": 0,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_EVENT_COUNT:0": 0,
+                  "METHOD_TRACE:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 1,
+                  "RESULT:1": 2,
+                  "RESULT:2": 0,
+                  "RESULT:3": 0,
+                  "RESULT:4": 0,
+                  "RESULT:5": 1,
+                  "RESULT:6": 0,
+                  "RESULT:7": 0,
+                  "RESULT:8": 0,
+                  "METHOD_BODY_COUNT:0": 0,
+                  "METHOD_EVENT_COUNT:0": 0,
+                  "METHOD_TRACE:0": 0
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-event-invisible",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_EVENT_INVISIBLE",
+            "watch": [
+              "RESULT:0",
+              "METHOD_TRACE:0",
+              "METHOD_EVENT_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 90,
+                  "METHOD_TRACE:0": 19,
+                  "METHOD_EVENT_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 90,
+                  "METHOD_TRACE:0": 19,
+                  "METHOD_EVENT_COUNT:0": 0
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-builtin-invisible",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_BUILTIN_INVISIBLE",
+            "watch": [
+              "RESULT:0",
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 90,
+                  "METHOD_TRACE:0": 19,
+                  "METHOD_BODY_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 90,
+                  "METHOD_TRACE:0": 19,
+                  "METHOD_BODY_COUNT:0": 0
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-extra-argument-policy",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_EXTRA_ARGUMENT_POLICY",
+            "watch": [
+              "RESULT:0",
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "error",
+                "watches": {
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 2,
+                  "METHOD_TRACE:0": 12,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            }
+          },
+          "expectedRejection": {
+            "original": "fixed original reference rejects excess actuals before evaluating arguments"
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance",
+      "observation": "Original rejects extras; snake converts only fixed formals and never evaluates the discarded extra. Rust retains strict arity until batch 2; do not rewrite snake oracle expectations to match Rust.",
+      "knownRustDifference": {
+        "snake": {
+          "status": "deferred_policy",
+          "reason": "Non-variadic extra-argument policy remains strict in batch 1B; snake reference ignores the extra without evaluating it.",
+          "rustTermination": "faulted",
+          "referenceTermination": "completed",
+          "targetBatch": 2,
+          "disposition": "preserve_difference_not_expected_rejection"
+        }
+      }
+    },
+    {
+      "id": "method-finite-recursion",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_FINITE_RECURSION",
+            "watch": [
+              "RESULT:0",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 4,
+                  "METHOD_BODY_COUNT:0": 4
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 4,
+                  "METHOD_BODY_COUNT:0": 4
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-value-captured-before-next-argument",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_VALUE_CAPTURED_BEFORE_NEXT_ARGUMENT",
+            "watch": [
+              "RESULT:0",
+              "METHOD_VALUES:0",
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 102,
+                  "METHOD_VALUES:0": 99,
+                  "METHOD_TRACE:0": 4,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 102,
+                  "METHOD_VALUES:0": 99,
+                  "METHOD_TRACE:0": 4,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-can-move-dynamic-pattern",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_CAN_MOVE_DYNAMIC_PATTERN",
+            "watch": [
+              "RESULT:0",
+              "RESULT:1",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 3,
+                  "RESULT:1": 0,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 3,
+                  "RESULT:1": 0,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-odekakemap-dynamic-pattern",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_ODEKAKEMAP_DYNAMIC_PATTERN",
+            "watch": [
+              "RESULT:0",
+              "RESULT:1",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 1,
+                  "RESULT:1": 0,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 1,
+                  "RESULT:1": 0,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-string-dynamic-pattern",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_STRING_DYNAMIC_PATTERN",
+            "watch": [
+              "RESULTS:0",
+              "RESULTS:1",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:0": "pair:10:11",
+                  "RESULTS:1": "",
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:0": "pair:10:11",
+                  "RESULTS:1": "",
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-formatted-expression",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_FORMATTED_EXPRESSION",
+            "watch": [
+              "RESULTS:0",
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:0": "value=42",
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:0": "value=42",
+                  "METHOD_TRACE:0": 1,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance",
+      "observation": "Exercise nested formatted-expression parsing and dynamic reachability. Expected value follows the evaluator; source-span validity and optimization-on retention still require compiler tests."
+    },
+    {
+      "id": "method-strform-runtime-expression",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_STRFORM_RUNTIME_EXPRESSION",
+            "watch": [
+              "RESULTS:0",
+              "METHOD_BODY_COUNT:0",
+              "METHOD_TRACE:0"
+            ]
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance",
+      "observation": "Observe nested quoting/parser acceptance and runtime STRFORM method evaluation first. If accepted, semantic target is value=42, METHOD_BODY_COUNT=1, METHOD_TRACE=0. No pass expectation is asserted before the reference parser observation."
+    },
+    {
+      "id": "method-integer-statement",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_INTEGER_STATEMENT",
+            "watch": [
+              "RESULT:0",
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 42,
+                  "METHOD_TRACE:0": 0,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:0": 42,
+                  "METHOD_TRACE:0": 0,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    },
+    {
+      "id": "method-string-statement",
+      "group": "METHODS",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "METHOD_CASE_STRING_STATEMENT",
+            "watch": [
+              "RESULTS:0",
+              "METHOD_TRACE:0",
+              "METHOD_BODY_COUNT:0"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:0": "zero",
+                  "METHOD_TRACE:0": 0,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:0": "zero",
+                  "METHOD_TRACE:0": 0,
+                  "METHOD_BODY_COUNT:0": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "requireSuccessfulLoad": true,
+      "targetBatch": 1,
+      "rustCurrentPolicy": "typed_dynamic_methods_batch_1b",
+      "snakeTargetStatus": "requires_batch_1_acceptance"
+    }
+  ]
+}

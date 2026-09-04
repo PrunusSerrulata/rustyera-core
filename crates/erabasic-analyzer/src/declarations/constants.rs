@@ -1,12 +1,42 @@
 use super::{
-    AnalyzerOptions, BTreeMap, BinaryOp, ConstantValue, DimError, Expr, ExprKind, FormPart,
-    FormattedString, IndexResolver, ParserContext, UnaryOp, normalize, parse_expression,
+    AnalyzerOptions, BinaryOp, ConstantValue, DeclarationLookup, DimError, Expr, ExprKind,
+    FormPart, FormattedString, IndexResolver, ParserContext, UnaryOp, normalize, parse_expression,
 };
+use std::cell::RefCell;
+
+use erabasic_compat::{IntegerArithmeticPolicy, IntegerArithmeticWarning, IntegerOperation};
+
+pub(crate) type ConstantWarnings = Vec<(IntegerArithmeticWarning, String)>;
+
 pub(super) struct ConstantEvaluation<'a> {
-    pub(super) constants: &'a BTreeMap<String, ConstantValue>,
-    pub(super) variable_dimensions: &'a BTreeMap<String, Vec<usize>>,
+    pub(super) constants: &'a dyn DeclarationLookup<ConstantValue>,
+    pub(super) variable_dimensions: &'a dyn DeclarationLookup<Vec<usize>>,
     pub(super) index_resolver: &'a IndexResolver,
     pub(super) options: &'a AnalyzerOptions,
+    pub(super) warnings: RefCell<ConstantWarnings>,
+}
+
+impl ConstantEvaluation<'_> {
+    fn integer(
+        &self,
+        operation: IntegerOperation,
+        left: i64,
+        right: Option<i64>,
+    ) -> Result<i64, DimError> {
+        let result = self
+            .options
+            .compatibility
+            .integer_arithmetic_policy()
+            .evaluate(operation, left, right)
+            .map_err(|error| DimError::Invalid(error.to_string()))?;
+        if let Some(warning) = result.warning {
+            self.warnings.borrow_mut().push((warning, format!(
+                "constant integer {operation:?} produced {warning:?}: {left}, {right:?}; result {}",
+                result.value
+            )));
+        }
+        Ok(result.value)
+    }
 }
 
 pub(super) fn parse_constant(
@@ -37,6 +67,12 @@ fn evaluate_constant(
             .constants
             .get(&normalize(name, evaluation.options.ignore_case))
             .cloned()
+            .or_else(|| {
+                evaluation
+                    .index_resolver
+                    .resolve_rename(name)
+                    .map(ConstantValue::Integer)
+            })
             .ok_or_else(|| DimError::UnknownConstant(name.clone())),
         ExprKind::Group(inner) => evaluate_constant(inner, evaluation),
         ExprKind::Unary { op, operand } => {
@@ -45,7 +81,7 @@ fn evaluate_constant(
             };
             let value = match op {
                 UnaryOp::Plus => value,
-                UnaryOp::Minus => value.wrapping_neg(),
+                UnaryOp::Minus => evaluation.integer(IntegerOperation::Negate, value, None)?,
                 UnaryOp::LogicalNot => i64::from(value == 0),
                 UnaryOp::BitNot => !value,
                 UnaryOp::PreIncrement | UnaryOp::PreDecrement => {
@@ -57,9 +93,7 @@ fn evaluate_constant(
             Ok(ConstantValue::Integer(value))
         }
         ExprKind::Binary { op, left, right } => {
-            let left = evaluate_constant(left, evaluation)?;
-            let right = evaluate_constant(right, evaluation)?;
-            evaluate_binary(*op, left, right)
+            evaluate_binary_expression(*op, left, right, evaluation)
         }
         ExprKind::Ternary {
             condition,
@@ -82,11 +116,29 @@ fn evaluate_constant(
             evaluate_getnum(args, evaluation)
         }
         ExprKind::Call { name, args }
+            if matches!(
+                name.to_ascii_uppercase().as_str(),
+                "UNCHECKED_ADD" | "UNCHECKED_SUB" | "UNCHECKED_MUL" | "UNCHECKED_NEG"
+            ) =>
+        {
+            evaluate_unchecked(name, args, evaluation)
+        }
+        ExprKind::Call { name, args }
             if name.eq_ignore_ascii_case("GETDEFCOLOR") && args.is_empty() =>
         {
             Ok(ConstantValue::Integer(
                 evaluation.options.default_foreground_color,
             ))
+        }
+        ExprKind::Call { name, args }
+            if (name.eq_ignore_ascii_case("POWER") && args.len() == 2)
+                || (name.eq_ignore_ascii_case("COLOR_FROMNAME") && args.len() == 1) =>
+        {
+            if name.eq_ignore_ascii_case("POWER") {
+                evaluate_power(args, evaluation)
+            } else {
+                evaluate_color_from_name(args, evaluation)
+            }
         }
         ExprKind::Call { name, args }
             if matches!(name.to_ascii_uppercase().as_str(), "STRLENS" | "STRLENSU")
@@ -97,25 +149,144 @@ fn evaluate_constant(
         ExprKind::Call { name, args }
             if name.eq_ignore_ascii_case("UNICODE") && args.len() == 1 =>
         {
-            let argument = args[0]
-                .as_ref()
-                .ok_or_else(|| DimError::Invalid("UNICODE requires an argument".into()))?;
-            let ConstantValue::Integer(value) = evaluate_constant(argument, evaluation)? else {
-                return Err(DimError::Invalid(
-                    "UNICODE requires an integer argument".into(),
-                ));
-            };
-            let value = u32::try_from(value)
-                .ok()
-                .and_then(char::from_u32)
-                .ok_or_else(|| DimError::Invalid("UNICODE argument is out of range".into()))?;
-            Ok(ConstantValue::String(value.to_string()))
+            evaluate_unicode(args, evaluation)
         }
         ExprKind::Formatted(formatted) => evaluate_formatted(formatted, evaluation),
         _ => Err(DimError::Invalid(
             "initializer must be a load-time constant".into(),
         )),
     }
+}
+
+fn evaluate_unicode(
+    arguments: &[Option<Expr>],
+    evaluation: &ConstantEvaluation<'_>,
+) -> Result<ConstantValue, DimError> {
+    let argument = arguments[0]
+        .as_ref()
+        .ok_or_else(|| DimError::Invalid("UNICODE requires an argument".into()))?;
+    let ConstantValue::Integer(value) = evaluate_constant(argument, evaluation)? else {
+        return Err(DimError::Invalid(
+            "UNICODE requires an integer argument".into(),
+        ));
+    };
+    let value = u32::try_from(value)
+        .ok()
+        .and_then(char::from_u32)
+        .ok_or_else(|| DimError::Invalid("UNICODE argument is out of range".into()))?;
+    Ok(ConstantValue::String(value.to_string()))
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn evaluate_power(
+    arguments: &[Option<Expr>],
+    evaluation: &ConstantEvaluation<'_>,
+) -> Result<ConstantValue, DimError> {
+    let integer = |index: usize| -> Result<i64, DimError> {
+        let expression = arguments[index]
+            .as_ref()
+            .ok_or_else(|| DimError::Invalid("POWER arguments cannot be omitted".into()))?;
+        let ConstantValue::Integer(value) = evaluate_constant(expression, evaluation)? else {
+            return Err(DimError::Invalid("POWER requires integer arguments".into()));
+        };
+        Ok(value)
+    };
+    let value = (integer(0)? as f64).powf(integer(1)? as f64);
+    if !value.is_finite() || value >= i64::MAX as f64 || value <= i64::MIN as f64 {
+        return Err(DimError::Invalid(
+            "POWER result is outside the signed 64-bit integer range".into(),
+        ));
+    }
+    Ok(ConstantValue::Integer(value as i64))
+}
+
+fn evaluate_color_from_name(
+    arguments: &[Option<Expr>],
+    evaluation: &ConstantEvaluation<'_>,
+) -> Result<ConstantValue, DimError> {
+    let expression = arguments[0]
+        .as_ref()
+        .ok_or_else(|| DimError::Invalid("COLOR_FROMNAME argument cannot be omitted".into()))?;
+    let ConstantValue::String(name) = evaluate_constant(expression, evaluation)? else {
+        return Err(DimError::Invalid(
+            "COLOR_FROMNAME requires a constant string argument".into(),
+        ));
+    };
+    if name.eq_ignore_ascii_case("transparent") {
+        return Err(DimError::Invalid(
+            "COLOR_FROMNAME does not accept Transparent".into(),
+        ));
+    }
+    Ok(ConstantValue::Integer(
+        erabasic_html::named_color(&name).map_or(-1, i64::from),
+    ))
+}
+
+fn evaluate_binary_expression(
+    operation: BinaryOp,
+    left: &Expr,
+    right: &Expr,
+    evaluation: &ConstantEvaluation<'_>,
+) -> Result<ConstantValue, DimError> {
+    let left = evaluate_constant(left, evaluation)?;
+    if evaluation.options.compatibility.integer_arithmetic_policy()
+        == IntegerArithmeticPolicy::SnakeSaturatingV1
+        && let ConstantValue::Integer(value) = &left
+    {
+        // Do not emit warnings or faults from a branch that the VM skips.
+        let short_circuit = match operation {
+            BinaryOp::LogicalAnd if *value == 0 => Some(0),
+            BinaryOp::LogicalOr if *value != 0 => Some(1),
+            BinaryOp::Nand if *value == 0 => Some(1),
+            BinaryOp::Nor if *value != 0 => Some(0),
+            _ => None,
+        };
+        if let Some(value) = short_circuit {
+            return Ok(ConstantValue::Integer(value));
+        }
+    }
+    let right = evaluate_constant(right, evaluation)?;
+    evaluate_binary(operation, left, right, evaluation)
+}
+
+fn evaluate_unchecked(
+    name: &str,
+    arguments: &[Option<Expr>],
+    evaluation: &ConstantEvaluation<'_>,
+) -> Result<ConstantValue, DimError> {
+    let operation = match name.to_ascii_uppercase().as_str() {
+        "UNCHECKED_ADD" => IntegerOperation::Add,
+        "UNCHECKED_SUB" => IntegerOperation::Subtract,
+        "UNCHECKED_MUL" => IntegerOperation::Multiply,
+        _ => IntegerOperation::Negate,
+    };
+    let arity = if operation == IntegerOperation::Negate {
+        1
+    } else {
+        2
+    };
+    if arguments.len() != arity {
+        return Err(DimError::Invalid(format!(
+            "{name} requires {arity} arguments"
+        )));
+    }
+    let integer = |index: usize| -> Result<i64, DimError> {
+        let expression = arguments[index]
+            .as_ref()
+            .ok_or_else(|| DimError::Invalid(format!("{name} arguments cannot be omitted")))?;
+        let ConstantValue::Integer(value) = evaluate_constant(expression, evaluation)? else {
+            return Err(DimError::Invalid(format!(
+                "{name} requires integer arguments"
+            )));
+        };
+        Ok(value)
+    };
+    let left = integer(0)?;
+    let right = if arity == 2 { Some(integer(1)?) } else { None };
+    let result = IntegerArithmeticPolicy::ReferenceWrappingV1
+        .evaluate(operation, left, right)
+        .map_err(|error| DimError::Invalid(error.to_string()))?;
+    Ok(ConstantValue::Integer(result.value))
 }
 
 fn evaluate_string_length(
@@ -313,6 +484,7 @@ fn evaluate_binary(
     op: BinaryOp,
     left: ConstantValue,
     right: ConstantValue,
+    evaluation: &ConstantEvaluation<'_>,
 ) -> Result<ConstantValue, DimError> {
     if let (ConstantValue::String(left), ConstantValue::String(right)) = (&left, &right) {
         return match op {
@@ -347,6 +519,16 @@ fn evaluate_binary(
     let (ConstantValue::Integer(left), ConstantValue::Integer(right)) = (left, right) else {
         return Err(DimError::Invalid("constant operand types differ".into()));
     };
+    if evaluation.options.compatibility.integer_arithmetic_policy()
+        == IntegerArithmeticPolicy::SnakeSaturatingV1
+        && let Some(operation) = crate::integer::binary_operation(op)
+    {
+        return evaluation
+            .integer(operation, left, Some(right))
+            .map(ConstantValue::Integer);
+    }
+    // Preserve the established reference load-time overflow behavior separately
+    // from the VM's checked division/remainder fault path.
     let value = match op {
         BinaryOp::Multiply => left.wrapping_mul(right),
         BinaryOp::Divide if right != 0 => left.wrapping_div(right),

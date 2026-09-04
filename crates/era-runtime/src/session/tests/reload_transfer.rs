@@ -57,6 +57,7 @@ fn project_resource_metadata_requests_respect_pending_request_backpressure() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files,
         }),
@@ -183,6 +184,7 @@ fn title_session_fixture() -> (
     erabasic_bytecode::Digest,
 ) {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![SubmittedFile {
             relative_path: "main.erb".into(),
@@ -191,6 +193,18 @@ fn title_session_fixture() -> (
             content_hash: None,
         }],
     };
+    title_session_fixture_with_manifest(manifest, 7)
+}
+
+fn title_session_fixture_with_manifest(
+    manifest: ProjectManifest,
+    seed: u64,
+) -> (
+    RuntimeSession,
+    Arc<std::sync::Mutex<Vec<ProjectProgress>>>,
+    ProjectManifest,
+    erabasic_bytecode::Digest,
+) {
     let mut build = crate::project::build_project(&manifest, None);
     assert!(build.report.success, "{:?}", build.report.diagnostics);
     let expected = build
@@ -212,7 +226,7 @@ fn title_session_fixture() -> (
     session.project_progress_reporter = Some(ProjectProgressReporter::new(move |value| {
         observed.lock().unwrap().push(value);
     }));
-    session.start_new_game(7).unwrap();
+    session.start_new_game(seed).unwrap();
     let _ = drain(&mut session);
     (session, progress, manifest, expected)
 }
@@ -375,6 +389,139 @@ fn return_to_title_reuses_program_index_without_project_loading() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn als_only_reload_keeps_old_frames_and_restarts_title_with_updated_alias() {
+    let file = |path: &str, category, contents: &str| SubmittedFile {
+        relative_path: path.into(),
+        category,
+        payload: FilePayload::Utf8(contents.into()),
+        content_hash: None,
+    };
+    let manifest = ProjectManifest {
+        compatibility: erabasic_compat::CompatibilityIdentity::for_profile(
+            erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+        ),
+        project_revision: 1,
+        files: vec![
+            file(
+                "reraconfig.toml",
+                FileCategory::Configuration,
+                "[meta]\nschema_version = 4\n[compatibility]\nprofile = \"emuera.skia.snake\"\n",
+            ),
+            file("ERB/definitions.erh", FileCategory::Erh, "#DIM BUFF,32\n"),
+            file(
+                "ERB/main.erb",
+                FileCategory::Erb,
+                "@SYSTEM_TITLE\nBUFF:main = 42\nBUFF:other = 84\nWHILE 1\nCALL REPORT_ALIAS\nINPUT\nWEND\nRETURN\n\n@REPORT_ALIAS\nPRINTFORML ALIAS={BUFF:alias}\nRETURN\n",
+            ),
+            file(
+                "ERB/indices/BUFF.erd",
+                FileCategory::Erd,
+                "10,main\n11,other\n",
+            ),
+            file("ERB/indices/BUFF.als", FileCategory::Als, "10,alias\n"),
+        ],
+    };
+    let (mut session, progress, _manifest, initial_artifact) =
+        title_session_fixture_with_manifest(manifest, 123_456);
+    let drive_to_wait = |session: &mut RuntimeSession| {
+        for _ in 0..16 {
+            session.drive(RuntimeDriveBudget::default()).unwrap();
+            if session.phase == RuntimePhase::WaitingInput {
+                break;
+            }
+        }
+        assert_eq!(session.phase, RuntimePhase::WaitingInput);
+    };
+    drive_to_wait(&mut session);
+    assert_eq!(
+        projected_presentation_text(&session.presentation.snapshot()),
+        "ALIAS=42"
+    );
+    drain(&mut session);
+
+    session
+        .reload_project(
+            97,
+            &ReloadProject {
+                base_revision: 1,
+                target_revision: 2,
+                changes: vec![FileChange::Upsert {
+                    file: file("ERB/indices/BUFF.als", FileCategory::Als, "11,alias\n"),
+                }],
+            },
+        )
+        .unwrap();
+    let target = session.artifact.as_ref().unwrap().artifact();
+    let reloaded_artifact = target.manifest.artifact_id;
+    assert_ne!(reloaded_artifact, initial_artifact);
+    assert_eq!(
+        target.project_data.static_data.deferred_indices.resolved["BUFF"].entries["alias"],
+        11
+    );
+
+    // Calls made by the suspended title frame remain in its original program generation.
+    let wait = session.operations.active_input().unwrap().wait.clone();
+    session
+        .handle_message(
+            98,
+            RuntimeMessage::Input(FrontendInput {
+                wait_id: wait.wait_id,
+                token: wait.submission_token,
+                monotonic_time_ns: 0,
+                intent: InputIntent::CommitText("1".into()),
+                message_skip: false,
+            }),
+        )
+        .unwrap();
+    drive_to_wait(&mut session);
+    assert_eq!(
+        projected_presentation_text(&session.presentation.snapshot()),
+        "ALIAS=42\n\nALIAS=42"
+    );
+    drain(&mut session);
+    progress.lock().unwrap().clear();
+
+    // Returning to title must use the committed reload, without reading or compiling sources.
+    session.return_to_title(99).unwrap();
+    let messages = drain(&mut session);
+    assert!(
+        messages
+            .iter()
+            .all(|message| !matches!(message, RuntimeMessage::ProjectLoadReport(_)))
+    );
+    answer_entropy(
+        &mut session,
+        return_to_title_entropy_request(messages),
+        123_456,
+    );
+    drive_to_wait(&mut session);
+    assert_eq!(
+        projected_presentation_text(&session.presentation.snapshot()),
+        "ALIAS=84"
+    );
+    assert_eq!(
+        session.vm.as_ref().unwrap().vm().artifact_id(),
+        reloaded_artifact
+    );
+    assert!(
+        drain(&mut session)
+            .iter()
+            .all(|message| !matches!(message, RuntimeMessage::ProjectLoadReport(_)))
+    );
+    let resumed_progress = progress.lock().unwrap();
+    assert!(!resumed_progress.is_empty());
+    assert!(
+        resumed_progress
+            .iter()
+            .all(|value| { value.stage == ProjectProgressStage::InitializingMemory })
+    );
+    let replay_header = input_replay_records(&session).remove(0);
+    assert_eq!(replay_header["origin"]["seed"], "123456");
+    assert_eq!(replay_header["origin"]["trigger"], "return_to_title");
+}
+
+#[test]
 fn return_to_title_retires_timeline_before_cancellation_and_entropy() {
     let (mut session, _progress, _manifest, _expected) = title_session_fixture();
     seed_title_timeline_retirement_state(&mut session);
@@ -503,8 +650,10 @@ fn retained_title_program_is_released_on_failure_shutdown_load_and_reload() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn compiled_cache_export_prepares_the_payload_off_thread() {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             SubmittedFile {
@@ -519,10 +668,19 @@ fn compiled_cache_export_prepares_the_payload_off_thread() {
                 payload: FilePayload::Utf8("Font size:18\n".into()),
                 content_hash: None,
             },
+            SubmittedFile {
+                relative_path: "resources/sprites.csv".into(),
+                category: FileCategory::ResourceManifest,
+                payload: FilePayload::Utf8("; no sprites\n".into()),
+                content_hash: None,
+            },
         ],
     };
     let identity = crate::compiled_cache::project_identity(&manifest);
-    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    let mut session = RuntimeSession::new(RuntimeOptions {
+        retain_project_source_payloads: false,
+        ..RuntimeOptions::default()
+    });
     session.state = SessionState::Active;
     session.phase = RuntimePhase::Ready;
     session.epoch = SessionEpoch(1);
@@ -544,6 +702,15 @@ fn compiled_cache_export_prepares_the_payload_off_thread() {
         .and_then(|snapshot| snapshot.generated_configuration_source.as_deref())
         .expect("legacy configuration generates reraconfig.toml");
     assert_rera_font_size(generated, 18);
+    let snapshot_manifest = &session.project_snapshot.as_ref().unwrap().manifest;
+    assert!(matches!(
+        &snapshot_manifest.files[0].payload,
+        FilePayload::Utf8(value) if value.is_empty()
+    ));
+    assert!(matches!(
+        &snapshot_manifest.files[2].payload,
+        FilePayload::Utf8(value) if value == "; no sprites\n"
+    ));
 
     assert!(session.compiled_project_cache.is_none());
     assert!(session.compiled_cache_task.is_none());
@@ -584,6 +751,10 @@ fn compiled_cache_export_prepares_the_payload_off_thread() {
     let bytes = session.compiled_project_cache.as_ref().unwrap();
     let decoded = crate::compiled_cache::decode(bytes, 64 * 1024 * 1024).unwrap();
     assert_manifest_rera_font_size(&decoded.snapshot.manifest, 18);
+    assert!(matches!(
+        &decoded.snapshot.manifest.files[2].payload,
+        FilePayload::Utf8(value) if value == "; no sprites\n"
+    ));
     assert!(crate::compiled_cache::decode_project_file(bytes, bytes.len()).is_err());
 
     session
@@ -776,7 +947,8 @@ fn assert_journaled_configuration_reopens(
     pending_source: &str,
 ) {
     let bytes = session.full_project_file.as_ref().unwrap();
-    let decoded = crate::compiled_cache::decode_project_file(bytes, bytes.len()).unwrap();
+    let bytes = bytes.copy_range(0..bytes.len());
+    let decoded = crate::compiled_cache::decode_project_file(&bytes, bytes.len()).unwrap();
     assert_eq!(&decoded.identity, pending_identity);
     let decoded_source = decoded
         .manifest
@@ -796,7 +968,7 @@ fn assert_journaled_configuration_reopens(
                 manifest: None,
                 compiled_cache_transfer_id: None,
             },
-            Some(bytes),
+            Some(&bytes),
             None,
         )
         .expect("journaled configuration rebuilds from the embedded project sources");
@@ -929,6 +1101,7 @@ fn queued_input_is_processed_before_one_cooperative_cache_quantum() {
             &mut session,
             1,
             RuntimeMessage::ProjectManifest(ProjectManifest {
+                compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
                 project_revision: 1,
                 files: vec![SubmittedFile {
                     relative_path: "main.erb".into(),
@@ -1015,6 +1188,7 @@ fn cooperative_cache_session_with_options(
     options: RuntimeOptions,
 ) -> (RuntimeSession, ProjectManifest, ProjectIdentity) {
     let manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
         project_revision: 1,
         files: vec![
             SubmittedFile {

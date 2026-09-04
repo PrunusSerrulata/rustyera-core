@@ -24,6 +24,7 @@ fn traditional_save_export_and_restore_are_atomic_runtime_operations() {
                 &mut session,
                 1,
                 RuntimeMessage::ProjectManifest(ProjectManifest {
+                    compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
                     project_revision: 1,
                     files: vec![
                         SubmittedFile {
@@ -535,6 +536,7 @@ fn nested_savegame_cancel_resumes_the_suspended_vm_call() {
         &mut session,
         1,
         RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_revision: 1,
             files: vec![SubmittedFile {
                 relative_path: "menu.erb".into(),

@@ -3,6 +3,31 @@
 use super::super::*;
 
 impl RuntimeSession {
+    pub(in crate::session) fn vm_diagnostic_context(
+        &self,
+        vm: &RuntimeVm,
+        origin: &erabasic_vm::VmExecutionOrigin,
+        code: &str,
+    ) -> Option<Box<era_runtime_protocol::CompatibilityDiagnosticContext>> {
+        if !code.starts_with("compat.") {
+            return None;
+        }
+        Some(Box::new(
+            era_runtime_protocol::CompatibilityDiagnosticContext {
+                identity: Some(vm.vm().artifact().manifest.compatibility.clone()),
+                stage: "runtime".into(),
+                api: Some(origin.command.clone()),
+                required_capability: None,
+                // Old live frames retain their generation; never stamp them with the new artifact.
+                artifact: (origin.generation == vm.vm().current_generation())
+                    .then(|| ProtocolBytes::new(vm.artifact_id().0.to_vec())),
+                project_load_id: Some(self.project_load_id),
+                runtime_epoch: Some(self.epoch.0),
+                generation: Some(origin.generation.0),
+            },
+        ))
+    }
+
     pub(in super::super) fn handle_vm_event(
         &mut self,
         vm: &mut RuntimeVm,
@@ -17,6 +42,7 @@ impl RuntimeSession {
                 ..
             } => self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    context: self.vm_diagnostic_context(vm, &origin, &code),
                     code,
                     level: RuntimeLogLevel::Warning,
                     message,
@@ -26,18 +52,7 @@ impl RuntimeSession {
                 None,
             ),
             VmPortEvent::HostCall(request) => self.handle_host_call(vm, &request),
-            VmPortEvent::FiberFaulted(_, fault) => self.fault(
-                FaultCode::VmFault,
-                &fault.message,
-                Some(erabasic_vm::VmExecutionOrigin {
-                    generation: fault.generation,
-                    function: fault.function,
-                    function_name: fault.function_name,
-                    instruction: fault.instruction,
-                    command: fault.command,
-                    source: fault.source,
-                }),
-            ),
+            VmPortEvent::FiberFaulted(_, fault) => self.fault_from_vm(&fault),
             VmPortEvent::FiberCompleted(fiber, value) => {
                 if self.controller.completed(fiber, value.as_ref()) {
                     self.spawn_next_event(vm)?;

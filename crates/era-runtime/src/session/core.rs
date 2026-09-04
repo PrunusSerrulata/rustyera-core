@@ -41,16 +41,23 @@ impl RuntimeSession {
         {
             return Err(TraditionalSaveValidationError::DifferentVersion);
         }
-        let vm = RuntimeVm::new(artifact.clone(), self.options.vm_config);
-        vm.prepare_runtime_state_with_extensions(
-            VmRuntimeStateTransaction::RestoreOrdinary(Box::new(decoded.state)),
-            StructuredScope::Ordinary,
-            &decoded.structured_extensions,
-        )
-        .map_err(|error| TraditionalSaveValidationError::Incompatible(error.to_string()))?;
-        Ok(TraditionalSaveInspection {
-            description: decoded.description,
-        })
+        let DecodedEraSave {
+            state,
+            description,
+            structured_extensions,
+            ..
+        } = decoded;
+        let mut vm = RuntimeVm::new(artifact.clone(), self.options.vm_config);
+        let (ordinary, _) = vm
+            .prepare_runtime_state_with_extensions(
+                VmRuntimeStateTransaction::RestoreOrdinary(Box::new(state)),
+                StructuredScope::Ordinary,
+                &structured_extensions,
+            )
+            .map_err(|error| TraditionalSaveValidationError::Incompatible(error.to_string()))?;
+        vm.commit_runtime_state(ordinary)
+            .map_err(|error| TraditionalSaveValidationError::Incompatible(error.to_string()))?;
+        Ok(TraditionalSaveInspection { description })
     }
 
     #[must_use]
@@ -101,12 +108,20 @@ impl RuntimeSession {
             vm: None,
             retained_title_program: None,
             presentation: PresentationModel::default(),
+            audio: AudioRuntimeState::default(),
             pending_presentation_update: false,
             operations: PendingOperations::default(),
+            sql: SqlRuntimeState::default(),
+            sql_cleanup_queue: Vec::new(),
             key_toggle_state: [0; 256],
+            device_input: crate::device_input::DeviceInput::default(),
+            environment: crate::environment::Environment::default(),
+            input_notice_sites: BTreeSet::new(),
             hotkey_state: Vec::new(),
             key_macros: KeyMacros::default(),
             queued_input: VecDeque::new(),
+            input_controller: InputController::default(),
+            active_input_source: None,
             deferred_input_completion: None,
             text_box: String::new(),
             text_box_layout: TextBoxLayout::default(),
@@ -142,6 +157,8 @@ impl RuntimeSession {
             undo_token: None,
             project_snapshot: None,
             pending_configuration_update: None,
+            pending_sql_snapshot_restore: None,
+            ready_sql_snapshot_restore: None,
             selected_locale: "ja".into(),
             available_fonts: BTreeSet::new(),
             service_capabilities: BTreeMap::new(),
@@ -170,6 +187,9 @@ impl RuntimeSession {
             candidate_clock: None,
             compiled_project_cache: None,
             compiled_cache_diagnostics: Vec::new(),
+            bitmap_cache_notice_emitted: false,
+            project_load_id: 0,
+            project_diagnostic_publication: None,
             compiled_cache_task: None,
             compiled_cache_failure: None,
             full_project_file: None,
@@ -270,7 +290,8 @@ impl RuntimeSession {
         while accepted_ids.len() > self.options.limits.maximum_journal_entries as usize {
             accepted_ids.pop_first();
         }
-        self.inbound.push_back((message_id, message));
+        self.inbound
+            .push_back((message_id, envelope.session_epoch, message));
         Ok(())
     }
 
@@ -289,13 +310,7 @@ impl RuntimeSession {
         let mut instructions = 0;
         let mut queued_input_quantum = (!self.queued_input.is_empty()).then_some(());
         while transitions < transition_limit {
-            if let Some((message_id, message)) = self.take_next_inbound() {
-                match message {
-                    InboundMessage::Runtime(message) => self.handle_message(message_id, message)?,
-                    InboundMessage::Debug(message) => {
-                        self.handle_debug_message(message_id, message)?;
-                    }
-                }
+            if self.drive_next_inbound()? {
                 transitions += 1;
                 continue;
             }
@@ -310,7 +325,9 @@ impl RuntimeSession {
             if self.phase == RuntimePhase::WaitingInput && !self.queued_input.is_empty() {
                 break;
             }
-            if self.phase == RuntimePhase::Running && instructions < budget.maximum_vm_instructions
+            if self.phase == RuntimePhase::Running
+                && (instructions < budget.maximum_vm_instructions
+                    || self.vm.as_ref().is_some_and(RuntimeVm::has_pending_events))
             {
                 let remaining = budget.maximum_vm_instructions - instructions;
                 let Some(mut vm) = self.vm.take() else {
@@ -334,33 +351,33 @@ impl RuntimeSession {
                         self.handle_vm_event(&mut vm, event)?;
                     }
                     vm.retire_terminal_fibers();
+                    self.operations.html_lines.retain_live(&vm);
                     if self.operations.active_input().is_some()
-                        && !vm.has_runnable_fibers()
+                        && !vm.has_work()
                         && self.phase == RuntimePhase::Running
                         && self.deferred_input_completion.is_none()
                     {
                         self.set_phase(RuntimePhase::WaitingInput)?;
                     }
-                    Ok::<_, RuntimeError>((executed, stop, made_progress, vm.has_runnable_fibers()))
+                    Ok::<_, RuntimeError>((executed, stop, made_progress, vm.has_work()))
                 })();
                 // Quantum processing can fail after the VM has been removed from the session.
                 // Reinstall it before propagating that error so a later drive cannot report
                 // the unrelated and misleading "running phase has no VM" fault.
                 self.vm = Some(vm);
-                let (executed, stop, made_progress, has_runnable_fibers) = quantum?;
+                let (executed, stop, made_progress, has_work) = quantum?;
                 instructions = instructions.saturating_add(executed);
                 if let Some(submission) = self.deferred_input_completion.take() {
                     self.finish_input(submission, false)?;
                 }
                 transitions += 1;
-                // A synchronous host-call event immediately makes its idle fiber runnable again.
-                // Keep servicing such calls in this drive so PRINT-heavy scripts need no FFI
-                // trip per display fragment. External waits, input, faults, and debug stops still
-                // leave no runnable fiber or change phase and therefore cross the caller boundary.
+                // Synchronous calls either resume a fiber or queue its terminal event.
+                // Deliver both in this drive, within the transition budget. External
+                // waits and debug stops still cross the caller boundary.
                 if self.phase != RuntimePhase::Running
                     || stop == VmPortStop::DebugStopped
                     || !made_progress
-                    || !has_runnable_fibers
+                    || !has_work
                 {
                     break;
                 }
@@ -372,7 +389,7 @@ impl RuntimeSession {
         let cooperative_background_work = self.poll_cooperative_background_work()?;
         #[cfg(all(not(target_arch = "wasm32"), not(test)))]
         let cooperative_background_work = false;
-        self.flush_presentation_at_drive_boundary()?;
+        self.flush_presentation()?;
         let state = self.drive_state();
         Ok(RuntimeDriveReport {
             state,
@@ -381,6 +398,25 @@ impl RuntimeSession {
             queued_envelopes: u32::try_from(self.outbound.len()).unwrap_or(u32::MAX),
             cooperative_background_work,
         })
+    }
+
+    fn drive_next_inbound(&mut self) -> Result<bool, RuntimeError> {
+        let Some((message_id, accepted_epoch, message)) = self.take_next_inbound() else {
+            return Ok(false);
+        };
+        if self.state == SessionState::Active && accepted_epoch != Some(self.epoch) {
+            self.reject(
+                message_id,
+                CommandErrorCode::StaleRequest,
+                "queued envelope belongs to an old epoch",
+            )?;
+            return Ok(true);
+        }
+        match message {
+            InboundMessage::Runtime(message) => self.handle_message(message_id, message)?,
+            InboundMessage::Debug(message) => self.handle_debug_message(message_id, message)?,
+        }
+        Ok(true)
     }
 
     fn drive_vm_quantum(&mut self, vm: &mut RuntimeVm, budget: RunBudget) -> VmPortDriveReport {
@@ -432,7 +468,7 @@ impl RuntimeSession {
             RuntimeDriveState::OutputReady
         } else if !self.inbound.is_empty()
             || (self.phase == RuntimePhase::Running
-                && self.vm.as_ref().is_some_and(RuntimeVm::has_runnable_fibers))
+                && self.vm.as_ref().is_some_and(RuntimeVm::has_work))
         {
             RuntimeDriveState::MoreWork
         } else {
@@ -457,38 +493,7 @@ impl RuntimeSession {
         Ok(false)
     }
 
-    fn take_next_inbound(&mut self) -> Option<(u64, InboundMessage)> {
-        let timer_is_next = matches!(
-            self.inbound.front(),
-            Some((_, InboundMessage::Runtime(RuntimeMessage::AdvanceTime(_))))
-        );
-        if timer_is_next {
-            let matching_input = self.operations.active_input().and_then(|pending| {
-                self.inbound
-                    .iter()
-                    .position(|(_, message)| {
-                        !matches!(
-                            message,
-                            InboundMessage::Runtime(RuntimeMessage::AdvanceTime(_))
-                        )
-                    })
-                    .filter(|&index| {
-                        matches!(
-                            &self.inbound[index].1,
-                            InboundMessage::Runtime(RuntimeMessage::Input(input))
-                                if input.wait_id == pending.wait.wait_id
-                                    && input.token == pending.wait.submission_token
-                        )
-                    })
-            });
-            if let Some(index) = matching_input {
-                // A timer sampled before a user action can be queued first even though both
-                // commands are present for the same visible wait. Preserve wait identity and
-                // idempotency while giving every matching user-input intent priority over that
-                // automatic transition, just as a UI event cancels the current timer tick.
-                return self.inbound.remove(index);
-            }
-        }
+    fn take_next_inbound(&mut self) -> Option<(u64, Option<SessionEpoch>, InboundMessage)> {
         self.inbound.pop_front()
     }
 
@@ -605,6 +610,22 @@ impl RuntimeSession {
             );
         }
         match message {
+            RuntimeMessage::ResolveProjectCompatibility(request) => {
+                let mut report = crate::resolve_project_compatibility(&request);
+                if let Some(identity) = report.identity.as_ref()
+                    && let Some(diagnostic) = crate::compatibility::missing_compatibility_service(
+                        identity,
+                        &self.service_capabilities,
+                    )
+                {
+                    report.identity = None;
+                    report.diagnostics.push(*diagnostic);
+                }
+                self.emit(
+                    RuntimeMessage::ProjectCompatibilityResolved(report),
+                    Some(message_id),
+                )
+            }
             RuntimeMessage::ProjectManifest(manifest) => {
                 let identity = crate::compiled_cache::project_identity(&manifest);
                 self.load_project(
@@ -638,24 +659,11 @@ impl RuntimeSession {
             }
             RuntimeMessage::AdvanceTime(time) => self.advance_time(message_id, time),
             RuntimeMessage::DeviceStateChanged(state) => {
-                if self.phase == RuntimePhase::DebugPaused {
-                    self.debug_frontend_time_sample = Some(state.monotonic_time_ns);
-                } else {
-                    self.observe_frontend_time(state.monotonic_time_ns);
-                    // Emuera sets MesSkip as soon as the secondary mouse button is pressed, even
-                    // while the interpreter is running. Scripts can therefore observe MESSKIP and
-                    // abort an animation before the next input wait is opened.
-                    if state.device == era_runtime_protocol::InputDeviceKind::Mouse
-                        && state.code == 2
-                        && state.pressed
-                    {
-                        self.message_skip = true;
-                    }
-                }
-                Ok(())
+                self.receive_device_state(message_id, state)
             }
             RuntimeMessage::ClientStateChanged(state) => {
-                self.client_focused = state.focused;
+                self.client_focused = state.focused && state.visible;
+                // Blur/visibility never consumes snake latch or observation state.
                 self.client_audio_available = state.audio_available;
                 Ok(())
             }
@@ -732,7 +740,8 @@ impl RuntimeSession {
             RuntimeMessage::StorageResponse(response) => {
                 self.complete_storage(message_id, response)
             }
-            RuntimeMessage::ClientHello(_)
+            RuntimeMessage::ProjectCompatibilityResolved(_)
+            | RuntimeMessage::ClientHello(_)
             | RuntimeMessage::ServerHello(_)
             | RuntimeMessage::VersionRejected(_)
             | RuntimeMessage::ProjectLoadReport(_)

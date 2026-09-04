@@ -2,6 +2,7 @@
 use super::*;
 
 mod audio;
+mod scene;
 
 #[allow(clippy::needless_borrow)]
 impl RuntimeSession {
@@ -13,12 +14,28 @@ impl RuntimeSession {
         name: &String,
         status: &mut HostDispatchStatus,
     ) -> Result<(), RuntimeError> {
+        if matches!(
+            name.as_str(),
+            "CBGCLEAR"
+                | "CBGCLEARBUTTON"
+                | "CBGREMOVEBMAP"
+                | "CBGREMOVERANGE"
+                | "CBGSETBMAPG"
+                | "CBGSETBUTTONSPRITE"
+                | "CBGSETG"
+                | "CBGSETSPRITE"
+                | "SETIMAGELAYER"
+                | "SETIMAGELAYERL"
+                | "CLEARIMAGELAYER"
+                | "CLEARIMAGELAYER_ALL"
+                | "EXISTSIMAGELAYER"
+        ) {
+            *status = HostDispatchStatus::Handled;
+            return self.dispatch_scene_graphics(vm, request, name);
+        }
         if name == "EXISTSOUND" {
             *status = HostDispatchStatus::Handled;
-            let resource = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
+            let resource = request.argument(0).map_or_else(String::new, display_value);
             let exists = self
                 .project_snapshot
                 .as_ref()
@@ -37,10 +54,7 @@ impl RuntimeSession {
             "SPRITECREATED" | "SPRITEWIDTH" | "SPRITEHEIGHT" | "SPRITEPOSX" | "SPRITEPOSY"
         ) {
             *status = HostDispatchStatus::Handled;
-            let resource = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
+            let resource = request.argument(0).map_or_else(String::new, display_value);
             let value = self
                 .project_snapshot
                 .as_ref()
@@ -63,12 +77,9 @@ impl RuntimeSession {
         }
         if name == "SPRITEGETCOLOR" {
             *status = HostDispatchStatus::Handled;
-            let resource = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
-            let x = integer_argument_value(&request.arguments, 1)?;
-            let y = integer_argument_value(&request.arguments, 2)?;
+            let resource = request.argument(0).map_or_else(String::new, display_value);
+            let x = integer_argument_value(request, 1)?;
+            let y = integer_argument_value(request, 2)?;
             let Some((resource_id, digest, x, y)) = self
                 .project_snapshot
                 .as_ref()
@@ -102,12 +113,9 @@ impl RuntimeSession {
         }
         if matches!(name.as_str(), "SPRITEMOVE" | "SPRITESETPOS") {
             *status = HostDispatchStatus::Handled;
-            let resource = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
-            let x = i32::try_from(integer_argument_value(&request.arguments, 1)?).unwrap_or(0);
-            let y = i32::try_from(integer_argument_value(&request.arguments, 2)?).unwrap_or(0);
+            let resource = request.argument(0).map_or_else(String::new, display_value);
+            let x = i32::try_from(integer_argument_value(request, 1)?).unwrap_or(0);
+            let y = i32::try_from(integer_argument_value(request, 2)?).unwrap_or(0);
             let changed = self.project_snapshot.as_mut().is_some_and(|project| {
                 project
                     .resource_graph
@@ -117,7 +125,7 @@ impl RuntimeSession {
         }
         if name == "GCREATEFROMFILE" {
             *status = HostDispatchStatus::Handled;
-            let id = integer_argument_value(&request.arguments, 0)?;
+            let id = integer_argument_value(request, 0)?;
             if self
                 .project_snapshot
                 .as_ref()
@@ -126,17 +134,18 @@ impl RuntimeSession {
             {
                 return self.complete_graphics_result(vm, request.id, 0);
             }
-            let filename = string_argument_value(&request.arguments, 1, &name)?;
+            let filename = string_argument_value(request, 1, &name)?;
+            let relative = if request.arguments.len() > 2 {
+                integer_argument_value(request, 2)? != 0
+            } else {
+                false
+            };
             // Emuera treats a missing or unusable image filename as an ordinary
             // creation failure. Keep unsafe paths away from the frontend without
             // exposing portable path validation as a runtime-internal fault.
             let Ok(path) = safe_relative_path(filename) else {
                 return self.complete_graphics_result(vm, request.id, 0);
             };
-            let relative = request
-                .arguments
-                .get(2)
-                .is_some_and(|value| integer_value_or_zero(value) != 0);
             if !relative {
                 let created = self.project_snapshot.as_mut().is_some_and(|project| {
                     project
@@ -159,8 +168,8 @@ impl RuntimeSession {
         }
         if name == "GLOAD" {
             *status = HostDispatchStatus::Handled;
-            let id = integer_argument_value(&request.arguments, 0)?;
-            let file_no = integer_argument_value(&request.arguments, 1)?;
+            let id = integer_argument_value(request, 0)?;
+            let file_no = integer_argument_value(request, 1)?;
             if !(0..=i64::from(i32::MAX)).contains(&file_no)
                 || self
                     .project_snapshot
@@ -184,8 +193,8 @@ impl RuntimeSession {
         }
         if name == "GSAVE" {
             *status = HostDispatchStatus::Handled;
-            let id = integer_argument_value(&request.arguments, 0)?;
-            let file_no = integer_argument_value(&request.arguments, 1)?;
+            let id = integer_argument_value(request, 0)?;
+            let file_no = integer_argument_value(request, 1)?;
             let observation = self
                 .project_snapshot
                 .as_ref()
@@ -224,9 +233,9 @@ impl RuntimeSession {
         }
         if name == "GCREATE" {
             *status = HostDispatchStatus::Handled;
-            let id = integer_argument_value(&request.arguments, 0)?;
-            let width = integer_argument_value(&request.arguments, 1)?;
-            let height = integer_argument_value(&request.arguments, 2)?;
+            let id = integer_argument_value(request, 0)?;
+            let width = integer_argument_value(request, 1)?;
+            let height = integer_argument_value(request, 2)?;
             let result = self
                 .project_snapshot
                 .as_mut()
@@ -236,6 +245,22 @@ impl RuntimeSession {
             let created = match result {
                 Ok(value) => value,
                 Err(message) => {
+                    // Preserve create_canvas's conversion order and duplicate/full sentinel.
+                    let script_dimension_error = match (u32::try_from(width), u32::try_from(height))
+                    {
+                        (Err(_), _) => width < 0,
+                        (Ok(_), Err(_)) => height < 0,
+                        (Ok(width), Ok(height)) => width == 0 || height == 0,
+                    };
+                    if script_dimension_error {
+                        return complete_script_fault(
+                            vm,
+                            request,
+                            erabasic_vm::ScriptFaultKind::Argument,
+                            message,
+                        );
+                    }
+                    // Positive dimensions above the canvas safety limit remain noncatch.
                     return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
                 }
             };
@@ -243,7 +268,7 @@ impl RuntimeSession {
         }
         if name == "GDISPOSE" {
             *status = HostDispatchStatus::Handled;
-            let id = integer_argument_value(&request.arguments, 0)?;
+            let id = integer_argument_value(request, 0)?;
             let disposed = self
                 .project_snapshot
                 .as_mut()
@@ -252,7 +277,7 @@ impl RuntimeSession {
         }
         if matches!(name.as_str(), "GCREATED" | "GWIDTH" | "GHEIGHT") {
             *status = HostDispatchStatus::Handled;
-            let id = integer_argument_value(&request.arguments, 0)?;
+            let id = integer_argument_value(request, 0)?;
             let state = self
                 .project_snapshot
                 .as_ref()
@@ -270,7 +295,7 @@ impl RuntimeSession {
             "GGETBRUSH" | "GGETPEN" | "GGETPENWIDTH" | "GGETFONTSIZE" | "GGETFONTSTYLE"
         ) {
             *status = HostDispatchStatus::Handled;
-            let id = integer_argument_value(&request.arguments, 0)?;
+            let id = integer_argument_value(request, 0)?;
             let value = self
                 .project_snapshot
                 .as_ref()
@@ -289,7 +314,7 @@ impl RuntimeSession {
         }
         if name == "GGETFONT" {
             *status = HostDispatchStatus::Handled;
-            let id = integer_argument_value(&request.arguments, 0)?;
+            let id = integer_argument_value(request, 0)?;
             let value = self
                 .project_snapshot
                 .as_ref()
@@ -309,39 +334,57 @@ impl RuntimeSession {
             "GSETBRUSH" | "GSETPEN" | "GDASHSTYLE" | "GSETFONT"
         ) {
             *status = HostDispatchStatus::Handled;
-            let id = integer_argument_value(&request.arguments, 0)?;
+            let id = integer_argument_value(request, 0)?;
             let changed = match name.as_str() {
                 "GSETBRUSH" => {
-                    let color = checked_argb(integer_argument_value(&request.arguments, 1)?)?;
+                    let color = checked_argb(integer_argument_value(request, 1)?)?;
                     self.project_snapshot
                         .as_mut()
                         .is_some_and(|project| project.resource_graph.set_canvas_brush(id, color))
                 }
                 "GSETPEN" => {
-                    let color = checked_argb(integer_argument_value(&request.arguments, 1)?)?;
-                    let width = integer_argument_value(&request.arguments, 2)?;
+                    let color = checked_argb(integer_argument_value(request, 1)?)?;
+                    let width = integer_argument_value(request, 2)?;
                     self.project_snapshot.as_mut().is_some_and(|project| {
                         project.resource_graph.set_canvas_pen(id, color, width)
                     })
                 }
                 "GDASHSTYLE" => {
-                    let style = integer_argument_value(&request.arguments, 1)?;
-                    let offset = integer_argument_value(&request.arguments, 2)?;
+                    let style = integer_argument_value(request, 1)?;
+                    let offset = integer_argument_value(request, 2)?;
                     self.project_snapshot.as_mut().is_some_and(|project| {
                         project.resource_graph.set_canvas_dash(id, style, offset)
                     })
                 }
                 "GSETFONT" => {
-                    let family = string_argument_value(&request.arguments, 1, &name)?.to_owned();
-                    let size = integer_argument_value(&request.arguments, 2)?;
-                    let style = request
-                        .arguments
-                        .get(3)
-                        .and_then(|value| match value {
-                            VmValue::Integer(value) => Some(*value),
-                            _ => None,
+                    if !request.omitted_arguments.is_empty()
+                        && !self.project_snapshot.as_ref().is_some_and(|project| {
+                            project.resource_graph.canvas_style(id).is_some()
                         })
-                        .unwrap_or_default();
+                    {
+                        return commit_integer_result(vm, request.id, 0);
+                    }
+                    if request.arguments.len() < 3 {
+                        let exists = self.project_snapshot.as_ref().is_some_and(|project| {
+                            project.resource_graph.canvas_style(id).is_some()
+                        });
+                        if !exists {
+                            return commit_integer_result(vm, request.id, 0);
+                        }
+                        return complete_script_fault(
+                            vm,
+                            request,
+                            erabasic_vm::ScriptFaultKind::Operation,
+                            "GSETFONT dereferenced its absent font-size argument",
+                        );
+                    }
+                    let family = string_argument_value(request, 1, &name)?.to_owned();
+                    let size = integer_argument_value(request, 2)?;
+                    let style = if request.arguments.len() > 3 {
+                        integer_argument_value(request, 3)?
+                    } else {
+                        0
+                    };
                     self.project_snapshot.as_mut().is_some_and(|project| {
                         project.resource_graph.set_canvas_font(
                             id,
@@ -358,23 +401,14 @@ impl RuntimeSession {
         if name == "GGETTEXTSIZE" {
             *status = HostDispatchStatus::Handled;
             let context = self.projection_query_context();
-            let text = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
-            let font_family = request
-                .arguments
-                .get(1)
-                .map_or_else(String::new, display_value);
-            let font_size = integer_argument_value(&request.arguments, 2)?;
-            let style = request
-                .arguments
-                .get(3)
-                .and_then(|value| match value {
-                    VmValue::Integer(value) => Some(*value),
-                    _ => None,
-                })
-                .unwrap_or_default();
+            let text = request.argument(0).map_or_else(String::new, display_value);
+            let font_family = request.argument(1).map_or_else(String::new, display_value);
+            let font_size = integer_argument_value(request, 2)?;
+            let style = if request.arguments.len() > 3 {
+                integer_argument_value(request, 3)?
+            } else {
+                0
+            };
             return self.issue_host_service(
                 vm,
                 request,
@@ -396,9 +430,9 @@ impl RuntimeSession {
         }
         if name == "GGETCOLOR" {
             *status = HostDispatchStatus::Handled;
-            let canvas_id = integer_argument_value(&request.arguments, 0)?;
-            let x = integer_argument_value(&request.arguments, 1)?;
-            let y = integer_argument_value(&request.arguments, 2)?;
+            let canvas_id = integer_argument_value(request, 0)?;
+            let x = integer_argument_value(request, 1)?;
+            let y = integer_argument_value(request, 2)?;
             let observation = self
                 .project_snapshot
                 .as_ref()
@@ -416,13 +450,14 @@ impl RuntimeSession {
             {
                 return commit_integer_result(vm, request.id, -1);
             }
-            let context = self.projection_query_context();
+            let context = self.presentation_observation_context()?;
             return self.issue_host_service(
                 vm,
                 request,
                 ExternalCompletion::CanvasPixel {
                     request: request.id,
                     context,
+                    canvas_id,
                     canvas_revision,
                 },
                 ServiceKind::Canvas,
@@ -438,14 +473,14 @@ impl RuntimeSession {
         }
         if name == "GCLEAR" {
             *status = HostDispatchStatus::Handled;
-            let id = integer_argument_value(&request.arguments, 0)?;
-            let color = integer_argument_value(&request.arguments, 1)?;
+            let id = integer_argument_value(request, 0)?;
+            let color = integer_argument_value(request, 1)?;
             let rectangle = if request.arguments.len() == 6 {
                 Some([
-                    i32_argument_value(&request.arguments, 2)?,
-                    i32_argument_value(&request.arguments, 3)?,
-                    i32_argument_value(&request.arguments, 4)?,
-                    i32_argument_value(&request.arguments, 5)?,
+                    i32_argument_value(request, 2)?,
+                    i32_argument_value(request, 3)?,
+                    i32_argument_value(request, 4)?,
+                    i32_argument_value(request, 5)?,
                 ])
             } else {
                 None
@@ -458,11 +493,11 @@ impl RuntimeSession {
         }
         if name == "GSETCOLOR" {
             *status = HostDispatchStatus::Handled;
-            let id = integer_argument_value(&request.arguments, 0)?;
-            let color = checked_argb(integer_argument_value(&request.arguments, 1)?)?;
+            let id = integer_argument_value(request, 0)?;
+            let color = checked_argb(integer_argument_value(request, 1)?)?;
             let point = [
-                i32_argument_value(&request.arguments, 2)?,
-                i32_argument_value(&request.arguments, 3)?,
+                i32_argument_value(request, 2)?,
+                i32_argument_value(request, 3)?,
             ];
             let changed = self
                 .project_snapshot
@@ -472,12 +507,12 @@ impl RuntimeSession {
         }
         if name == "GFILLRECTANGLE" {
             *status = HostDispatchStatus::Handled;
-            let id = integer_argument_value(&request.arguments, 0)?;
+            let id = integer_argument_value(request, 0)?;
             let rectangle = [
-                i32_argument_value(&request.arguments, 1)?,
-                i32_argument_value(&request.arguments, 2)?,
-                i32_argument_value(&request.arguments, 3)?,
-                i32_argument_value(&request.arguments, 4)?,
+                i32_argument_value(request, 1)?,
+                i32_argument_value(request, 2)?,
+                i32_argument_value(request, 3)?,
+                i32_argument_value(request, 4)?,
             ];
             let changed = self
                 .project_snapshot
@@ -487,14 +522,14 @@ impl RuntimeSession {
         }
         if name == "GDRAWLINE" {
             *status = HostDispatchStatus::Handled;
-            let id = integer_argument_value(&request.arguments, 0)?;
+            let id = integer_argument_value(request, 0)?;
             let start = [
-                i32_argument_value(&request.arguments, 1)?,
-                i32_argument_value(&request.arguments, 2)?,
+                i32_argument_value(request, 1)?,
+                i32_argument_value(request, 2)?,
             ];
             let end = [
-                i32_argument_value(&request.arguments, 3)?,
-                i32_argument_value(&request.arguments, 4)?,
+                i32_argument_value(request, 3)?,
+                i32_argument_value(request, 4)?,
             ];
             let changed = self
                 .project_snapshot
@@ -504,12 +539,12 @@ impl RuntimeSession {
         }
         if name == "GDRAWTEXT" {
             *status = HostDispatchStatus::Handled;
-            let id = integer_argument_value(&request.arguments, 0)?;
-            let text = string_argument_value(&request.arguments, 1, &name)?.to_owned();
+            let id = integer_argument_value(request, 0)?;
+            let text = string_argument_value(request, 1, &name)?.to_owned();
             let point = if request.arguments.len() == 4 {
                 [
-                    i32_argument_value(&request.arguments, 2)?,
-                    i32_argument_value(&request.arguments, 3)?,
+                    i32_argument_value(request, 2)?,
+                    i32_argument_value(request, 3)?,
                 ]
             } else {
                 [0, 0]
@@ -562,7 +597,7 @@ impl RuntimeSession {
                 GGET_TEXT_SIZE_OPERATION_VERSION,
                 &TextExtentRequest {
                     context,
-                    text: string_argument_value(&request.arguments, 1, &name)?.to_owned(),
+                    text: string_argument_value(request, 1, &name)?.to_owned(),
                     font_family,
                     font_size,
                     style_bits,
@@ -574,21 +609,21 @@ impl RuntimeSession {
             "GDRAWG" | "GDRAWGWITHMASK" | "GDRAWGWITHROTATE"
         ) {
             *status = HostDispatchStatus::Handled;
-            let id = integer_argument_value(&request.arguments, 0)?;
-            let source_id = integer_argument_value(&request.arguments, 1)?;
+            let id = integer_argument_value(request, 0)?;
+            let source_id = integer_argument_value(request, 1)?;
             let (source, destination, mask, rotation, rotation_center) = match name.as_str() {
                 "GDRAWG" => (
                     Some([
-                        i32_argument_value(&request.arguments, 6)?,
-                        i32_argument_value(&request.arguments, 7)?,
-                        i32_argument_value(&request.arguments, 8)?,
-                        i32_argument_value(&request.arguments, 9)?,
+                        i32_argument_value(request, 6)?,
+                        i32_argument_value(request, 7)?,
+                        i32_argument_value(request, 8)?,
+                        i32_argument_value(request, 9)?,
                     ]),
                     Some([
-                        i32_argument_value(&request.arguments, 2)?,
-                        i32_argument_value(&request.arguments, 3)?,
-                        i32_argument_value(&request.arguments, 4)?,
-                        i32_argument_value(&request.arguments, 5)?,
+                        i32_argument_value(request, 2)?,
+                        i32_argument_value(request, 3)?,
+                        i32_argument_value(request, 4)?,
+                        i32_argument_value(request, 5)?,
                     ]),
                     None,
                     0,
@@ -602,11 +637,11 @@ impl RuntimeSession {
                     let Some((width, height)) = source_size else {
                         return commit_integer_result(vm, request.id, 0);
                     };
-                    let mask_id = integer_argument_value(&request.arguments, 2)?;
+                    let mask_id = integer_argument_value(request, 2)?;
                     let destination_id = id;
                     let destination_point = [
-                        i32_argument_value(&request.arguments, 3)?,
-                        i32_argument_value(&request.arguments, 4)?,
+                        i32_argument_value(request, 3)?,
+                        i32_argument_value(request, 4)?,
                     ];
                     let graph = self
                         .project_snapshot
@@ -635,7 +670,7 @@ impl RuntimeSession {
                     (None, Some(rectangle), Some(mask_id), 0, None)
                 }
                 _ => {
-                    let angle = integer_argument_value(&request.arguments, 2)?;
+                    let angle = integer_argument_value(request, 2)?;
                     let source_size = self
                         .project_snapshot
                         .as_ref()
@@ -645,8 +680,8 @@ impl RuntimeSession {
                     };
                     let center = if request.arguments.len() == 5 {
                         [
-                            i32_argument_value(&request.arguments, 3)?,
-                            i32_argument_value(&request.arguments, 4)?,
+                            i32_argument_value(request, 3)?,
+                            i32_argument_value(request, 4)?,
                         ]
                     } else {
                         [
@@ -659,8 +694,7 @@ impl RuntimeSession {
             };
             let color_matrix = if name == "GDRAWG" {
                 request
-                    .arguments
-                    .get(10)
+                    .argument(10)
                     .map(|value| read_color_matrix(vm, request.fiber, value))
                     .transpose()?
             } else {
@@ -682,16 +716,28 @@ impl RuntimeSession {
         }
         if name == "GDRAWSPRITE" {
             *status = HostDispatchStatus::Handled;
-            let id = integer_argument_value(&request.arguments, 0)?;
-            let sprite = request
-                .arguments
-                .get(1)
-                .map_or_else(String::new, display_value);
+            let id = integer_argument_value(request, 0)?;
+            let sprite = request.argument(1).map_or_else(String::new, display_value);
+            if request.omitted_arguments.binary_search(&6).is_ok() {
+                let exists = self.project_snapshot.as_ref().is_some_and(|project| {
+                    project.resource_graph.canvas_state(id).is_some()
+                        && project.resource_graph.sprite(&sprite).is_some()
+                });
+                if !exists {
+                    return commit_integer_result(vm, request.id, 0);
+                }
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Operation,
+                    "GDRAWSPRITE dereferenced its omitted color-matrix argument",
+                );
+            }
             let destination = match request.arguments.len() {
                 2 => None,
                 4 => Some([
-                    i32_argument_value(&request.arguments, 2)?,
-                    i32_argument_value(&request.arguments, 3)?,
+                    i32_argument_value(request, 2)?,
+                    i32_argument_value(request, 3)?,
                     self.project_snapshot
                         .as_ref()
                         .and_then(|project| project.resource_graph.sprite(&sprite))
@@ -702,15 +748,14 @@ impl RuntimeSession {
                         .map_or(0, |value| i32::try_from(value.height).unwrap_or(i32::MAX)),
                 ]),
                 _ => Some([
-                    i32_argument_value(&request.arguments, 2)?,
-                    i32_argument_value(&request.arguments, 3)?,
-                    i32_argument_value(&request.arguments, 4)?,
-                    i32_argument_value(&request.arguments, 5)?,
+                    i32_argument_value(request, 2)?,
+                    i32_argument_value(request, 3)?,
+                    i32_argument_value(request, 4)?,
+                    i32_argument_value(request, 5)?,
                 ]),
             };
             let color_matrix = request
-                .arguments
-                .get(6)
+                .argument(6)
                 .map(|value| read_color_matrix(vm, request.fiber, value))
                 .transpose()?;
             let changed = self.project_snapshot.as_mut().is_some_and(|project| {
@@ -722,13 +767,18 @@ impl RuntimeSession {
         }
         if name == "SPRITEANIMECREATE" {
             *status = HostDispatchStatus::Handled;
-            let sprite = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
-            let width = integer_argument_value(&request.arguments, 1)?;
-            let height = integer_argument_value(&request.arguments, 2)?;
+            let sprite = request.argument(0).map_or_else(String::new, display_value);
+            let width = integer_argument_value(request, 1)?;
+            let height = integer_argument_value(request, 2)?;
             if !(1..=8_192).contains(&width) || !(1..=8_192).contains(&height) {
+                if width <= 8_192 && height <= 8_192 && (width <= 0 || height <= 0) {
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Argument,
+                        "animation sprite dimensions are out of range",
+                    );
+                }
                 return self.fault(
                     FaultCode::VmFault,
                     "animation sprite dimensions are out of range",
@@ -744,22 +794,19 @@ impl RuntimeSession {
         }
         if name == "SPRITEANIMEADDFRAME" {
             *status = HostDispatchStatus::Handled;
-            let sprite = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
-            let canvas_id = integer_argument_value(&request.arguments, 1)?;
+            let sprite = request.argument(0).map_or_else(String::new, display_value);
+            let canvas_id = integer_argument_value(request, 1)?;
             let rectangle = [
-                i32_argument_value(&request.arguments, 2)?,
-                i32_argument_value(&request.arguments, 3)?,
-                i32_argument_value(&request.arguments, 4)?,
-                i32_argument_value(&request.arguments, 5)?,
+                i32_argument_value(request, 2)?,
+                i32_argument_value(request, 3)?,
+                i32_argument_value(request, 4)?,
+                i32_argument_value(request, 5)?,
             ];
             let offset = [
-                i32_argument_value(&request.arguments, 6)?,
-                i32_argument_value(&request.arguments, 7)?,
+                i32_argument_value(request, 6)?,
+                i32_argument_value(request, 7)?,
             ];
-            let delay = integer_argument_value(&request.arguments, 8)?;
+            let delay = integer_argument_value(request, 8)?;
             let added = self.project_snapshot.as_mut().is_some_and(|project| {
                 project
                     .resource_graph
@@ -767,36 +814,135 @@ impl RuntimeSession {
             });
             return self.complete_graphics_result(vm, request.id, i64::from(added));
         }
+        if name == "SPRITECREATEFROMFILE" {
+            *status = HostDispatchStatus::Handled;
+            let sprite = request.argument(0).map_or_else(String::new, display_value);
+            let path = string_argument_value(request, 1, name)?;
+            let relative_to_source = request
+                .argument(2)
+                .is_some_and(|value| integer_value_or_zero(value) != 0);
+            let declaring_source = request
+                .origin
+                .source
+                .as_ref()
+                .map(|source| source.relative_path.as_str());
+            let created = self.project_snapshot.as_mut().is_some_and(|project| {
+                project.resource_graph.create_file_sprite(
+                    &sprite,
+                    &path,
+                    declaring_source,
+                    relative_to_source,
+                )
+            });
+            return self.complete_graphics_result(vm, request.id, i64::from(created));
+        }
         if name == "SPRITECREATE" {
             *status = HostDispatchStatus::Handled;
-            let sprite = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
-            let id = integer_argument_value(&request.arguments, 1)?;
-            let rectangle = if request.arguments.len() == 6 {
+            let snake_graphics = self.project_snapshot.as_ref().is_some_and(|project| {
+                project
+                    .manifest
+                    .compatibility
+                    .supports_snake_display_state()
+            });
+            if matches!(request.arguments.len(), 8 | 10) && !snake_graphics {
+                return self.fault(
+                    FaultCode::UnsupportedRuntimeFeature,
+                    "SPRITECREATE 8/10-argument forms require the snake profile",
+                    Some(request.origin.clone()),
+                );
+            }
+            if !matches!(request.arguments.len(), 2 | 6 | 8 | 10) {
+                return Err(RuntimeError::Internal(
+                    "SPRITECREATE physical source shape is invalid".into(),
+                ));
+            }
+            let sprite = request.argument(0).map_or_else(String::new, display_value);
+            let id = integer_argument_value(request, 1)?;
+            let rectangle = if request.arguments.len() >= 6 {
                 Some([
-                    i32_argument_value(&request.arguments, 2)?,
-                    i32_argument_value(&request.arguments, 3)?,
-                    i32_argument_value(&request.arguments, 4)?,
-                    i32_argument_value(&request.arguments, 5)?,
+                    i32_argument_value(request, 2)?,
+                    i32_argument_value(request, 3)?,
+                    i32_argument_value(request, 4)?,
+                    i32_argument_value(request, 5)?,
+                ])
+            } else {
+                None
+            };
+            let position = if request.arguments.len() >= 8 {
+                [
+                    i32_argument_value(request, 6)?,
+                    i32_argument_value(request, 7)?,
+                ]
+            } else {
+                [0, 0]
+            };
+            let destination_size = if request.arguments.len() == 10 {
+                Some([
+                    i32_argument_value(request, 8)?,
+                    i32_argument_value(request, 9)?,
                 ])
             } else {
                 None
             };
             let created = self.project_snapshot.as_mut().is_some_and(|project| {
-                project
-                    .resource_graph
-                    .create_canvas_sprite(&sprite, id, rectangle)
+                project.resource_graph.create_canvas_sprite(
+                    &sprite,
+                    id,
+                    rectangle,
+                    position,
+                    destination_size,
+                )
             });
             return self.complete_graphics_result(vm, request.id, i64::from(created));
         }
+        if name == "G_POLYGON_POINT_ADD" {
+            *status = HostDispatchStatus::Handled;
+            let canvas_id = integer_argument_value(request, 0)?;
+            let point = [
+                i32_argument_value(request, 1)?,
+                i32_argument_value(request, 2)?,
+            ];
+            let added = self.project_snapshot.as_mut().is_some_and(|project| {
+                project
+                    .resource_graph
+                    .add_canvas_polygon_point(canvas_id, point)
+            });
+            return self.complete_graphics_result(vm, request.id, i64::from(added));
+        }
+        if name == "G_POLYGON_POINT_CLEAR" {
+            *status = HostDispatchStatus::Handled;
+            let canvas_id = integer_argument_value(request, 0)?;
+            let cleared = self.project_snapshot.as_mut().is_some_and(|project| {
+                project
+                    .resource_graph
+                    .clear_canvas_polygon_points(canvas_id)
+            });
+            return self.complete_graphics_result(vm, request.id, i64::from(cleared));
+        }
+        if matches!(name.as_str(), "G_POLYGON_DRAW" | "G_POLYGON_FILL") {
+            *status = HostDispatchStatus::Handled;
+            let canvas_id = integer_argument_value(request, 0)?;
+            let result = self.project_snapshot.as_mut().map_or(Ok(false), |project| {
+                project
+                    .resource_graph
+                    .draw_canvas_polygon(canvas_id, name == "G_POLYGON_FILL")
+            });
+            let drawn = match result {
+                Ok(drawn) => drawn,
+                Err(message) => {
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Operation,
+                        format!("{name}: {message}"),
+                    );
+                }
+            };
+            return self.complete_graphics_result(vm, request.id, i64::from(drawn));
+        }
         if name == "SPRITEDISPOSE" {
             *status = HostDispatchStatus::Handled;
-            let sprite = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
+            let sprite = request.argument(0).map_or_else(String::new, display_value);
             let disposed = self
                 .project_snapshot
                 .as_mut()
@@ -805,7 +951,7 @@ impl RuntimeSession {
         }
         if name == "SPRITEDISPOSEALL" {
             *status = HostDispatchStatus::Handled;
-            let include_static = integer_argument_value(&request.arguments, 0)? != 0;
+            let include_static = integer_argument_value(request, 0)? != 0;
             let count = self.project_snapshot.as_mut().map_or(0, |project| {
                 project.resource_graph.dispose_sprites(include_static)
             });

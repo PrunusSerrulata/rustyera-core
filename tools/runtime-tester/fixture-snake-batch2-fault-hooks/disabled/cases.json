@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "snake": {
+      "semantic_version": 8,
+      "policy_version": 8
+    }
+  },
+  "evidenceStatus": "batch_2d_dynamic_observation_not_a_golden",
+  "loadExpect": {
+    "ok": true,
+    "result": {
+      "termination": "waitingInput"
+    }
+  },
+  "allowedOracles": [
+    "snake"
+  ],
+  "cases": [
+    {
+      "id": "fault-disabled-throw",
+      "group": "FAULT_HOOKS",
+      "targetBatch": 2,
+      "rustCurrentPolicy": "batch_2D_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2D_acceptance",
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "observation": true,
+      "expectationStatus": "compare_actual_observables",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_DISABLED_THROW",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:9",
+              "FLAG:10"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "fault-disabled-error",
+      "group": "FAULT_HOOKS",
+      "targetBatch": 2,
+      "rustCurrentPolicy": "batch_2D_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2D_acceptance",
+      "allowedOracles": [
+        "snake"
+      ],
+      "requireSuccessfulLoad": true,
+      "observation": true,
+      "expectationStatus": "compare_actual_observables",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PROBE_DISABLED_ERROR",
+            "watch": [
+              "FLAG:0",
+              "FLAG:1",
+              "FLAG:2",
+              "FLAG:9",
+              "FLAG:10"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

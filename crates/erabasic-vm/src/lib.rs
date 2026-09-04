@@ -4,11 +4,14 @@
 //! services and the single [`VmHost`] boundary, while an application frontend owns
 //! files, clocks, rendering and input delivery.
 
+mod compat_collation;
+mod compat_text;
 mod config;
 mod debug;
 mod debug_port;
 mod display_width;
 mod extended_pictographic;
+mod failure;
 mod fault;
 mod host;
 mod hot_reload;
@@ -25,8 +28,9 @@ mod structured;
 mod value;
 
 pub use config::{
-    FiberId, FiberStatus, FrameId, GenerationId, HostRequestId, RunBudget, VmBacktraceFrame,
-    VmConfig, VmDiagnosticNotification, VmEvent, VmExecutionOrigin, VmRunReport, VmRunStop,
+    FiberId, FiberStatus, FrameId, GenerationId, HostRequestId, RunBudget, RuntimeHostScope,
+    VmBacktraceFrame, VmConfig, VmDiagnosticNotification, VmEvent, VmExecutionOrigin, VmRunReport,
+    VmRunStop,
 };
 pub use debug_port::{
     VmBreakpoint, VmBreakpointBinding, VmBreakpointLocation, VmDebugControl, VmDebugFiber,
@@ -38,11 +42,13 @@ pub use display_width::{
     CharacterWidthMode, display_width, emuera_display_width, logical_line_string,
     logical_line_string_with_mode,
 };
+pub use failure::{ExecutionFailure, FaultCategory, ScriptFaultKind};
 pub use fault::{VmError, VmFault, VmFaultCode};
 pub use host::{
     HostCallRequest, HostCallResult, HostReady, HostRebindRequest, HostWaitStability,
     ImmediateHostCall, ImmediateHostCallResult, NativeCallRequest, NativePlaceView, NativeReady,
     NativeService, NativeServiceRegistry, VmHost, evaluate_pure_native,
+    evaluate_pure_native_with_compatibility,
 };
 pub use hot_reload::{HotReloadPlan, HotReloadReport};
 pub use runtime_port::{
@@ -60,13 +66,13 @@ pub use snapshot::{
     SnapshotEligibility, SnapshotInspection, VmSnapshot, inspect_snapshot,
 };
 pub use state::{Vm, VmPreparationProgress, VmPreparationStage};
-pub use structured::{StructuredExtension, StructuredScope};
-pub use value::{HostWrite, PlaceDescriptor, VmValue};
+pub use structured::{StructuredExtension, StructuredScope, parse_map_xml_rows};
+pub use value::{ArrayBackingId, HostWrite, PlaceDescriptor, VmValue};
 
 pub(crate) use memory::{
     Memory, VariableCell, VariableMap, character_definition, shared_definition,
 };
 pub(crate) use state::{
     Fiber, FiberState, FindElementCacheKey, FindElementNeedle, ProgramGeneration, WaitingHost,
-    bind_persistent_arguments, make_frame, prepare_dynamic_arguments, validate_arguments,
+    bind_persistent_arguments, make_frame, validate_arguments,
 };

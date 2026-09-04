@@ -10,9 +10,9 @@ WORKSPACE_ROOT="$(cd "$REPO_ROOT/.." && pwd)"
 REFERENCE_ROOT="${EMUERA_REFERENCE_ROOT:-$WORKSPACE_ROOT/emuera.em}"
 CLI_DIR="$REFERENCE_ROOT/emuera-reference-cli"
 PROJECT="$CLI_DIR/Emuera.ReferenceCli.csproj"
-WINE_PREFIX="$WORKSPACE_ROOT/.wine-prefix/emuera-reference-cli"
-WORK_DIR="$WORKSPACE_ROOT/.wine-tmp/emuera-reference-cli"
-PUBLISH_DIR="$CLI_DIR/bin/x64/Debug-NAudio/net10.0-windows/win-x64/publish"
+WINE_PREFIX="${EMUERA_REFERENCE_WINE_PREFIX:-$WORKSPACE_ROOT/.wine-prefix/emuera-reference-cli}"
+WORK_DIR="${EMUERA_REFERENCE_WORK_DIR:-$WORKSPACE_ROOT/.wine-tmp/emuera-reference-cli}"
+PUBLISH_DIR="${EMUERA_REFERENCE_PUBLISH_DIR:-$CLI_DIR/bin/x64/Debug-NAudio/net10.0-windows/win-x64/publish}"
 EXECUTABLE="$PUBLISH_DIR/Emuera.ReferenceCli.exe"
 OUTPUT_FILE="${1:-$WORK_DIR/wine-smoke.ndjson}"
 REQUEST_FILE="$WORK_DIR/requests.ndjson"
@@ -32,7 +32,7 @@ ONEINPUT_FIXTURE_SOURCE_DIR="$CLI_DIR/tests/fixture-oneinput"
 ONEINPUT_LONG_FIXTURE_SOURCE_DIR="$CLI_DIR/tests/fixture-oneinput-long"
 ORACLE_TIMEOUT_SECONDS="${EMUERA_REFERENCE_TIMEOUT_SECONDS:-30}"
 
-for command_name in dotnet wine winepath jq perl; do
+for command_name in wine winepath jq perl python3; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         echo "required command not found: $command_name" >&2
         exit 127
@@ -82,14 +82,27 @@ SAVE_WINDOWS_PATH="$(winepath -w "$FIXTURE_DIR/save00.sav")"
 
 # A framework-dependent build cannot locate macOS's .NET installation from
 # inside Wine, so publish the Windows runtime beside the executable.
-dotnet publish "$PROJECT" \
-    -c Debug-NAudio \
-    -p:Platform=x64 \
-    -r win-x64 \
-    --self-contained true \
-    -p:PublishSingleFile=false \
-    --nologo \
-    -clp:ErrorsOnly
+if [[ "${EMUERA_REFERENCE_SKIP_BUILD:-0}" != "1" ]]; then
+    command -v dotnet >/dev/null || { echo "required command not found: dotnet" >&2; exit 127; }
+    BUILD_ARGS=(
+        publish "$PROJECT"
+        -c Debug-NAudio
+        -p:Platform=x64
+        -r win-x64
+        --self-contained true
+        -p:PublishSingleFile=false
+        -o "$PUBLISH_DIR"
+    )
+    if [[ -n "${EMUERA_REFERENCE_ARTIFACTS_PATH:-}" ]]; then
+        BUILD_ARGS+=(--artifacts-path "$EMUERA_REFERENCE_ARTIFACTS_PATH")
+    fi
+    BUILD_ARGS+=(--nologo -clp:ErrorsOnly)
+    dotnet "${BUILD_ARGS[@]}"
+fi
+if [[ ! -f "$EXECUTABLE" ]]; then
+    echo "reference executable missing: $EXECUTABLE" >&2
+    exit 1
+fi
 
 printf '%s\n' \
     '{"id":"wine-capabilities","op":"capabilities"}' \
@@ -174,9 +187,9 @@ printf '%s\n' \
 # on macOS while keeping Wine diagnostics separate from protocol output. Keep a
 # watchdog around the process so a native UI regression fails instead of
 # blocking differential tests indefinitely.
-perl -e 'alarm shift; exec @ARGV' "$ORACLE_TIMEOUT_SECONDS" \
-    wine "$EXECUTABLE" <"$REQUEST_FILE" 2>"$STDERR_FILE" \
-    | tr -d '\r' >"$OUTPUT_FILE"
+python3 "$SCRIPT_DIR/oracle-smoke-supervisor.py" \
+    --requests "$REQUEST_FILE" --output "$OUTPUT_FILE" --stderr "$STDERR_FILE" \
+    --timeout "$ORACLE_TIMEOUT_SECONDS" -- wine "$EXECUTABLE"
 
 jq -e -s '
     length == 58 and

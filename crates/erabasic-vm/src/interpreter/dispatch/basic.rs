@@ -78,6 +78,7 @@ impl Vm {
                 };
                 if opcode == Opcode::MakePlace {
                     let place = PlaceDescriptor {
+                        backing: None,
                         variable: key,
                         indices: value_indices.to_vec(),
                         character,
@@ -143,7 +144,12 @@ impl Vm {
                                     .then_some(frame.id),
                             )
                             .map_err(map_vm_error)?;
-                        value = binary_value(assign_binary_tag(operation)?, previous, value)?;
+                        value = self.binary_value(
+                            position.generation,
+                            assign_binary_tag(operation)?,
+                            previous,
+                            value,
+                        )?;
                     }
                     self.write_variable_resolved(
                         fiber,
@@ -167,7 +173,7 @@ impl Vm {
                     .last_mut()
                     .expect("frame exists")
                     .stack
-                    .push(unary_value(operation, value)?);
+                    .push(self.unary_value(position.generation, operation, value)?);
             }
             Opcode::Binary => {
                 let operation = *position.encoded.payload.first().ok_or_else(|| {
@@ -176,7 +182,7 @@ impl Vm {
                 let stack = &mut fiber.frames.last_mut().expect("frame exists").stack;
                 let right = pop(stack)?;
                 let left = pop(stack)?;
-                stack.push(binary_value(operation, left, right)?);
+                stack.push(self.binary_value(position.generation, operation, left, right)?);
             }
             Opcode::ToString => {
                 let value = pop(&mut fiber.frames.last_mut().expect("frame exists").stack)?;
@@ -204,7 +210,18 @@ impl Vm {
                     .push(VmValue::String(value));
             }
             Opcode::Pop => {
-                pop(&mut fiber.frames.last_mut().expect("frame exists").stack)?;
+                let frame = fiber.frames.last_mut().expect("frame exists");
+                if frame
+                    .user_calls
+                    .last()
+                    .is_some_and(|call| call.stack_index + 1 == frame.stack.len())
+                {
+                    return Err(StepError::new(
+                        VmFaultCode::InvalidInstruction,
+                        "user-call tokens must be consumed by Invoke or Abandon",
+                    ));
+                }
+                pop(&mut frame.stack)?;
             }
             Opcode::Dup => {
                 let stack = &mut fiber.frames.last_mut().expect("frame exists").stack;
@@ -310,7 +327,12 @@ impl Vm {
                         "FOR counter storage is not integer",
                     ));
                 };
-                let next = current.wrapping_add(state.step);
+                let next = self.integer_arithmetic(
+                    position.generation,
+                    erabasic_compat::IntegerOperation::Add,
+                    current,
+                    Some(state.step),
+                )?;
                 self.write_place(fiber, &state.counter, VmValue::Integer(next))
                     .map_err(map_vm_error)?;
                 let active =
@@ -341,12 +363,14 @@ impl Vm {
                         "FOR counter storage is not integer",
                     ));
                 };
-                self.write_place(
-                    fiber,
-                    &state.counter,
-                    VmValue::Integer(current.wrapping_add(state.step)),
-                )
-                .map_err(map_vm_error)?;
+                let next = self.integer_arithmetic(
+                    position.generation,
+                    erabasic_compat::IntegerOperation::Add,
+                    current,
+                    Some(state.step),
+                )?;
+                self.write_place(fiber, &state.counter, VmValue::Integer(next))
+                    .map_err(map_vm_error)?;
                 fiber
                     .frames
                     .last_mut()
@@ -401,11 +425,14 @@ impl Vm {
                 } else if operation == 6 {
                     let upper = pop(stack)?;
                     let lower = pop(stack)?;
-                    let VmValue::Integer(lower_match) = binary_value(10, selector.clone(), lower)?
+                    let VmValue::Integer(lower_match) =
+                        self.binary_value(position.generation, 10, selector.clone(), lower)?
                     else {
                         unreachable!("comparison produces integer")
                     };
-                    let VmValue::Integer(upper_match) = binary_value(8, selector, upper)? else {
+                    let VmValue::Integer(upper_match) =
+                        self.binary_value(position.generation, 8, selector, upper)?
+                    else {
                         unreachable!("comparison produces integer")
                     };
                     lower_match != 0 && upper_match != 0
@@ -426,8 +453,12 @@ impl Vm {
                             ));
                         }
                     };
-                    let VmValue::Integer(value) =
-                        binary_value(binary_operation, selector, operand)?
+                    let VmValue::Integer(value) = self.binary_value(
+                        position.generation,
+                        binary_operation,
+                        selector,
+                        operand,
+                    )?
                     else {
                         unreachable!("comparison produces integer")
                     };

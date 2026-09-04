@@ -1,0 +1,13 @@
+[package]
+name = "erabasic-compat"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+blake3.workspace = true
+minicbor.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

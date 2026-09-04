@@ -82,16 +82,43 @@ impl Builder<'_> {
                 return;
             }
         }
+        if let Some(function) = target_function
+            && function.parameters.iter().any(|parameter| {
+                self.context
+                    .program
+                    .variables
+                    .get(parameter.target.variable.0 as usize)
+                    .is_some_and(|variable| variable.reference)
+            })
+        {
+            self.reject_excess_user_arguments(
+                arguments.len().saturating_sub(1),
+                function.parameters.len(),
+                location,
+                || format!("{name} supplies too many arguments"),
+            );
+            let actuals =
+                Self::method_statement_arguments(arguments.get(1..).unwrap_or_default(), location);
+            let mode = if name.ends_with('F') {
+                erabasic_bytecode::UserCallMode::MethodDiscard
+            } else if name.contains("JUMP") {
+                erabasic_bytecode::UserCallMode::JumpProcedure
+            } else {
+                erabasic_bytecode::UserCallMode::Procedure
+            };
+            self.emit(opcode::push_string(&function.name), location);
+            self.lower_user_call_actuals(&actuals, mode, false, location);
+            return;
+        }
         let mut parameter_types =
             Vec::with_capacity(target_function.map_or(0, |function| function.parameters.len()));
         if let Some(function) = target_function {
-            if arguments.len().saturating_sub(1) > function.parameters.len() {
-                self.diagnostics.push(CompilerDiagnostic::at(
-                    CompilerDiagnosticCode::InvalidHir,
-                    location,
-                    format!("{name} supplies too many arguments"),
-                ));
-            }
+            self.reject_excess_user_arguments(
+                arguments.len().saturating_sub(1),
+                function.parameters.len(),
+                location,
+                || format!("{name} supplies too many arguments"),
+            );
             for (index, parameter) in function.parameters.iter().enumerate() {
                 let argument = arguments.get(index + 1);
                 if matches!(argument, None | Some(HirArgument::Omitted)) {
@@ -188,6 +215,30 @@ impl Builder<'_> {
         }
     }
 
+    pub(super) fn reject_excess_user_arguments(
+        &mut self,
+        supplied: usize,
+        formal: usize,
+        location: SourceLocation,
+        message: impl FnOnce() -> String,
+    ) {
+        let decision = self
+            .context
+            .program
+            .call_compatibility
+            .user_argument_policy
+            .decide(supplied, formal);
+        if decision.is_rejected() {
+            self.diagnostics.push(CompilerDiagnostic::at(
+                CompilerDiagnosticCode::InvalidHir,
+                location,
+                message(),
+            ));
+        }
+        // The analyzer owns the snake load warning, so warm bytecode-cache reuse
+        // cannot swallow it. The following loops still lower only formal slots.
+    }
+
     pub(in super::super) fn lower_dynamic_call(
         &mut self,
         arguments: &[HirArgument],
@@ -196,19 +247,12 @@ impl Builder<'_> {
         location: SourceLocation,
     ) {
         let Some(target) = arguments.first() else {
-            self.emit(
-                EncodedInstruction::new(Opcode::Trap, b"missing dynamic target".to_vec()),
-                location,
-            );
+            self.invalid_user_call("missing dynamic target", location);
             return;
         };
-        let target_type = self.lower_argument(target, location);
-        if target_type != BytecodeType::String {
-            self.diagnostics.push(CompilerDiagnostic::at(
-                CompilerDiagnosticCode::InvalidHir,
-                location,
-                format!("{name} target is not a string"),
-            ));
+        if self.lower_argument(target, location) != BytecodeType::String {
+            self.invalid_user_call("dynamic target is not a string", location);
+            return;
         }
         let allow_missing = name.starts_with("TRY");
         let has_catch = self
@@ -216,46 +260,78 @@ impl Builder<'_> {
             .control_flow
             .iter()
             .any(|edge| edge.from == line && edge.kind == ControlFlowKind::Branch);
-        let resolve = self.code.len();
-        let method = name.ends_with('F');
-        self.emit(opcode::resolve_function(0, allow_missing, method), location);
-        let parameter_types = arguments
-            .iter()
-            .skip(1)
-            .map(|argument| {
-                // The target signature is not known until ResolveFunction runs.
-                // Preserve syntactic lvalues as places so InvokeDynamic can bind
-                // them to REF parameters, or dereference them for value parameters.
-                if let HirArgument::Expression(expression) = argument
-                    && let HirExprKind::Variable { place } = &expression.kind
-                {
-                    self.lower_place(place, location)
-                } else {
-                    self.lower_argument(argument, location)
-                }
-            })
-            .collect::<Vec<_>>();
-        self.emit(
-            opcode::invoke_dynamic(
-                u16::try_from(parameter_types.len()).unwrap_or(u16::MAX),
-                name.contains("JUMP"),
-            ),
-            location,
-        );
+        let mode = if name.ends_with('F') {
+            erabasic_bytecode::UserCallMode::MethodDiscard
+        } else if name.contains("JUMP") {
+            erabasic_bytecode::UserCallMode::JumpProcedure
+        } else {
+            erabasic_bytecode::UserCallMode::Procedure
+        };
+        let actuals = Self::method_statement_arguments(&arguments[1..], location);
+        let Some((resolve, mut spec)) =
+            self.lower_user_call_actuals(&actuals, mode, allow_missing, location)
+        else {
+            return;
+        };
         if allow_missing {
             if has_catch {
                 self.emit(opcode::push_integer(1), location);
             }
             let success = self.code.len();
             self.emit(opcode::jump(Opcode::Jump, 0), location);
-            let missing = self.code.len();
-            self.emit(EncodedInstruction::new(Opcode::Pop, Vec::new()), location);
+            spec.missing_target = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
+            self.code[resolve] = opcode::resolve_user_call(&spec);
+            self.emit(
+                opcode::abandon_user_call(u32::try_from(resolve).unwrap_or(u32::MAX)),
+                location,
+            );
             if has_catch {
                 self.emit(opcode::push_integer(0), location);
             }
-            let end = self.code.len();
-            self.patch_resolve_function(resolve, missing, true, method);
-            self.patch_jump(success, end);
+            self.patch_jump(success, self.code.len());
+        }
+    }
+
+    pub(in super::super) fn lower_call_text(
+        &mut self,
+        arguments: &[HirArgument],
+        name: &str,
+        location: SourceLocation,
+    ) {
+        use erabasic_bytecode::{CallTextMode, CallTextSpec};
+        let mode = match name {
+            "CALLSTR" => CallTextMode::Call,
+            "JUMPSTR" => CallTextMode::Jump,
+            "TRYCALLSTR" => CallTextMode::TryCall,
+            "TRYJUMPSTR" => CallTextMode::TryJump,
+            "TRYCCALLSTR" => CallTextMode::CatchCall,
+            "TRYCJUMPSTR" => CallTextMode::CatchJump,
+            _ => unreachable!("only complete call-text instructions are dispatched here"),
+        };
+        let [HirArgument::Expression(expression)] = arguments else {
+            self.invalid_user_call("call-text requires exactly one string expression", location);
+            return;
+        };
+        if self.lower_expression(expression, location) != BytecodeType::String {
+            self.invalid_user_call("call-text source is not a string", location);
+            return;
+        }
+        let invoke = self.code.len();
+        let mut spec = CallTextSpec {
+            mode,
+            catch_target: 0,
+        };
+        self.emit(opcode::invoke_call_text(spec), location);
+        if mode.has_catch() {
+            // Both VM successors leave the same stack; the ordinary TRY planner
+            // consumes this locally materialized status. Blank text takes success.
+            self.emit(opcode::push_integer(1), location);
+            let success = self.code.len();
+            self.emit(opcode::jump(Opcode::Jump, 0), location);
+            spec.catch_target = u32::try_from(self.code.len()).unwrap_or(u32::MAX);
+            self.code[invoke] = opcode::invoke_call_text(spec);
+            self.emit(opcode::push_integer(0), location);
+            self.patch_jump(success, self.code.len());
         }
     }
 }

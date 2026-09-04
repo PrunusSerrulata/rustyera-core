@@ -62,8 +62,11 @@ pub fn builtin_callable_portability(name: &str) -> CallablePortability {
             | "MOUSEB"
             | "GETKEY"
             | "GETKEYTRIGGERED"
+            | "GETPLATFORM"
+            | "ENV_HAS_CAPABILITY"
             | "CLIENTWIDTH"
             | "CLIENTHEIGHT"
+            | "GETLINEY"
             | "GETLINESTR"
             | "GETDISPLAYLINE"
             | "HTML_GETPRINTEDSTR"
@@ -72,6 +75,9 @@ pub fn builtin_callable_portability(name: &str) -> CallablePortability {
             | "HTML_STRINGLINES"
             | "GGETTEXTSIZE"
             | "GGETCOLOR"
+            | "GETSOUNDORBGMINFO"
+            | "ISPLAYINGSOUND"
+            | "ISPLAYINGBGM"
     ) {
         CallablePortability::FrontendObservation
     } else {
@@ -87,6 +93,24 @@ pub struct CallableSignature {
     pub minimum_arguments: usize,
     pub variadic: bool,
     pub allow_omitted: bool,
+}
+
+impl CallableSignature {
+    /// Argument contract after applying the built-in's arity-specific overload.
+    #[must_use]
+    pub fn arguments_for_arity(&self, arity: usize) -> &[ArgumentConstraint] {
+        // The two-argument form replaces a stored document by numeric or string key.
+        // Only the longer inline-XML form writes back into a mutable string argument.
+        if self.name == "MAP_VALUES" && arity == 1 {
+            &[ArgumentConstraint::String]
+        } else if self.name == "MAP_VALUES" && arity == 2 {
+            &[ArgumentConstraint::String, ArgumentConstraint::Integer]
+        } else if self.name == "XML_REPLACE" && arity == 2 {
+            &[ArgumentConstraint::Any, ArgumentConstraint::String]
+        } else {
+            &self.arguments
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -139,6 +163,89 @@ pub fn builtin_instruction_names() -> Vec<String> {
 #[must_use]
 pub fn builtin_function_names() -> Vec<String> {
     builtin_functions().into_keys().collect()
+}
+
+/// Built-in signatures retained for parse-only runtime expression validation.
+#[must_use]
+pub fn builtin_function_signatures(
+    identity: &erabasic_compat::CompatibilityIdentity,
+) -> Vec<CallableSignature> {
+    builtin_functions()
+        .into_values()
+        .filter(|signature| builtin_function_available(&signature.name, identity))
+        .collect()
+}
+
+pub(crate) fn builtin_instruction_available(
+    name: &str,
+    identity: &erabasic_compat::CompatibilityIdentity,
+) -> bool {
+    match name.to_ascii_uppercase().as_str() {
+        "SETANIMETIMER"
+        | "BITMAP_CACHE_ENABLE"
+        | "TEXT_BGC_ON"
+        | "TEXT_BGC_OFF"
+        | "HTML_PRINTC"
+        | "HTML_PRINTLC"
+        | "SETIMAGELAYER"
+        | "SETIMAGELAYERL"
+        | "CLEARIMAGELAYER"
+        | "CLEARIMAGELAYER_ALL" => identity.supports_snake_display_state(),
+        _ => builtin_shared_available(name, identity),
+    }
+}
+
+pub(crate) fn builtin_function_available(
+    name: &str,
+    identity: &erabasic_compat::CompatibilityIdentity,
+) -> bool {
+    match name.to_ascii_uppercase().as_str() {
+        "SETANIMETIMER" | "BITMAP_CACHE_ENABLE" => !identity.is_experimental(),
+        "GETANIMETIMER"
+        | "SPRITECREATEFROMFILE"
+        | "G_POLYGON_DRAW"
+        | "G_POLYGON_FILL"
+        | "G_POLYGON_POINT_ADD"
+        | "G_POLYGON_POINT_CLEAR"
+        | "EXISTSIMAGELAYER"
+        | "GETLINEY" => identity.supports_snake_display_state(),
+        _ => builtin_shared_available(name, identity),
+    }
+}
+
+fn builtin_shared_available(name: &str, identity: &erabasic_compat::CompatibilityIdentity) -> bool {
+    match name.to_ascii_uppercase().as_str() {
+        name if name.starts_with("SQL_") => identity.supports_safe_sql(),
+        "CALLSTR" | "JUMPSTR" | "TRYCALLSTR" | "TRYJUMPSTR" | "TRYCCALLSTR" | "TRYCJUMPSTR" => {
+            identity.supports_call_text()
+        }
+        "STRFORMCHECK" => identity.supports_checked_runtime_forms(),
+        "TINPUTNF"
+        | "TINPUTSNF"
+        | "TONEINPUTNF"
+        | "TONEINPUTSNF"
+        | "SEQUENCEINPUT"
+        | "DISABLE_INPUT_MACRO"
+        | "ENABLE_INPUT_MACRO"
+        | "ENV_HAS_CAPABILITY"
+        | "GETPLATFORM" => identity.supports_snake_input(),
+        "GETCSVNOBYNAME"
+        | "GETCSVNOBYCALLNAME"
+        | "GETCSVNOBYNICKNAME"
+        | "GETCSVNOBYMASTERNAME"
+        | "BITSET"
+        | "BITGET"
+        | "BITTOGGLE"
+        | "BITINDEXOFFIRST"
+        | "MATCHALL"
+        | "MATCHALLEX" => identity.supports_snake_data_apis(),
+        "GETSOUNDORBGMINFO" | "ISPLAYINGSOUND" | "SOUNDCONTROL" | "ISPLAYINGBGM" | "BGMCONTROL" => {
+            identity.supports_snake_compile_convergence()
+        }
+        "MAP_VALUES" | "MAP_MERGE" | "MAP_REMOVEIF" | "MAP_FINDKEY" | "MAP_TOSTRING"
+        | "MAP_FROMSTRING" => identity.supports_map_extensions(),
+        _ => true,
+    }
 }
 
 impl Catalog {
@@ -195,10 +302,15 @@ pub(super) fn instruction(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{
         ArgumentConstraint, ArgumentStyle, Catalog, ExtensionRegistry, InstructionSignature,
-        builtin_function_names, builtin_instruction_names,
+        builtin_function_available, builtin_function_names, builtin_function_signatures,
+        builtin_instruction_available, builtin_instruction_names,
     };
+    use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
+    use erabasic_hir::SemanticType;
 
     #[test]
     fn builtin_inventories_are_sorted_and_extensions_do_not_replace_them() {
@@ -219,5 +331,150 @@ mod tests {
         let catalog = Catalog::build(&extensions);
         let print = catalog.instructions.get("PRINT").expect("PRINT built-in");
         assert_ne!(print.argument_style, ArgumentStyle::None);
+    }
+
+    #[test]
+    fn animation_and_display_builtins_have_profile_specific_source_forms() {
+        let original = CompatibilityIdentity::reference();
+        let snake = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
+        for name in ["SETANIMETIMER", "BITMAP_CACHE_ENABLE"] {
+            assert!(builtin_function_available(name, &original));
+            assert!(!builtin_instruction_available(name, &original));
+            assert!(!builtin_function_available(name, &snake));
+            assert!(builtin_instruction_available(name, &snake));
+        }
+        assert!(!builtin_function_available("GETANIMETIMER", &original));
+        assert!(builtin_function_available("GETANIMETIMER", &snake));
+        for name in ["TEXT_BGC_ON", "TEXT_BGC_OFF", "HTML_PRINTC", "HTML_PRINTLC"] {
+            assert!(!builtin_instruction_available(name, &original));
+            assert!(builtin_instruction_available(name, &snake));
+        }
+        for name in [
+            "SETIMAGELAYER",
+            "SETIMAGELAYERL",
+            "CLEARIMAGELAYER",
+            "CLEARIMAGELAYER_ALL",
+        ] {
+            assert!(!builtin_instruction_available(name, &original));
+            assert!(builtin_instruction_available(name, &snake));
+        }
+        for name in ["EXISTSIMAGELAYER", "GETLINEY"] {
+            assert!(!builtin_function_available(name, &original));
+            assert!(builtin_function_available(name, &snake));
+        }
+        for name in [
+            "CBGCLEAR",
+            "CBGCLEARBUTTON",
+            "CBGREMOVEBMAP",
+            "CBGREMOVERANGE",
+            "CBGSETG",
+            "CBGSETBMAPG",
+            "CBGSETSPRITE",
+            "CBGSETBUTTONSPRITE",
+        ] {
+            assert!(builtin_function_available(name, &original));
+            assert!(builtin_function_available(name, &snake));
+        }
+
+        let catalog = Catalog::build(&ExtensionRegistry::default());
+        let set_image = catalog.instructions.get("SETIMAGELAYER").unwrap();
+        assert_eq!(set_image.minimum_arguments, 2);
+        assert_eq!(set_image.arguments.len(), 9);
+        assert!(set_image.allow_omitted);
+        let set_button = catalog.functions.get("CBGSETBUTTONSPRITE").unwrap();
+        assert_eq!(set_button.minimum_arguments, 6);
+        assert_eq!(set_button.arguments.len(), 7);
+        assert!(!set_button.allow_omitted);
+    }
+
+    #[test]
+    fn safe_sql_catalog_is_snake_only_and_preserves_parameter_physical_arity() {
+        let reference = CompatibilityIdentity::reference();
+        let snake = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
+        let supported = [
+            "SQL_CONNECT",
+            "SQL_DISCONNECT",
+            "SQL_EXECUTE_NONQUERY",
+            "SQL_P_EXECUTE_NONQUERY",
+            "SQL_EXECUTE_SCALAR_LONG",
+            "SQL_EXECUTE_SCALAR_STRING",
+            "SQL_P_EXECUTE_SCALAR_LONG",
+            "SQL_P_EXECUTE_SCALAR_STRING",
+            "SQL_EXECUTE_READER",
+            "SQL_P_EXECUTE_READER",
+            "SQL_READER_READ",
+            "SQL_READER_GET_LONG",
+            "SQL_READER_GET_STRING",
+            "SQL_READER_ISNULL",
+            "SQL_READER_CLOSE",
+            "SQL_IMPORT_MAP_XML",
+        ];
+        for name in supported {
+            assert!(!builtin_function_available(name, &reference));
+            assert!(builtin_function_available(name, &snake));
+        }
+
+        let signatures = builtin_function_signatures(&snake)
+            .into_iter()
+            .map(|signature| (signature.name.clone(), signature))
+            .collect::<BTreeMap<_, _>>();
+        let connect = &signatures["SQL_CONNECT"];
+        assert_eq!(connect.minimum_arguments, 1);
+        assert_eq!(connect.arguments, [ArgumentConstraint::String; 2]);
+        assert!(!connect.variadic);
+        assert!(connect.allow_omitted);
+
+        let parameterized = &signatures["SQL_P_EXECUTE_NONQUERY"];
+        assert_eq!(parameterized.minimum_arguments, 2);
+        assert_eq!(parameterized.arguments, [ArgumentConstraint::String; 3]);
+        assert!(parameterized.variadic);
+        assert!(parameterized.allow_omitted);
+
+        let deferred_float = &signatures["SQL_READER_GET_FLOAT"];
+        assert_eq!(deferred_float.return_type, SemanticType::Error);
+    }
+
+    #[test]
+    fn snake_audio_builtins_have_exact_public_signatures() {
+        let original = CompatibilityIdentity::reference();
+        let snake = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
+        for name in [
+            "GETSOUNDORBGMINFO",
+            "ISPLAYINGSOUND",
+            "SOUNDCONTROL",
+            "ISPLAYINGBGM",
+            "BGMCONTROL",
+        ] {
+            assert!(!builtin_function_available(name, &original));
+            assert!(builtin_function_available(name, &snake));
+        }
+
+        let catalog = Catalog::build(&ExtensionRegistry::default());
+        let play_sound = &catalog.instructions["PLAYSOUND"];
+        assert_eq!(
+            play_sound.arguments,
+            [ArgumentConstraint::String, ArgumentConstraint::Integer]
+        );
+        assert_eq!(play_sound.minimum_arguments, 1);
+        assert!(!play_sound.variadic);
+        assert!(!play_sound.allow_omitted);
+
+        let signatures = builtin_function_signatures(&snake)
+            .into_iter()
+            .map(|signature| (signature.name.clone(), signature))
+            .collect::<BTreeMap<_, _>>();
+        for (name, minimum, maximum) in [
+            ("GETSOUNDORBGMINFO", 1, 2),
+            ("ISPLAYINGSOUND", 1, 1),
+            ("SOUNDCONTROL", 2, 4),
+            ("ISPLAYINGBGM", 0, 0),
+            ("BGMCONTROL", 1, 3),
+        ] {
+            let signature = &signatures[name];
+            assert_eq!(signature.minimum_arguments, minimum, "{name}");
+            assert_eq!(signature.arguments.len(), maximum, "{name}");
+            assert!(!signature.variadic, "{name}");
+            assert!(!signature.allow_omitted, "{name}");
+        }
     }
 }

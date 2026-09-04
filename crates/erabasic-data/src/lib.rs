@@ -13,7 +13,8 @@ mod static_data;
 
 pub use catalog::builtin_schema;
 pub use deferred::{
-    DeferredIndexCatalog, DeferredIndexFile, ResolvedUserIndex, UserIndexRegistration,
+    DeferredIndexAliases, DeferredIndexCatalog, DeferredIndexFile, ResolvedUserIndex,
+    UserIndexRegistration,
 };
 pub use initialization::{
     CharacterSelection, NewGameSeed, RuntimeDefaults, SaveCompatibility, SaveLoadContext,
@@ -23,9 +24,9 @@ pub use schema::{
     VariableSchema,
 };
 pub use static_data::{
-    CharacterTemplate, ExtensionData, GameBase, LegacyEncoding, NameAlias, NameTable,
-    NameTableKind, ProjectData, ProjectStaticData, ReplaceSettings,
+    CharacterNameLookup, CharacterTemplate, ExtensionData, GameBase, LegacyEncoding, NameAlias,
+    NameTable, NameTableKind, ProjectData, ProjectStaticData, ReplaceSettings,
 };
 
 /// Version of the serialized `ProjectData` contract.
-pub const PROJECT_DATA_FORMAT_VERSION: u32 = 2;
+pub const PROJECT_DATA_FORMAT_VERSION: u32 = 4;

@@ -18,47 +18,53 @@ use era_protocol::{
     negotiate_version,
 };
 use era_runtime_protocol::{
-    AdvanceTime, AudioEffect, AudioEffectAction, CancelExternalRequest, CanvasPixelRequest,
-    CanvasPixelResponse, CanvasPoint, CellAlignment, ClientCapabilities, ClientHello,
-    CommandErrorCode, CommandRejected, ConfigurationApplication, ConfigurationClientProfile,
-    ConfigurationUpdateCommitted, ConfigurationUpdateOutcome, ConfigurationUpdatePrepared,
-    DECODE_CANVAS_IMAGE_OPERATION, DECODE_CANVAS_IMAGE_OPERATION_VERSION, DecodeCanvasImageRequest,
-    DecodeCanvasImageResponse, DiagnosticNotification, ENCODE_CANVAS_PNG_OPERATION,
-    ENCODE_CANVAS_PNG_OPERATION_VERSION, EffectAcknowledgement, EffectBatch, EffectEvent,
-    EffectKind, EffectOutcomeStatus, EncodeCanvasPngRequest, EncodeCanvasPngResponse, ExitReason,
-    ExitRequested, ExtensionDeclaration, ExtensionRegistrySubmit, ExternalRequestKind, FaultCode,
-    FileCategory, FilePayload, FinalizeConfigurationUpdate, FrontendInput, FrontendIoErrorKind,
+    AUDIO_OBSERVATION_OPERATION, AUDIO_OBSERVATION_OPERATION_VERSION, AdvanceTime, AudioChannelV1,
+    AudioEffect, AudioObservationRequestV1, AudioObservationResponseV1, AudioPlaybackStateV1,
+    CancelExternalRequest, CanvasPixelRequest, CanvasPixelResponse, CanvasPoint, CellAlignment,
+    ClientCapabilities, ClientHello, CommandErrorCode, CommandRejected, ConfigurationApplication,
+    ConfigurationClientProfile, ConfigurationUpdateCommitted, ConfigurationUpdateOutcome,
+    ConfigurationUpdatePrepared, DECODE_CANVAS_IMAGE_OPERATION,
+    DECODE_CANVAS_IMAGE_OPERATION_VERSION, DEVICE_PUMP_OPERATION, DEVICE_PUMP_OPERATION_VERSION,
+    DecodeCanvasImageRequest, DecodeCanvasImageResponse, DevicePumpRequest, DevicePumpResponse,
+    DiagnosticNotification, ENCODE_CANVAS_PNG_OPERATION, ENCODE_CANVAS_PNG_OPERATION_VERSION,
+    EffectAcknowledgement, EffectBatch, EffectEvent, EffectKind, EffectOutcomeStatus,
+    EncodeCanvasPngRequest, EncodeCanvasPngResponse, ExitReason, ExitRequested,
+    ExtensionDeclaration, ExtensionRegistrySubmit, ExternalRequestKind, FaultCode, FileCategory,
+    FilePayload, FinalizeConfigurationUpdate, FrontendInput, FrontendIoErrorKind,
     FullProjectManifest, GET_DISPLAY_LINE_OPERATION, GET_DISPLAY_LINE_OPERATION_VERSION,
-    GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GGET_TEXT_SIZE_OPERATION,
+    GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION, GET_LINE_GEOMETRY_OPERATION,
+    GET_LINE_GEOMETRY_OPERATION_VERSION, GGET_TEXT_SIZE_OPERATION,
     GGET_TEXT_SIZE_OPERATION_VERSION, GetKeyStateRequest, GetKeyStateResponse,
-    HTML_GET_PRINTED_STR_OPERATION, HTML_GET_PRINTED_STR_OPERATION_VERSION,
-    HTML_STRING_LEN_OPERATION, HTML_STRING_LEN_OPERATION_VERSION, HTML_STRING_LINES_OPERATION,
+    GetLineGeometryV1Request, GetLineGeometryV1Response, HTML_GET_PRINTED_STR_OPERATION,
+    HTML_GET_PRINTED_STR_OPERATION_VERSION, HTML_STRING_LEN_OPERATION,
+    HTML_STRING_LEN_OPERATION_VERSION, HTML_STRING_LINES_OPERATION,
     HTML_STRING_LINES_OPERATION_VERSION, HTML_SUBSTRING_OPERATION,
-    HTML_SUBSTRING_OPERATION_VERSION, HtmlMeasureRequest, HtmlSubstringResponse,
-    IMAGE_METADATA_OPERATION, IMAGE_METADATA_OPERATION_VERSION, IMAGE_PIXEL_OPERATION,
-    IMAGE_PIXEL_OPERATION_VERSION, ImageMetadataRequest, ImageMetadataResponse, ImagePixelRequest,
-    ImagePixelResponse, InputIntent, InputUndoRequest, InputUndoState, InputWait, InteractionToken,
-    KeyMacroCommand, KeyMacroProfileSubmit, LOCAL_DATE_TIME_OPERATION,
-    LOCAL_DATE_TIME_OPERATION_VERSION, LineAlignment, LocalDateTimeRequest, LocalDateTimeResponse,
-    OPEN_URL_OPERATION, OPEN_URL_OPERATION_VERSION, OpenUrlRequest, OpenUrlResponse,
-    POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION, PointerStateRequest,
-    PointerStateResponse, PrepareConfigurationUpdate, PresentationLength, ProjectAnalysisRequest,
-    ProjectLoadReport, ProjectLoadRequest, ProjectManifest, ProjectionIntegerResponse,
+    HTML_SUBSTRING_OPERATION_VERSION, IMAGE_METADATA_OPERATION, IMAGE_METADATA_OPERATION_VERSION,
+    IMAGE_PIXEL_OPERATION, IMAGE_PIXEL_OPERATION_VERSION, INPUT_DEVICE_LATCH_CAPABILITY,
+    INPUT_DEVICE_PUMP_CAPABILITY, INPUT_TIMED_VIEWPORT_CAPABILITY, ImageMetadataRequest,
+    ImageMetadataResponse, ImagePixelRequest, ImagePixelResponse, InputIntent, InputUndoRequest,
+    InputUndoState, InputWait, InteractionToken, KeyMacroCommand, KeyMacroProfileSubmit,
+    LOCAL_DATE_TIME_OPERATION, LOCAL_DATE_TIME_OPERATION_VERSION, LineAlignment,
+    LocalDateTimeRequest, LocalDateTimeResponse, OPEN_URL_OPERATION, OPEN_URL_OPERATION_VERSION,
+    OpenUrlRequest, OpenUrlResponse, POINTER_STATE_OPERATION, POINTER_STATE_OPERATION_VERSION,
+    PointerStateRequest, PointerStateResponse, PrepareConfigurationUpdate, PresentationLength,
+    ProjectAnalysisRequest, ProjectLoadReport, ProjectLoadRequest, ProjectManifest,
     ProjectionObservation, ProjectionQueryContext, ProjectionState, ProtocolDiagnostic,
     RANDOM_SEED_OPERATION, RANDOM_SEED_OPERATION_VERSION, RUNTIME_PROTOCOL_VERSION,
     RandomSeedRequest, RandomSeedResponse, ReloadProject, RuntimeFault, RuntimeFeature,
     RuntimeLimits, RuntimeLog, RuntimeLogLevel, RuntimeMessage, RuntimePhase,
     RuntimeResynchronized, RuntimeStateChanged, SAMPLE_CANVAS_PIXEL_OPERATION,
     SAMPLE_CANVAS_PIXEL_OPERATION_VERSION, SERIALIZE_PHYSICAL_HISTORY_OPERATION,
-    SERIALIZE_PHYSICAL_HISTORY_OPERATION_VERSION, SerializePhysicalHistoryRequest,
-    SerializePhysicalHistoryResponse, ServerHello, ServiceCapability, ServiceKind, ServiceRequest,
-    ServiceResponse, ServiceResult, ShutdownReady, SnapshotExportPurpose, SnapshotIneligibleReason,
-    StartMode, StartRequest, StateExportCancel, StateExportChunk, StateExportChunkRequest,
-    StateExportKind, StateExportReady, StateExportRequest, StateExportResult, StateImportAccepted,
-    StateImportBegin, StateImportChunk, StateImportCommit, StateImportReady, StateTransferCancel,
-    StateTransferDescriptor, StorageCapabilities, StorageEntry, StorageNamespace, StorageOperation,
-    StoragePrecondition, StorageRequest, StorageResponse, StorageResult, SystemTextArgument,
-    SystemTextKey, TextBoxLayout, TextExtentRequest, TextExtentResponse, UPDATE_CHECK_OPERATION,
+    SERIALIZE_PHYSICAL_HISTORY_OPERATION_VERSION, SQL_OPERATION, SQL_OPERATION_VERSION,
+    SerializePhysicalHistoryRequest, SerializePhysicalHistoryResponse, ServerHello,
+    ServiceCapability, ServiceKind, ServiceRequest, ServiceResponse, ServiceResult, ShutdownReady,
+    SnapshotExportPurpose, SnapshotIneligibleReason, StartMode, StartRequest, StateExportCancel,
+    StateExportChunk, StateExportChunkRequest, StateExportKind, StateExportReady,
+    StateExportRequest, StateExportResult, StateImportAccepted, StateImportBegin, StateImportChunk,
+    StateImportCommit, StateImportReady, StateTransferCancel, StateTransferDescriptor,
+    StorageCapabilities, StorageEntry, StorageNamespace, StorageOperation, StoragePrecondition,
+    StorageRequest, StorageResponse, StorageResult, SystemTextArgument, SystemTextKey,
+    TextBoxLayout, TextExtentRequest, TextExtentResponse, UPDATE_CHECK_OPERATION,
     UPDATE_CHECK_OPERATION_VERSION, UpdateCheckRequest, UpdateCheckResponse, VersionRejected,
     WaitChange, WaitKind, WaitStability,
 };
@@ -79,6 +85,10 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use era_runtime_protocol::{CONFIG_BROWSER, CONFIG_TUI};
 
+use crate::audio::{
+    AudioControl, AudioObservationContinuation, AudioObservationPurpose, AudioRuntimeState,
+    control_effect, play_effect, stop_effect, volume_effect,
+};
 use crate::controller::{SystemController, SystemFlow, SystemStep};
 use crate::host::{
     ClockOperation, ExternalCompletion, PendingInput, PointerCoordinate, PostInputAction,
@@ -87,10 +97,15 @@ use crate::host::{
 use crate::input_replay::{
     InputReplayHistory, NewGameTrigger, ReplayOrigin, ReplayOriginDetails, ReplayProject,
 };
-use crate::input_set::{InputSegment, preprocess_input};
+use crate::input_set::preprocess_input;
+use crate::input_source::{
+    InputController, InputRoot, InputSource, PendingSequence, QueuedInput, RecordedInput,
+    SequenceSite,
+};
 use crate::key_macro::KeyMacros;
 use crate::operation::{
     CandidateSaveContinuation, PendingOperations, PendingService, PendingStorage,
+    SqlServiceContinuation,
 };
 use crate::presentation::{PresentationModel, PresentationUpdate, display_value};
 use crate::project::{
@@ -107,6 +122,7 @@ use crate::save_adapter::{
     DecodedEraSave, decode_era_save, decode_scoped_save, encode_era_save, encode_scoped_save,
     merge_opaque_extensions, merge_structured_extensions,
 };
+use crate::sql::SqlRuntimeState;
 
 fn configured_character_width_mode(
     project: Option<&NormalizedProjectSnapshot>,
@@ -122,6 +138,7 @@ fn configured_character_width_mode(
 mod core;
 mod debug_session;
 mod host_dispatch;
+pub(crate) mod html_query;
 mod interaction;
 mod storage;
 mod support;
@@ -199,17 +216,18 @@ struct ProjectProgressGate {
 }
 
 impl ProjectProgressGate {
-    const INTERVAL: Duration = Duration::from_millis(34);
+    // Limit intermediate updates to ten per second while keeping stage boundaries immediate.
+    const INTERVAL: Duration = Duration::from_millis(100);
 
     fn accepts(&mut self, progress: ProjectProgress, now: Duration) -> bool {
         if self.last == Some(progress) {
             return false;
         }
         let boundary = progress.completed == 0 || progress.completed >= progress.total;
-        let stage_changed = self
-            .last
-            .is_none_or(|previous| previous.stage != progress.stage);
-        if !stage_changed
+        let segment_changed = self.last.is_none_or(|previous| {
+            previous.stage != progress.stage || previous.total != progress.total
+        });
+        if !segment_changed
             && self
                 .last
                 .is_some_and(|previous| progress.completed < previous.completed)
@@ -219,7 +237,7 @@ impl ProjectProgressGate {
         let interval_elapsed = self
             .last_emitted_at
             .is_none_or(|previous| now.saturating_sub(previous) >= Self::INTERVAL);
-        let accepts = stage_changed || boundary || interval_elapsed;
+        let accepts = segment_changed || boundary || interval_elapsed;
         if accepts {
             self.last = Some(progress);
             self.last_emitted_at = Some(now);
@@ -345,19 +363,22 @@ mod progress_reporter_tests {
         };
 
         assert!(gate.accepts(compiling(0, 100), Duration::ZERO));
-        assert!(!gate.accepts(compiling(1, 100), Duration::from_millis(33)));
-        assert!(gate.accepts(compiling(2, 100), Duration::from_millis(34)));
-        assert!(!gate.accepts(compiling(1, 100), Duration::from_secs(1)));
-        assert!(gate.accepts(compiling(100, 100), Duration::from_millis(35)));
-        assert!(!gate.accepts(compiling(100, 100), Duration::from_secs(2)));
+        assert!(!gate.accepts(compiling(1, 100), Duration::from_millis(99)));
+        assert!(gate.accepts(compiling(2, 100), Duration::from_millis(100)));
+        assert!(!gate.accepts(compiling(1, 100), Duration::from_millis(101)));
+        assert!(gate.accepts(compiling(100, 100), Duration::from_millis(101)));
+        assert!(!gate.accepts(compiling(100, 100), Duration::from_millis(102)));
+        assert!(gate.accepts(compiling(0, 300), Duration::from_millis(102)));
+        assert!(!gate.accepts(compiling(1, 300), Duration::from_millis(201)));
+        assert!(gate.accepts(compiling(2, 300), Duration::from_millis(202)));
 
         let zero_total = ProjectProgress {
             stage: ProjectProgressStage::Preparing,
             completed: 0,
             total: 0,
         };
-        assert!(gate.accepts(zero_total, Duration::from_millis(35)));
-        assert!(!gate.accepts(zero_total, Duration::from_secs(3)));
+        assert!(gate.accepts(zero_total, Duration::from_millis(203)));
+        assert!(!gate.accepts(zero_total, Duration::from_millis(303)));
     }
 
     #[test]
@@ -520,10 +541,18 @@ pub struct RuntimeDriveReport {
 #[derive(Debug)]
 pub enum RuntimeError {
     Protocol(ProtocolError),
-    InvalidSequence { expected: u64, actual: u64 },
+    InvalidSequence {
+        expected: u64,
+        actual: u64,
+    },
     SessionMismatch,
     ResourceLimit(&'static str),
     Busy(&'static str),
+    /// A trusted script domain/read failure; only the Host dispatch boundary catches it.
+    Script {
+        kind: erabasic_vm::ScriptFaultKind,
+        message: String,
+    },
     Internal(String),
 }
 
@@ -536,7 +565,7 @@ impl fmt::Display for RuntimeError {
             }
             Self::SessionMismatch => formatter.write_str("runtime session identity differs"),
             Self::ResourceLimit(message) | Self::Busy(message) => formatter.write_str(message),
-            Self::Internal(message) => formatter.write_str(message),
+            Self::Script { message, .. } | Self::Internal(message) => formatter.write_str(message),
         }
     }
 }
@@ -570,15 +599,45 @@ enum SystemMenuState {
 struct InboundStateTransfer {
     descriptor: StateTransferDescriptor,
     bytes: Vec<u8>,
+    manifest_decoder: Option<transfer::state::manifest_import::ManifestImportDecoder>,
     hasher: Option<blake3::Hasher>,
     committed: bool,
+}
+
+impl InboundStateTransfer {
+    fn received_bytes(&self) -> u64 {
+        self.manifest_decoder
+            .as_ref()
+            .map_or(self.bytes.len() as u64, |decoder| decoder.received)
+    }
 }
 
 #[derive(Debug)]
 struct OutboundStateTransfer {
     descriptor: StateTransferDescriptor,
-    bytes: Arc<Vec<u8>>,
+    bytes: OutboundBytes,
     next_offset: u64,
+}
+
+#[derive(Debug)]
+enum OutboundBytes {
+    Contiguous(Arc<Vec<u8>>),
+    Container(Arc<crate::compiled_cache::ContainerBytes>),
+}
+
+impl OutboundBytes {
+    fn len(&self) -> usize {
+        match self {
+            Self::Contiguous(bytes) => bytes.len(),
+            Self::Container(bytes) => bytes.len(),
+        }
+    }
+    fn copy_range(&self, range: std::ops::Range<usize>) -> Vec<u8> {
+        match self {
+            Self::Contiguous(bytes) => bytes[range].to_vec(),
+            Self::Container(bytes) => bytes.copy_range(range),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -628,6 +687,26 @@ struct ActiveDebugGrant {
     scopes: BTreeSet<DebugScope>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProjectDiagnosticScope {
+    artifact: [u8; 32],
+    project_load_id: u64,
+    runtime_epoch: u64,
+    generation: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct ProjectDiagnosticSite {
+    code: String,
+    source: Option<(String, u64, u64)>,
+}
+
+#[derive(Clone, Debug)]
+struct ProjectDiagnosticPublication {
+    scope: ProjectDiagnosticScope,
+    sites: BTreeSet<ProjectDiagnosticSite>,
+}
+
 /// Single-owner runtime actor. Methods only enqueue, drive, and dequeue messages;
 /// no frontend code can run inside a VM instruction dispatch.
 #[allow(clippy::struct_excessive_bools)]
@@ -656,7 +735,7 @@ pub struct RuntimeSession {
     negotiated_features: BTreeSet<RuntimeFeature>,
     configuration_profile: ConfigurationClientProfile,
     client_preferences: Option<ClientPreferenceLayers>,
-    inbound: VecDeque<(u64, InboundMessage)>,
+    inbound: VecDeque<(u64, Option<SessionEpoch>, InboundMessage)>,
     outbound: VecDeque<Vec<u8>>,
     outbound_journal: BTreeMap<u64, Vec<u8>>,
     outbound_journal_bytes: u64,
@@ -673,12 +752,20 @@ pub struct RuntimeSession {
     vm: Option<RuntimeVm>,
     retained_title_program: Option<RetainedProgramIndex>,
     presentation: PresentationModel,
+    audio: AudioRuntimeState,
     pending_presentation_update: bool,
     operations: PendingOperations,
+    sql: SqlRuntimeState,
+    sql_cleanup_queue: Vec<PendingSqlCleanup>,
     key_toggle_state: [u8; 256],
+    device_input: crate::device_input::DeviceInput,
+    environment: crate::environment::Environment,
+    input_notice_sites: BTreeSet<(String, u64, erabasic_bytecode::SymbolKey, u32)>,
     hotkey_state: Vec<i64>,
     key_macros: KeyMacros,
-    queued_input: VecDeque<InputSegment>,
+    queued_input: VecDeque<QueuedInput>,
+    input_controller: InputController,
+    active_input_source: Option<InputSource>,
     deferred_input_completion: Option<InputSubmission>,
     text_box: String,
     text_box_layout: TextBoxLayout,
@@ -714,6 +801,8 @@ pub struct RuntimeSession {
     undo_token: Option<InteractionToken>,
     project_snapshot: Option<NormalizedProjectSnapshot>,
     pending_configuration_update: Option<PendingConfigurationUpdate>,
+    pending_sql_snapshot_restore: Option<PendingSqlSnapshotRestore>,
+    ready_sql_snapshot_restore: Option<ReadySqlSnapshotRestore>,
     selected_locale: String,
     available_fonts: BTreeSet<String>,
     service_capabilities: BTreeMap<(ServiceKind, String), ProtocolVersion>,
@@ -737,11 +826,21 @@ pub struct RuntimeSession {
     candidate_clock: Option<LocalDateTimeResponse>,
     compiled_project_cache: Option<Arc<Vec<u8>>>,
     compiled_cache_diagnostics: Vec<ProtocolDiagnostic>,
+    bitmap_cache_notice_emitted: bool,
+    // Publication state is session-owned, never part of game snapshots or project caches.
+    project_load_id: u64,
+    project_diagnostic_publication: Option<ProjectDiagnosticPublication>,
     compiled_cache_task: Option<ProjectContainerTask>,
     compiled_cache_failure: Option<String>,
-    full_project_file: Option<Arc<Vec<u8>>>,
+    full_project_file: Option<Arc<crate::compiled_cache::ContainerBytes>>,
     full_project_task: Option<ProjectContainerTask>,
     full_project_failure: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PendingSqlCleanup {
+    provider: era_runtime_protocol::SqlProviderHandleV1,
+    connection: era_runtime_protocol::SqlConnectionHandleV1,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -749,12 +848,14 @@ pub(crate) struct UndoCheckpoint {
     slot: u32,
     save_bytes: Vec<u8>,
     random_state: Vec<i64>,
-    inputs: Vec<String>,
+    inputs: Vec<RecordedInput>,
+    input_history_bytes: u64,
+    input_controller: InputController,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct UndoReplay {
-    remaining: VecDeque<String>,
+    remaining: VecDeque<RecordedInput>,
     queued_repeats: u32,
 }
 
@@ -785,9 +886,10 @@ struct PendingColdProjectLoad {
     compiled_project_cache: Option<Arc<Vec<u8>>>,
 }
 
-struct PreparedOrdinaryLoad {
-    prepared: PreparedRuntimeState,
-    opaque_extensions: Vec<era_runtime_save::OpaqueSaveExtension>,
+#[derive(Clone, Copy)]
+enum SaveLoadScope {
+    Ordinary,
+    Global,
 }
 
 struct PendingProjectReload {
@@ -805,6 +907,18 @@ struct PendingConfigurationUpdate {
     values: era_config::ConfigStore,
     document: era_config::ReraConfigDocument,
     changed_codes: BTreeSet<String>,
+}
+
+struct PendingSqlSnapshotRestore {
+    message_id: u64,
+    bytes: Vec<u8>,
+    candidate_sql: SqlRuntimeState,
+    remaining: VecDeque<crate::runtime_snapshot::SqlConnectionSnapshot>,
+}
+
+struct ReadySqlSnapshotRestore {
+    digest: [u8; 32],
+    candidate_sql: SqlRuntimeState,
 }
 
 #[allow(clippy::struct_excessive_bools)]

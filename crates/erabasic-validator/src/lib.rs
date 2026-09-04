@@ -6,7 +6,8 @@ mod hir;
 mod limits;
 
 pub use bytecode::{
-    ValidatedArtifact, ValidationContext, validate_bytecode, validate_compiler_output,
+    ValidatedArtifact, ValidatedOperandStacks, ValidatedStackState, ValidatedStackToken,
+    ValidationContext, validate_bytecode, validate_compiler_output,
 };
 pub use diagnostic::{ValidationCode, ValidationDiagnostic, ValidationReport};
 pub use hir::validate_hir;

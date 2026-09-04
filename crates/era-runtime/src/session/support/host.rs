@@ -14,6 +14,35 @@ pub(in super::super) fn commit_completion(
         .map_err(|error| RuntimeError::Internal(error.to_string()))
 }
 
+// Only trusted runtime code at a known script-origin failure may call this helper.
+// Frontend error strings, invalid HostReady writes and RuntimeError::Internal are not sources.
+pub(in super::super) fn complete_script_fault(
+    vm: &mut RuntimeVm,
+    request: &VmHostRequest,
+    kind: erabasic_vm::ScriptFaultKind,
+    message: impl Into<String>,
+) -> Result<(), RuntimeError> {
+    complete_script_fault_request(vm, request.id, kind, message)
+}
+
+// The request id must come from a runtime-owned, identity-validated continuation.
+pub(in super::super) fn complete_script_fault_request(
+    vm: &mut RuntimeVm,
+    request: erabasic_vm::HostRequestId,
+    kind: erabasic_vm::ScriptFaultKind,
+    message: impl Into<String>,
+) -> Result<(), RuntimeError> {
+    commit_completion(
+        vm,
+        request,
+        VmHostCompletion::Error(erabasic_vm::ExecutionFailure::script(
+            kind,
+            erabasic_vm::VmFaultCode::Host,
+            message,
+        )),
+    )
+}
+
 pub(in super::super) fn commit_integer_result(
     vm: &mut RuntimeVm,
     request: erabasic_vm::HostRequestId,
@@ -54,6 +83,7 @@ pub(in super::super) fn commit_host_result_write(
 
 pub(in super::super) fn global_place(vm: &RuntimeVm, name: &str) -> Option<PlaceDescriptor> {
     vm.vm().global_by_name(name).map(|global| PlaceDescriptor {
+        backing: None,
         variable: global.key,
         indices: vec![0; global.dimensions.len()],
         character: None,
@@ -179,6 +209,10 @@ pub(in super::super) fn is_input_command(name: &str) -> bool {
             | "TINPUTS"
             | "TONEINPUT"
             | "TONEINPUTS"
+            | "TINPUTNF"
+            | "TINPUTSNF"
+            | "TONEINPUTNF"
+            | "TONEINPUTSNF"
             | "INPUTANY"
             | "BINPUT"
             | "BINPUTS"
@@ -200,6 +234,8 @@ pub(in super::super) fn is_runtime_print_command(name: &str) -> bool {
                 | "DRAWLINE"
                 | "CLEARLINE"
                 | "HTML_PRINT"
+                | "HTML_PRINTC"
+                | "HTML_PRINTLC"
                 | "HTML_PRINT_ISLAND"
                 | "HTML_PRINT_ISLAND_CLEAR"
                 | "PRINT_IMG"

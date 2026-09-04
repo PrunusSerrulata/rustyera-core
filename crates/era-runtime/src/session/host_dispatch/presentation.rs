@@ -11,6 +11,27 @@ impl RuntimeSession {
         name: &String,
         status: &mut HostDispatchStatus,
     ) -> Result<(), RuntimeError> {
+        if matches!(
+            name.as_str(),
+            "TINPUTNF" | "TINPUTSNF" | "TONEINPUTNF" | "TONEINPUTSNF"
+        ) && !vm
+            .vm()
+            .artifact()
+            .manifest
+            .compatibility
+            .supports_snake_input()
+        {
+            *status = HostDispatchStatus::Handled;
+            return commit_completion(
+                vm,
+                request.id,
+                VmHostCompletion::Error(erabasic_vm::ExecutionFailure::classified(
+                    erabasic_vm::FaultCategory::Permission,
+                    erabasic_vm::VmFaultCode::Host,
+                    "NF input is unavailable for this compatibility policy",
+                )),
+            );
+        }
         if let Some(mut pending) = input_wait(
             request,
             self.allocate_wait(),
@@ -45,7 +66,14 @@ impl RuntimeSession {
             }
             let timed_value_input = matches!(
                 name.as_str(),
-                "TINPUT" | "TONEINPUT" | "TINPUTS" | "TONEINPUTS"
+                "TINPUT"
+                    | "TONEINPUT"
+                    | "TINPUTS"
+                    | "TONEINPUTS"
+                    | "TINPUTNF"
+                    | "TONEINPUTNF"
+                    | "TINPUTSNF"
+                    | "TONEINPUTSNF"
             );
             let untimed_value_input = matches!(
                 name.as_str(),
@@ -62,12 +90,12 @@ impl RuntimeSession {
             if self.message_skip
                 && (timed_value_input || untimed_value_input)
                 && matches!(
-                    request.arguments.get(can_skip_index),
+                    request.argument(can_skip_index),
                     Some(VmValue::Integer(value)) if *value != i64::MIN
                 )
             {
                 let mouse = matches!(
-                    request.arguments.get(mouse_index),
+                    request.argument(mouse_index),
                     Some(VmValue::Integer(value)) if *value != 0
                 );
                 let target = pending.result_name.as_deref().and_then(|result| {
@@ -110,7 +138,7 @@ impl RuntimeSession {
         }
         if name == "GETLINESTR" {
             *status = HostDispatchStatus::Handled;
-            let Some(VmValue::String(pattern)) = request.arguments.first() else {
+            let Some(VmValue::String(pattern)) = request.argument(0) else {
                 return self.fault(
                     FaultCode::VmFault,
                     "GETLINESTR expects a string pattern",
@@ -124,7 +152,12 @@ impl RuntimeSession {
             ) {
                 Ok(value) => value,
                 Err(message) => {
-                    return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Argument,
+                        message,
+                    );
                 }
             };
             return commit_completion(
@@ -152,8 +185,7 @@ impl RuntimeSession {
             };
             let result = VmValue::Integer(i64::from(value));
             let writes = request
-                .arguments
-                .first()
+                .argument(0)
                 .and_then(vm_place)
                 .map(|target| {
                     vec![HostWrite {
@@ -193,54 +225,18 @@ impl RuntimeSession {
         }
         if matches!(
             name.as_str(),
-            "HTML_STRINGLEN" | "HTML_SUBSTRING" | "HTML_STRINGLINES"
+            "HTML_STRINGLEN"
+                | "HTML_SUBSTRING"
+                | "HTML_STRINGLINES"
+                | "HTML__MEASURE_LENGTH"
+                | "HTML__LENGTH_UNIT"
+                | "HTML__LINES_BEGIN"
+                | "HTML__LINES_MORE"
+                | "HTML__LINES_STEP"
+                | "HTML__LINES_END"
         ) {
             *status = HostDispatchStatus::Handled;
-            let context = self.projection_query_context();
-            let markup = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
-            let argument = request
-                .arguments
-                .get(1)
-                .and_then(|value| match value {
-                    VmValue::Integer(value) => Some(*value),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            let (operation, version) = match name.as_str() {
-                "HTML_STRINGLEN" => (HTML_STRING_LEN_OPERATION, HTML_STRING_LEN_OPERATION_VERSION),
-                "HTML_SUBSTRING" => (HTML_SUBSTRING_OPERATION, HTML_SUBSTRING_OPERATION_VERSION),
-                _ => (
-                    HTML_STRING_LINES_OPERATION,
-                    HTML_STRING_LINES_OPERATION_VERSION,
-                ),
-            };
-            let completion = if name == "HTML_SUBSTRING" {
-                ExternalCompletion::HtmlSubstring {
-                    request: request.id,
-                    context,
-                }
-            } else {
-                ExternalCompletion::ProjectionInteger {
-                    request: request.id,
-                    context,
-                }
-            };
-            return self.issue_host_service(
-                vm,
-                request,
-                completion,
-                ServiceKind::PresentationQuery,
-                operation,
-                version,
-                &HtmlMeasureRequest {
-                    context,
-                    markup,
-                    argument,
-                },
-            );
+            return self.dispatch_html_query(vm, request, name);
         }
         if let Some(prepared) = PreparedLineEdit::prepare(name, &request.arguments) {
             *status = HostDispatchStatus::Handled;
@@ -248,21 +244,124 @@ impl RuntimeSession {
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
+        if matches!(name.as_str(), "HTML_PRINTC" | "HTML_PRINTLC") {
+            *status = HostDispatchStatus::Handled;
+            if !vm
+                .vm()
+                .artifact()
+                .manifest
+                .compatibility
+                .supports_snake_display_state()
+            {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Operation,
+                    format!("{name} is unavailable for this compatibility profile"),
+                );
+            }
+            let mut prepared = match PreparedHtmlColumnPrint::prepare(name, &request.arguments) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    emit_html_profile_error(
+                        self,
+                        name,
+                        &error,
+                        &request.origin,
+                        &vm.vm().artifact().manifest.compatibility,
+                    )?;
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Parse,
+                        format!(
+                            "{name} {:?} at UTF-8 bytes {}..{}",
+                            error.kind, error.start, error.end
+                        ),
+                    );
+                }
+            };
+            resolve_document_color_matrices(vm, request.fiber, &mut prepared.document);
+            emit_html_warnings(self, name, &prepared.warnings, &request.origin)?;
+            {
+                let mut bindings = HtmlInteractionBindings {
+                    epoch: self.epoch.0,
+                    next_interaction_id: &mut self.next_interaction_id,
+                    button_generation: self.button_generation,
+                    command_intents: &mut self.command_intents,
+                };
+                bind_html_document(&mut bindings, &mut prepared.document);
+            }
+            let changed = prepared.apply(&mut self.presentation);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return if changed {
+                self.emit_presentation()
+            } else {
+                Ok(())
+            };
+        }
         if name == "HTML_PRINT" {
             *status = HostDispatchStatus::Handled;
             let mut prepared = match PreparedHtmlPrint::prepare(&request.arguments) {
                 Ok(prepared) => prepared,
                 Err(error) => {
-                    return self.fault(
-                        FaultCode::VmFault,
-                        &format!(
+                    emit_html_profile_error(
+                        self,
+                        "HTML_PRINT",
+                        &error,
+                        &request.origin,
+                        &vm.vm().artifact().manifest.compatibility,
+                    )?;
+                    if error.origin() != erabasic_html::HtmlQueryErrorOrigin::ScriptInput {
+                        return self.fault(
+                            FaultCode::VmFault,
+                            &format!(
+                                "HTML_PRINT {:?} at UTF-8 bytes {}..{}",
+                                error.kind, error.start, error.end
+                            ),
+                            Some(request.origin.clone()),
+                        );
+                    }
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Parse,
+                        format!(
                             "HTML_PRINT {:?} at UTF-8 bytes {}..{}",
                             error.kind, error.start, error.end
                         ),
-                        Some(request.origin.clone()),
                     );
                 }
             };
+            if !vm
+                .vm()
+                .artifact()
+                .manifest
+                .compatibility
+                .supports_snake_display_state()
+                && let Some(range) = erabasic_html::snake_extension_range(&prepared.document)
+            {
+                let (start, end) = (range.start, range.end);
+                let error = erabasic_html::HtmlError::new(
+                    erabasic_html::HtmlErrorKind::InvalidAttribute,
+                    start,
+                    end,
+                );
+                emit_html_profile_error(
+                    self,
+                    "HTML_PRINT",
+                    &error,
+                    &request.origin,
+                    &vm.vm().artifact().manifest.compatibility,
+                )?;
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Parse,
+                    format!("HTML_PRINT profile attribute at UTF-8 bytes {start}..{end}"),
+                );
+            }
+            resolve_document_color_matrices(vm, request.fiber, &mut prepared.document);
             emit_html_warnings(self, "HTML_PRINT", &prepared.warnings, &request.origin)?;
             {
                 let mut bindings = HtmlInteractionBindings {
@@ -279,24 +378,68 @@ impl RuntimeSession {
         }
         if name == "HTML_PRINT_ISLAND" {
             *status = HostDispatchStatus::Handled;
-            let markup = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
+            let markup = request.argument(0).map_or_else(String::new, display_value);
             let (mut document, warnings) =
                 match erabasic_html::parse_document_with_warnings(&markup) {
                     Ok(parsed) => parsed,
                     Err(error) => {
-                        return self.fault(
-                            FaultCode::VmFault,
-                            &format!(
+                        emit_html_profile_error(
+                            self,
+                            "HTML_PRINT_ISLAND",
+                            &error,
+                            &request.origin,
+                            &vm.vm().artifact().manifest.compatibility,
+                        )?;
+                        if error.origin() != erabasic_html::HtmlQueryErrorOrigin::ScriptInput {
+                            return self.fault(
+                                FaultCode::VmFault,
+                                &format!(
+                                    "HTML_PRINT_ISLAND {:?} at UTF-8 bytes {}..{}",
+                                    error.kind, error.start, error.end
+                                ),
+                                Some(request.origin.clone()),
+                            );
+                        }
+                        return complete_script_fault(
+                            vm,
+                            request,
+                            erabasic_vm::ScriptFaultKind::Parse,
+                            format!(
                                 "HTML_PRINT_ISLAND {:?} at UTF-8 bytes {}..{}",
                                 error.kind, error.start, error.end
                             ),
-                            Some(request.origin.clone()),
                         );
                     }
                 };
+            if !vm
+                .vm()
+                .artifact()
+                .manifest
+                .compatibility
+                .supports_snake_display_state()
+                && let Some(range) = erabasic_html::snake_extension_range(&document)
+            {
+                let (start, end) = (range.start, range.end);
+                let error = erabasic_html::HtmlError::new(
+                    erabasic_html::HtmlErrorKind::InvalidAttribute,
+                    start,
+                    end,
+                );
+                emit_html_profile_error(
+                    self,
+                    "HTML_PRINT_ISLAND",
+                    &error,
+                    &request.origin,
+                    &vm.vm().artifact().manifest.compatibility,
+                )?;
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Parse,
+                    format!("HTML_PRINT_ISLAND profile attribute at UTF-8 bytes {start}..{end}"),
+                );
+            }
+            resolve_document_color_matrices(vm, request.fiber, &mut document);
             emit_html_warnings(self, "HTML_PRINT_ISLAND", &warnings, &request.origin)?;
             let mut bindings = HtmlInteractionBindings {
                 epoch: self.epoch.0,
@@ -317,9 +460,9 @@ impl RuntimeSession {
         }
         if matches!(name.as_str(), "BAR" | "BARL") {
             *status = HostDispatchStatus::Handled;
-            let value = integer_argument_value(&request.arguments, 0)?;
-            let maximum = integer_argument_value(&request.arguments, 1)?;
-            let length = integer_argument_value(&request.arguments, 2)?;
+            let value = integer_argument_value(request, 0)?;
+            let maximum = integer_argument_value(request, 1)?;
+            let length = integer_argument_value(request, 2)?;
             let replace = &vm.vm().artifact().project_data.static_data.replace;
             let bar = match make_bar(
                 value,
@@ -330,7 +473,12 @@ impl RuntimeSession {
             ) {
                 Ok(value) => value,
                 Err(message) => {
-                    return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Argument,
+                        message,
+                    );
                 }
             };
             self.presentation
@@ -402,6 +550,14 @@ impl RuntimeSession {
             Ok(None) => {}
             Err(PresentationStatePreparationError::Alignment) => {
                 *status = HostDispatchStatus::Handled;
+                if matches!(request.argument(0), Some(VmValue::String(_))) {
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Argument,
+                        "ALIGNMENT expects LEFT, CENTER, or RIGHT",
+                    );
+                }
                 return self.fault(
                     FaultCode::VmFault,
                     "ALIGNMENT expects LEFT, CENTER, or RIGHT",
@@ -414,17 +570,33 @@ impl RuntimeSession {
             }
             Err(PresentationStatePreparationError::Color(error)) => {
                 *status = HostDispatchStatus::Handled;
+                if matches!(
+                    request.arguments.as_slice(),
+                    [
+                        VmValue::Integer(_),
+                        VmValue::Integer(_),
+                        VmValue::Integer(_)
+                    ]
+                ) {
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Argument,
+                        error,
+                    );
+                }
                 return self.fault(FaultCode::VmFault, error, Some(request.origin.clone()));
             }
         }
         if matches!(name.as_str(), "SETCOLORBYNAME" | "SETBGCOLORBYNAME") {
             *status = HostDispatchStatus::Handled;
-            let color_name = string_argument_value(&request.arguments, 0, &name)?;
+            let color_name = string_argument_value(request, 0, &name)?;
             let Some(color) = named_color(color_name) else {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Argument,
                     "unknown or transparent color name",
-                    Some(request.origin.clone()),
                 );
             };
             if name == "SETCOLORBYNAME" {
@@ -445,9 +617,40 @@ impl RuntimeSession {
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
+        if matches!(name.as_str(), "TEXT_BGC_ON" | "TEXT_BGC_OFF") {
+            *status = HostDispatchStatus::Handled;
+            let color = if name == "TEXT_BGC_OFF" {
+                None
+            } else {
+                let rgb = integer_argument_value(request, 0)?;
+                let alpha_percent = integer_argument_value(request, 1)?;
+                if !(0..=100).contains(&alpha_percent) {
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Bounds,
+                        "TEXT_BGC_ON alpha must be between 0 and 100",
+                    );
+                }
+                let rgb_channel = |shift| {
+                    u8::try_from((rgb >> shift) & 0xff_i64)
+                        .expect("masked TEXT_BGC_ON channel fits u8")
+                };
+                Some(era_runtime_protocol::Color {
+                    red: rgb_channel(16),
+                    green: rgb_channel(8),
+                    blue: rgb_channel(0),
+                    alpha: u8::try_from((alpha_percent * 255) / 100)
+                        .expect("validated TEXT_BGC_ON alpha fits u8"),
+                })
+            };
+            self.presentation.set_text_line_background(color);
+            commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
+            return self.emit_presentation();
+        }
         if name == "REDRAW" {
             *status = HostDispatchStatus::Handled;
-            let flags = integer_argument_value(&request.arguments, 0)?;
+            let flags = integer_argument_value(request, 0)?;
             self.presentation.set_redraw(flags & 1 != 0);
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             self.emit_presentation()?;
@@ -465,6 +668,21 @@ impl RuntimeSession {
             let color = match color_argument_value(&request.arguments) {
                 Ok(color) => color,
                 Err(error) => {
+                    if matches!(
+                        request.arguments.as_slice(),
+                        [
+                            VmValue::Integer(_),
+                            VmValue::Integer(_),
+                            VmValue::Integer(_)
+                        ]
+                    ) {
+                        return complete_script_fault(
+                            vm,
+                            request,
+                            erabasic_vm::ScriptFaultKind::Argument,
+                            error,
+                        );
+                    }
                     return self.fault(FaultCode::VmFault, error, Some(request.origin.clone()));
                 }
             };
@@ -474,34 +692,39 @@ impl RuntimeSession {
         }
         if name == "SETBGIMAGE" {
             *status = HostDispatchStatus::Handled;
-            let resource = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
-            let depth = request.arguments.get(1).map_or(0, integer_value_or_zero);
-            let opacity = request.arguments.get(2).map_or(255, integer_value_or_zero);
-            let exists = self
+            let resource = request.argument(0).map_or_else(String::new, display_value);
+            let depth = request.argument(1).map_or(0, integer_value_or_zero);
+            let opacity = request.argument(2).map_or(255, integer_value_or_zero);
+            let resource_revision = self
                 .project_snapshot
                 .as_ref()
-                .and_then(|project| project.resource_graph.sprite(&resource))
-                .is_some();
-            if exists {
-                self.presentation.add_background(resource, depth, opacity);
+                .and_then(|project| project.resource_graph.sprite_revision(&resource));
+            if let Some(resource_revision) = resource_revision {
+                let source = era_runtime_protocol::SceneSourceV1::Sprite {
+                    sprite_name: resource.clone(),
+                    resource_revision,
+                };
+                if self
+                    .project_snapshot
+                    .as_mut()
+                    .is_some_and(|project| project.resource_graph.retain_scene_source(&source))
+                {
+                    self.presentation
+                        .add_background(resource, resource_revision, depth, opacity);
+                }
             }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
         if name == "REMOVEBGIMAGE" {
             *status = HostDispatchStatus::Handled;
-            let resource = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
+            let resource = request.argument(0).map_or_else(String::new, display_value);
             if !self.presentation.remove_background(&resource) {
-                return self.fault(
-                    FaultCode::VmFault,
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Operation,
                     "REMOVEBGIMAGE did not find the requested background",
-                    Some(request.origin.clone()),
                 );
             }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
@@ -513,18 +736,12 @@ impl RuntimeSession {
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
-        if name == "CBGCLEAR" {
-            *status = HostDispatchStatus::Handled;
-            self.presentation.clear_client_backgrounds();
-            commit_integer_result(vm, request.id, 1)?;
-            return self.emit_presentation();
-        }
         if name.starts_with("TOOLTIP_") {
             *status = HostDispatchStatus::Handled;
             let result = match name.as_str() {
                 "TOOLTIP_SETCOLOR" => {
-                    let foreground = integer_argument_value(&request.arguments, 0)?;
-                    let background = integer_argument_value(&request.arguments, 1)?;
+                    let foreground = integer_argument_value(request, 0)?;
+                    let background = integer_argument_value(request, 1)?;
                     if !(0..=0xff_ffff).contains(&foreground)
                         || !(0..=0xff_ffff).contains(&background)
                     {
@@ -536,70 +753,73 @@ impl RuntimeSession {
                 }
                 "TOOLTIP_SETDELAY" => self
                     .presentation
-                    .set_tooltip_delay(integer_argument_value(&request.arguments, 0)?),
+                    .set_tooltip_delay(integer_argument_value(request, 0)?),
                 "TOOLTIP_SETDURATION" => self
                     .presentation
-                    .set_tooltip_duration(integer_argument_value(&request.arguments, 0)?),
+                    .set_tooltip_duration(integer_argument_value(request, 0)?),
                 "TOOLTIP_SETFONT" => {
                     self.presentation.set_tooltip_font(
-                        request
-                            .arguments
-                            .first()
-                            .map_or_else(String::new, display_value),
+                        request.argument(0).map_or_else(String::new, display_value),
                     );
                     Ok(())
                 }
                 "TOOLTIP_SETFONTSIZE" => self
                     .presentation
-                    .set_tooltip_font_size(integer_argument_value(&request.arguments, 0)?),
+                    .set_tooltip_font_size(integer_argument_value(request, 0)?),
                 "TOOLTIP_CUSTOM" => {
                     self.presentation
-                        .set_tooltip_custom(integer_argument_value(&request.arguments, 0)? != 0);
+                        .set_tooltip_custom(integer_argument_value(request, 0)? != 0);
                     Ok(())
                 }
                 "TOOLTIP_FORMAT" => {
                     self.presentation
-                        .set_tooltip_format(integer_argument_value(&request.arguments, 0)?);
+                        .set_tooltip_format(integer_argument_value(request, 0)?);
                     Ok(())
                 }
                 "TOOLTIP_IMG" => {
                     self.presentation
-                        .set_tooltip_images(integer_argument_value(&request.arguments, 0)? != 0);
+                        .set_tooltip_images(integer_argument_value(request, 0)? != 0);
                     Ok(())
                 }
-                _ => Err("unsupported tooltip operation"),
+                _ => {
+                    return self.fault(
+                        FaultCode::VmFault,
+                        "unsupported tooltip operation",
+                        Some(request.origin.clone()),
+                    );
+                }
             };
             if let Err(message) = result {
-                return self.fault(FaultCode::VmFault, message, Some(request.origin.clone()));
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Argument,
+                    message,
+                );
             }
             commit_completion(vm, request.id, VmHostCompletion::Ready(HostReady::empty()))?;
             return self.emit_presentation();
         }
         if name == "PRINT_IMG" {
             *status = HostDispatchStatus::Handled;
-            let resource = request
-                .arguments
-                .first()
-                .map_or_else(String::new, display_value);
+            let resource = request.argument(0).map_or_else(String::new, display_value);
             let mut cursor = 1;
-            let hover = request.arguments.get(cursor).and_then(|value| match value {
+            let hover = request.argument(cursor).and_then(|value| match value {
                 VmValue::String(value) => Some(value.clone()).filter(|value| !value.is_empty()),
                 _ => None,
             });
             if request
-                .arguments
-                .get(cursor)
+                .argument(cursor)
                 .is_some_and(|value| matches!(value, VmValue::String(_)))
             {
                 cursor += 1;
             }
-            let mask = request.arguments.get(cursor).and_then(|value| match value {
+            let mask = request.argument(cursor).and_then(|value| match value {
                 VmValue::String(value) => Some(value.clone()).filter(|value| !value.is_empty()),
                 _ => None,
             });
             if request
-                .arguments
-                .get(cursor)
+                .argument(cursor)
                 .is_some_and(|value| matches!(value, VmValue::String(_)))
             {
                 cursor += 1;

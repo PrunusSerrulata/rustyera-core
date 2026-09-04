@@ -39,6 +39,9 @@ pub enum AnalyzerDiagnosticCode {
     DeferredIndex,
     FrontendObservationSource,
     FrontendObservationDependency,
+    IntegerOverflow,
+    IntegerDivideByZero,
+    ExcessUserArguments,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

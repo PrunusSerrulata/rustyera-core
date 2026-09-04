@@ -14,12 +14,17 @@ use crate::{
     VmRuntimeStateTransaction,
 };
 use erabasic_bytecode::{
-    BytecodeArtifact, BytecodeConstant, BytecodeFunction, BytecodeFunctionKind, BytecodeGlobal,
-    BytecodeStorage, BytecodeType, Digest, ImportKind, Opcode, SourceMapEntry, SymbolKey,
+    BytecodeArtifact, BytecodeFunction, BytecodeFunctionKind, BytecodeGlobal, BytecodeStorage,
+    BytecodeType, Digest, ImportKind, Opcode, SourceMapEntry, SymbolKey,
 };
 use erabasic_validator::ValidatedArtifact;
 
+pub(crate) mod array_leases;
+pub(crate) mod bit_calls;
 mod derived_cache;
+pub(crate) mod references;
+mod returns;
+pub(crate) use returns::FrameReturn;
 mod path_memo;
 mod planning;
 
@@ -98,6 +103,37 @@ pub struct VmPreparationProgress {
 }
 
 impl ProgramGeneration {
+    pub(crate) fn runtime_variable(
+        &self,
+        key: SymbolKey,
+    ) -> Option<&erabasic_bytecode::RuntimeVariableSymbol> {
+        self.artifact
+            .runtime_variables
+            .binary_search_by_key(&key, |symbol| symbol.key)
+            .ok()
+            .map(|index| &self.artifact.runtime_variables[index])
+    }
+
+    pub(crate) fn is_reference_variable(&self, key: SymbolKey) -> bool {
+        self.runtime_variable(key)
+            .is_some_and(|symbol| symbol.reference)
+    }
+
+    pub(crate) fn effective_character_disposal(
+        &self,
+        key: SymbolKey,
+    ) -> Option<erabasic_bytecode::CharacterArrayDisposal> {
+        self.runtime_variable(key).map(|metadata| {
+            if self.artifact.manifest.compatibility.profile
+                == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake
+            {
+                metadata.character_disposal
+            } else {
+                erabasic_bytecode::CharacterArrayDisposal::Preserve
+            }
+        })
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(crate) fn new(artifact: Arc<BytecodeArtifact>) -> Self {
         Self::new_with_progress(artifact, None)
@@ -840,6 +876,7 @@ mod lifecycle;
 mod places;
 mod runtime;
 mod runtime_types;
+pub(crate) mod user_calls;
 
 pub use runtime_types::Vm;
 pub(crate) use runtime_types::{
@@ -847,12 +884,13 @@ pub(crate) use runtime_types::{
     FindElementCacheKey, FindElementNeedle, ForLoopState, Frame, FunctionMemoEntry,
     FunctionMemoKey, FunctionMemoPlan, LiteralGroupMatchPlan, MemoValue, MemoizedIndexedReadPlan,
     PathMemoBaseKey, PathMemoCache, PathMemoDependency, PathMemoEntry, PathMemoHead,
-    PathMemoMutation, PathMemoMutationGroup, PathMemoPlace, PathMemoResultReadPlan, WaitingHost,
+    PathMemoMutation, PathMemoMutationGroup, PathMemoPlace, PathMemoResultReadPlan,
+    PendingFaultHook, WaitingHost,
 };
 
 pub(crate) use frames::{
     PersistentArgumentDestination, bind_persistent_arguments, make_frame,
-    persistent_argument_destination, prepare_dynamic_arguments, validate_arguments,
+    persistent_argument_destination, validate_arguments,
 };
 use frames::{find_frame, find_frame_mut, find_global};
 use runtime::replace_cell_values;

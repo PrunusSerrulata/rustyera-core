@@ -17,6 +17,20 @@ pub enum VariableScope {
     Parameter,
 }
 
+/// Reference name lookup fails before argument evaluation at these source-owned sites.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum MatchNameRejectionKind {
+    Script,
+    Internal,
+}
+
+/// CharacterData.Dispose clears only its built-in one-dimensional sparse arrays.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum CharacterArrayDisposal {
+    Preserve,
+    ClearSparse,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Variable {
     pub id: VariableId,
@@ -27,6 +41,10 @@ pub struct Variable {
     pub persistence: Persistence,
     pub mutable: bool,
     pub reference: bool,
+    /// Captured from the token declaration before per-function LOCAL resizing.
+    pub match_name_rejection: Option<MatchNameRejectionKind>,
+    pub character_disposal: CharacterArrayDisposal,
+    pub reference_semantics: ReferenceVariableSemantics,
     pub static_lifetime: bool,
     pub initial_values: Vec<ConstantValue>,
     pub scope: VariableScope,
@@ -50,6 +68,7 @@ pub enum FunctionKind {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct CallCompatibility {
+    pub user_argument_policy: erabasic_compat::UserCallArgumentPolicy,
     pub allow_event_as_normal: bool,
     pub allow_omitted_arguments: bool,
     pub auto_convert_integer_to_string: bool,
@@ -57,6 +76,13 @@ pub struct CallCompatibility {
     pub allow_full_width_space: bool,
     pub debug_semicolon: bool,
     pub ignore_triple_symbols: bool,
+    /// Parse-time RAND argument compatibility used by runtime expression probes.
+    pub compatible_rand: bool,
+    /// Do not infer omitted character indices in runtime expression probes.
+    pub system_no_target: bool,
+    /// Config.IgnoreCase for runtime variable-name token lookup.
+    pub ignore_case: bool,
+    pub before_error_throw_hooks: bool,
 }
 
 /// Reference event modifiers retained after parsing. They affect dispatch order rather
@@ -185,6 +211,7 @@ pub struct ControlFlowEdge {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Program {
     pub format_version: u32,
+    pub compatibility: erabasic_compat::CompatibilityIdentity,
     pub call_compatibility: CallCompatibility,
     pub sources: Vec<SourceFile>,
     pub variables: Vec<Variable>,
@@ -196,10 +223,18 @@ impl Program {
     pub fn new(sources: Vec<SourceFile>) -> Self {
         Self {
             format_version: HIR_FORMAT_VERSION,
+            compatibility: erabasic_compat::CompatibilityIdentity::default(),
             call_compatibility: CallCompatibility::default(),
             sources,
             variables: Vec::new(),
             functions: Vec::new(),
         }
     }
+}
+
+/// Fixed source token flags, independent of mutability and REF binding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReferenceVariableSemantics {
+    pub is_const: bool,
+    pub can_restructure: bool,
 }

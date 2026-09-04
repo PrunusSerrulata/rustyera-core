@@ -19,7 +19,8 @@ impl RuntimeFormContinuation {
         let definition = generation
             .scoped_variable(self.function, name)
             .ok_or_else(|| {
-                StepError::new(
+                StepError::script(
+                    crate::ScriptFaultKind::Resolve,
                     VmFaultCode::MissingSymbol,
                     format!("STRFORM variable {name} is missing"),
                 )
@@ -54,7 +55,11 @@ impl RuntimeFormContinuation {
             .into_iter()
             .map(|value| match value {
                 VmValue::Integer(value) => u64::try_from(value).map_err(|_| {
-                    StepError::new(VmFaultCode::Bounds, "STRFORM variable index is negative")
+                    StepError::script(
+                        crate::ScriptFaultKind::Bounds,
+                        VmFaultCode::Bounds,
+                        "STRFORM variable index is negative",
+                    )
                 }),
                 _ => Err(StepError::new(
                     VmFaultCode::TypeMismatch,
@@ -109,6 +114,18 @@ impl RuntimeFormContinuation {
     }
 
     fn retained_string_bytes(&self) -> Result<usize, StepError> {
+        let (_, method_bytes) = self
+            .method_resources()
+            .ok_or_else(|| resource_limit("STRFORM method resource count overflowed"))?;
+        let (_, host_bytes) = self
+            .host_resources()
+            .ok_or_else(|| resource_limit("Host retained bytes overflowed"))?;
+        let (_, reference_bytes) = self
+            .reference_argument_resources()
+            .ok_or_else(|| resource_limit("reference argument resource count overflowed"))?;
+        let (_, plan_bytes) = self
+            .call_plan_resources()
+            .ok_or_else(|| resource_limit("runtime call plan resource count overflowed"))?;
         self.outputs
             .iter()
             .map(String::len)
@@ -116,12 +133,39 @@ impl RuntimeFormContinuation {
                 VmValue::String(value) => Some(value.len()),
                 _ => None,
             }))
-            .try_fold(0usize, usize::checked_add)
+            .try_fold(
+                method_bytes
+                    .checked_add(reference_bytes)
+                    .and_then(|bytes| bytes.checked_add(plan_bytes))
+                    .and_then(|bytes| bytes.checked_add(host_bytes))
+                    .ok_or_else(|| resource_limit("reference argument bytes overflowed"))?,
+                usize::checked_add,
+            )
             .ok_or_else(|| resource_limit("STRFORM retained string size overflowed"))
     }
 
     pub(super) fn check_resources(&self, vm: &Vm) -> Result<(), StepError> {
-        if self.work.len() > vm.config.maximum_operand_stack
+        let (method_slots, _) = self
+            .method_resources()
+            .ok_or_else(|| resource_limit("STRFORM method resource count overflowed"))?;
+        let (host_slots, _) = self
+            .host_resources()
+            .ok_or_else(|| resource_limit("Host retained slots overflowed"))?;
+        let (reference_slots, _) = self
+            .reference_argument_resources()
+            .ok_or_else(|| resource_limit("reference argument resource count overflowed"))?;
+        let (plan_slots, _) = self
+            .call_plan_resources()
+            .ok_or_else(|| resource_limit("runtime call plan resource count overflowed"))?;
+        if self
+            .work
+            .len()
+            .checked_add(self.checkpoints.len())
+            .and_then(|count| count.checked_add(method_slots))
+            .and_then(|count| count.checked_add(reference_slots))
+            .and_then(|count| count.checked_add(plan_slots))
+            .and_then(|count| count.checked_add(host_slots))
+            .is_none_or(|count| count > vm.config.maximum_operand_stack)
             || self.values.len() > vm.config.maximum_operand_stack
             || self.outputs.len() > MAX_RUNTIME_FORM_NESTING
         {
@@ -169,7 +213,19 @@ pub(super) fn owner_frame_mut(
 }
 
 pub(super) fn unsupported(message: impl Into<String>) -> StepError {
-    StepError::new(VmFaultCode::Native, message)
+    StepError::script(
+        crate::ScriptFaultKind::Operation,
+        VmFaultCode::Native,
+        message,
+    )
+}
+
+pub(super) fn permission_denied(message: impl Into<String>) -> StepError {
+    StepError::classified(
+        crate::FaultCategory::Permission,
+        VmFaultCode::Native,
+        message,
+    )
 }
 
 pub(super) fn resource_limit(message: impl Into<String>) -> StepError {

@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+erabasic-compat = { path = "../erabasic-compat" }
 blake3.workspace = true
 era-debug-protocol = { path = "../era-debug-protocol" }
 era-protocol = { path = "../era-protocol" }
@@ -26,9 +27,11 @@ zstd.workspace = true
 minicbor.workspace = true
 serde.workspace = true
 serde_json = "1.0.112"
+sha2.workspace = true
 rmp-serde.workspace = true
 rayon.workspace = true
 unicode-segmentation.workspace = true
+unicode-normalization.workspace = true
 
 [lints]
 workspace = true

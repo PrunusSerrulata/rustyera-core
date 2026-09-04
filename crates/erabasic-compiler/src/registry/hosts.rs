@@ -1,6 +1,6 @@
 use erabasic_bytecode::HostCapability;
 
-use super::{HostBinding, HostRegistry, host_contract};
+use super::{ExecutionBinding, HostBinding, HostRegistry, host_contract};
 
 pub(super) fn register_hosts(
     registry: &mut HostRegistry,
@@ -26,6 +26,19 @@ pub(super) fn register_hosts(
     }
 }
 
+pub(super) fn register_sql(registry: &mut HostRegistry) {
+    register_hosts(registry, SQL, "rustyera.sql", HostCapability::Sql, true);
+    for (name, capability, reason) in SQL_DEFERRED {
+        registry.register_execution(
+            *name,
+            ExecutionBinding::UnsupportedCapability {
+                capability: (*capability).into(),
+                reason: (*reason).into(),
+            },
+        );
+    }
+}
+
 pub(super) const INPUT: &[&str] = &[
     "WAIT",
     "WAITANYKEY",
@@ -40,12 +53,22 @@ pub(super) const INPUT: &[&str] = &[
     "TINPUTS",
     "TONEINPUT",
     "TONEINPUTS",
+    "TINPUTNF",
+    "TINPUTSNF",
+    "TONEINPUTNF",
+    "TONEINPUTSNF",
+    "SEQUENCEINPUT",
+    "DISABLE_INPUT_MACRO",
+    "ENABLE_INPUT_MACRO",
+    "ENV_HAS_CAPABILITY",
+    "GETPLATFORM",
     "INPUTANY",
     "BINPUT",
     "BINPUTS",
     "ONEBINPUT",
     "ONEBINPUTS",
     "INPUTMOUSEKEY",
+    "__GETKEY_ACTIVE",
     "GETKEY",
     "GETKEYTRIGGERED",
     "GETTEXTBOX",
@@ -95,6 +118,8 @@ pub(super) const TEXT: &[&str] = &[
     "PRINTDATAL",
     "PRINTDATAW",
     "HTML_PRINT",
+    "HTML_PRINTC",
+    "HTML_PRINTLC",
     "HTML_PRINT_ISLAND",
     "HTML_PRINT_ISLAND_CLEAR",
     "HTML_TAGSPLIT",
@@ -263,7 +288,12 @@ pub(super) const GRAPHICS: &[&str] = &[
     "GDRAWSPRITE",
     "GDRAWTEXT",
     "GFILLRECTANGLE",
+    "G_POLYGON_DRAW",
+    "G_POLYGON_FILL",
+    "G_POLYGON_POINT_ADD",
+    "G_POLYGON_POINT_CLEAR",
     "SPRITECREATE",
+    "SPRITECREATEFROMFILE",
     "SPRITEANIMECREATE",
     "SPRITEANIMEADDFRAME",
     "SPRITEDISPOSE",
@@ -283,6 +313,12 @@ pub(super) const GRAPHICS: &[&str] = &[
     "CBGSETBUTTONSPRITE",
     "CBGSETG",
     "CBGSETSPRITE",
+    "SETIMAGELAYER",
+    "SETIMAGELAYERL",
+    "CLEARIMAGELAYER",
+    "CLEARIMAGELAYER_ALL",
+    "EXISTSIMAGELAYER",
+    "GETLINEY",
     "GCLEAR",
     "GCREATED",
     "GHEIGHT",
@@ -305,6 +341,9 @@ pub(super) const GRAPHICS: &[&str] = &[
     "SPRITEPOSX",
     "SPRITEPOSY",
     "SETANIMETIMER",
+    "GETANIMETIMER",
+    "TEXT_BGC_ON",
+    "TEXT_BGC_OFF",
 ];
 
 pub(super) const AUDIO: &[&str] = &[
@@ -315,6 +354,11 @@ pub(super) const AUDIO: &[&str] = &[
     "SETSOUNDVOLUME",
     "SETBGMVOLUME",
     "EXISTSOUND",
+    "GETSOUNDORBGMINFO",
+    "ISPLAYINGSOUND",
+    "SOUNDCONTROL",
+    "ISPLAYINGBGM",
+    "BGMCONTROL",
 ];
 
 pub(super) const STORAGE: &[&str] = &[
@@ -341,6 +385,73 @@ pub(super) const STORAGE: &[&str] = &[
     "RESETGLOBAL",
 ];
 
+pub(super) const SQL: &[&str] = &[
+    "SQL_CONNECT",
+    "SQL_DISCONNECT",
+    "SQL_EXECUTE_NONQUERY",
+    "SQL_P_EXECUTE_NONQUERY",
+    "SQL_EXECUTE_SCALAR_LONG",
+    "SQL_EXECUTE_SCALAR_STRING",
+    "SQL_P_EXECUTE_SCALAR_LONG",
+    "SQL_P_EXECUTE_SCALAR_STRING",
+    "SQL_EXECUTE_READER",
+    "SQL_P_EXECUTE_READER",
+    "SQL_READER_READ",
+    "SQL_READER_GET_LONG",
+    "SQL_READER_GET_STRING",
+    "SQL_READER_ISNULL",
+    "SQL_READER_CLOSE",
+    "SQL_IMPORT_MAP_XML",
+];
+
+pub(super) const SQL_DEFERRED: &[(&str, &str, &str)] = &[
+    (
+        "SQL_CONNECTION_OPEN",
+        "rustyera.sql.connection-open@future",
+        "connection-open observation is outside the safe SQL v1 subset",
+    ),
+    (
+        "SQL_READER_GET_FLOAT",
+        "rustyera.sql.float@future",
+        "Float SQL values require the batch-6 bit-exact Float contract",
+    ),
+    (
+        "SQL_EXECUTE_SCALAR_FLOAT",
+        "rustyera.sql.float@future",
+        "Float SQL values require the batch-6 bit-exact Float contract",
+    ),
+    (
+        "SQL_P_EXECUTE_SCALAR_FLOAT",
+        "rustyera.sql.float@future",
+        "Float SQL values require the batch-6 bit-exact Float contract",
+    ),
+    (
+        "SQL_ESCAPE",
+        "rustyera.sql.escape@future",
+        "SQL text escaping is not part of parameterized safe SQL v1",
+    ),
+    (
+        "SQL_IMPORT_DT_XML",
+        "rustyera.sql.dt-xml@future",
+        "DT XML import is deferred beyond safe SQL v1",
+    ),
+    (
+        "SQL_EXPORT_MAP_XML",
+        "rustyera.sql.xml-export@future",
+        "XML export is deferred beyond safe SQL v1",
+    ),
+    (
+        "SQL_EXPORT_DT_XML",
+        "rustyera.sql.xml-export@future",
+        "XML export is deferred beyond safe SQL v1",
+    ),
+    (
+        "SQL_IMPORT_XML_CUSTOM",
+        "rustyera.sql.custom-xml@future",
+        "custom XML import is deferred beyond safe SQL v1",
+    ),
+];
+
 pub(super) const SYSTEM: &[&str] = &[
     "BEGIN",
     "FORCE_BEGIN",
@@ -354,6 +465,7 @@ pub(super) const SYSTEM: &[&str] = &[
     "CALLTRAIN",
     "STOPCALLTRAIN",
     "GETMEMORYUSAGE",
+    "CLEARMEMORY",
     "GETCONFIG",
     "GETCONFIGS",
     "VARSIZE",

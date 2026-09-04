@@ -1,12 +1,13 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
+use crate::ExecutionFailure;
 
 impl StructuredState {
     pub(super) fn call_xml(
         &mut self,
         name: &str,
         request: &NativeCallRequest,
-    ) -> Result<NativeReady, String> {
+    ) -> Result<NativeReady, ExecutionFailure> {
         match name {
             "xml_document" => {
                 let id = argument_key(request, 0)?;
@@ -102,9 +103,9 @@ impl StructuredState {
             "xml_replace" | "xml_replace_byname" => {
                 self.mutate_xml(name.ends_with("_byname"), request, XmlMutation::Replace)
             }
-            _ => Err(format!(
-                "XML operation {name} is outside the pinned XPath mutation subset"
-            )),
+            _ => Err(
+                format!("XML operation {name} is outside the pinned XPath mutation subset").into(),
+            ),
         }
     }
 
@@ -113,7 +114,7 @@ impl StructuredState {
         by_name: bool,
         request: &NativeCallRequest,
         mutation: XmlMutation,
-    ) -> Result<NativeReady, String> {
+    ) -> Result<NativeReady, ExecutionFailure> {
         let target = if by_name
             || matches!(request.arguments.first(), Some(VmValue::Integer(_)))
             || mutation == XmlMutation::Replace && request.arguments.len() == 2

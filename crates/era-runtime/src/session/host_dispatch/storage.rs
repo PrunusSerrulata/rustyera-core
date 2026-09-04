@@ -10,6 +10,8 @@ impl RuntimeSession {
         name: &String,
         status: &mut HostDispatchStatus,
     ) -> Result<(), RuntimeError> {
+        let snake_resources = vm.vm().artifact().manifest.compatibility.profile
+            == erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake;
         if matches!(name.as_str(), "SAVEVAR" | "LOADVAR") {
             *status = HostDispatchStatus::Handled;
             return self.fault(
@@ -20,11 +22,7 @@ impl RuntimeSession {
         }
         if name == "PUTFORM" {
             *status = HostDispatchStatus::Handled;
-            let suffix = request
-                .arguments
-                .first()
-                .map(display_value)
-                .unwrap_or_default();
+            let suffix = request.argument(0).map(display_value).unwrap_or_default();
             let variable = runtime_variable_key(vm, "SAVEDATA_TEXT")?;
             let current = vm
                 .read_runtime_state(&[erabasic_vm::VmRuntimeRead {
@@ -51,8 +49,7 @@ impl RuntimeSession {
                 .map_or(20, |snapshot| snapshot.save_slot_count);
             let value = VmValue::Integer(i64::from(count));
             let writes = request
-                .arguments
-                .first()
+                .argument(0)
                 .and_then(vm_place)
                 .map(|target| {
                     vec![HostWrite {
@@ -76,10 +73,11 @@ impl RuntimeSession {
                 self.controller.flow,
                 Some(SystemFlow::Title | SystemFlow::Shop | SystemFlow::Normal)
             ) {
-                return self.fault(
-                    FaultCode::VmFault,
-                    &format!("{name} cannot open outside the reference __CAN_SAVE__ states"),
-                    Some(request.origin.clone()),
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Operation,
+                    format!("{name} cannot open outside the reference __CAN_SAVE__ states"),
                 );
             }
             commit_completion(
@@ -127,26 +125,37 @@ impl RuntimeSession {
         }
         if name == "SAVEDATA" {
             *status = HostDispatchStatus::Handled;
-            let slot = save_slot_argument(&request.arguments, 0, "SAVEDATA")?;
-            let description = string_argument_value(&request.arguments, 1, "SAVEDATA")?;
-            if description.contains(['\r', '\n']) {
-                return self.fault(
-                    FaultCode::VmFault,
-                    "SAVEDATA description cannot contain a newline",
-                    Some(request.origin.clone()),
+            let slot_value = integer_argument_value(request, 0)?;
+            if !(0..=i64::from(i32::MAX)).contains(&slot_value) {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    format!("SAVEDATA argument 1 must be between 0 and {}", i32::MAX),
                 );
             }
+            let slot = save_slot_argument(request, 0, "SAVEDATA")?;
+            let description = string_argument_value(request, 1, "SAVEDATA")?;
+            if description.contains(['\r', '\n']) {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Argument,
+                    "SAVEDATA description cannot contain a newline",
+                );
+            }
+            let extensions = merge_structured_extensions(
+                &self.save_extensions,
+                vm.structured_extensions(StructuredScope::Ordinary)
+                    .map_err(|error| RuntimeError::Internal(error.to_string()))?,
+            )
+            .map_err(|error| RuntimeError::Internal(error.to_string()))?;
             let bytes = encode_scoped_save(
                 &vm.export_era_state(),
                 vm.vm().artifact(),
                 era_runtime_save::SaveFileKind::Normal,
                 description.to_owned(),
-                merge_structured_extensions(
-                    &self.save_extensions,
-                    vm.structured_extensions(StructuredScope::Ordinary)
-                        .map_err(|error| RuntimeError::Internal(error.to_string()))?,
-                )
-                .map_err(|error| RuntimeError::Internal(error.to_string()))?,
+                extensions,
                 self.traditional_save_format(),
             )
             .map_err(|error| RuntimeError::Internal(error.to_string()))?;
@@ -167,11 +176,23 @@ impl RuntimeSession {
         }
         if name == "LOADDATA" {
             *status = HostDispatchStatus::Handled;
-            let slot = save_slot_argument(&request.arguments, 0, "LOADDATA")?;
+            let slot_value = integer_argument_value(request, 0)?;
+            if !(0..=i64::from(i32::MAX)).contains(&slot_value) {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    format!("LOADDATA argument 1 must be between 0 and {}", i32::MAX),
+                );
+            }
+            let slot = save_slot_argument(request, 0, "LOADDATA")?;
             return self.issue_host_storage(
                 vm,
                 request,
-                PendingStorage::HostLoadOrdinary { slot },
+                PendingStorage::HostLoadOrdinary {
+                    request: request.id,
+                    slot,
+                },
                 StorageNamespace::Save,
                 StorageOperation::Read,
                 save_slot_path(slot),
@@ -179,7 +200,16 @@ impl RuntimeSession {
         }
         if name == "DELDATA" {
             *status = HostDispatchStatus::Handled;
-            let slot = save_slot_argument(&request.arguments, 0, "DELDATA")?;
+            let slot_value = integer_argument_value(request, 0)?;
+            if !(0..=i64::from(i32::MAX)).contains(&slot_value) {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    format!("DELDATA argument 1 must be between 0 and {}", i32::MAX),
+                );
+            }
+            let slot = save_slot_argument(request, 0, "DELDATA")?;
             return self.issue_host_storage(
                 vm,
                 request,
@@ -241,30 +271,35 @@ impl RuntimeSession {
         }
         if name == "SAVECHARA" {
             *status = HostDispatchStatus::Handled;
-            let filename =
-                dat_filename(string_argument_value(&request.arguments, 0, "SAVECHARA")?)?;
-            let description = string_argument_value(&request.arguments, 1, "SAVECHARA")?;
+            let filename = dat_filename(string_argument_value(request, 0, "SAVECHARA")?)?;
+            let description = string_argument_value(request, 1, "SAVECHARA")?;
             let exported = vm.vm().export_era_state_for(EraSaveScope::Characters);
             let mut selected = Vec::new();
             let mut seen = std::collections::BTreeSet::new();
             for index in 2..request.arguments.len() {
-                let value = usize::try_from(integer_argument_value(&request.arguments, index)?)
-                    .map_err(|_| {
-                        RuntimeError::Internal(format!(
-                            "SAVECHARA argument {} must be non-negative",
-                            index + 1
-                        ))
-                    })?;
+                let Ok(value) = usize::try_from(integer_argument_value(request, index)?) else {
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Bounds,
+                        format!("SAVECHARA argument {} must be non-negative", index + 1),
+                    );
+                };
                 if value >= exported.characters.len() {
-                    return Err(RuntimeError::Internal(format!(
-                        "SAVECHARA argument {} is not a character",
-                        index + 1
-                    )));
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Bounds,
+                        format!("SAVECHARA argument {} is not a character", index + 1),
+                    );
                 }
                 if !seen.insert(value) {
-                    return Err(RuntimeError::Internal(format!(
-                        "SAVECHARA character {value} is duplicated"
-                    )));
+                    return complete_script_fault(
+                        vm,
+                        request,
+                        erabasic_vm::ScriptFaultKind::Argument,
+                        format!("SAVECHARA character {value} is duplicated"),
+                    );
                 }
                 selected.push(exported.characters[value].clone());
             }
@@ -300,8 +335,7 @@ impl RuntimeSession {
         }
         if name == "LOADCHARA" {
             *status = HostDispatchStatus::Handled;
-            let filename =
-                dat_filename(string_argument_value(&request.arguments, 0, "LOADCHARA")?)?;
+            let filename = dat_filename(string_argument_value(request, 0, "LOADCHARA")?)?;
             let storage_path = format!("chara_{filename}.dat");
             return self.issue_host_storage(
                 vm,
@@ -317,49 +351,77 @@ impl RuntimeSession {
         }
         if name == "CHKDATA" {
             *status = HostDispatchStatus::Handled;
-            let slot = save_slot_argument(&request.arguments, 0, "CHKDATA")?;
+            let slot_value = integer_argument_value(request, 0)?;
+            if !(0..=i64::from(i32::MAX)).contains(&slot_value) {
+                return complete_script_fault(
+                    vm,
+                    request,
+                    erabasic_vm::ScriptFaultKind::Bounds,
+                    format!("CHKDATA argument 1 must be between 0 and {}", i32::MAX),
+                );
+            }
+            let slot = save_slot_argument(request, 0, "CHKDATA")?;
             return self.issue_host_storage(
                 vm,
                 request,
                 PendingStorage::HostCheck {
                     request: request.id,
                     kind: era_runtime_save::SaveFileKind::Normal,
+                    path: save_slot_path(slot),
+                    data: Vec::new(),
+                    change_token: None,
                 },
                 StorageNamespace::Save,
-                StorageOperation::Read,
+                StorageOperation::ReadRange {
+                    offset: 0,
+                    maximum_bytes: crate::session::storage::SAVE_CHECK_CHUNK_BYTES,
+                    change_token: None,
+                },
                 save_slot_path(slot),
             );
         }
         if name == "CHKCHARADATA" {
             *status = HostDispatchStatus::Handled;
-            let filename = dat_filename(string_argument_value(
-                &request.arguments,
-                0,
-                "CHKCHARADATA",
-            )?)?;
+            let filename = dat_filename(string_argument_value(request, 0, "CHKCHARADATA")?)?;
             return self.issue_host_storage(
                 vm,
                 request,
                 PendingStorage::HostCheck {
                     request: request.id,
                     kind: era_runtime_save::SaveFileKind::Character,
+                    path: format!("chara_{filename}.dat"),
+                    data: Vec::new(),
+                    change_token: None,
                 },
                 StorageNamespace::Data,
-                StorageOperation::Read,
+                StorageOperation::ReadRange {
+                    offset: 0,
+                    maximum_bytes: crate::session::storage::SAVE_CHECK_CHUNK_BYTES,
+                    change_token: None,
+                },
                 format!("chara_{filename}.dat"),
             );
         }
         if name == "SAVETEXT" {
             *status = HostDispatchStatus::Handled;
-            let text = string_argument_value(&request.arguments, 0, "SAVETEXT")?;
-            let Ok((namespace, path)) = text_storage_target(
+            let text = string_argument_value(request, 0, "SAVETEXT")?;
+            // These source getters run before path/IO fallback; a null is not a default.
+            for index in 2..request.arguments.len() {
+                let _ = integer_argument_value(request, index)?;
+            }
+            let Ok((namespace, mut path)) = text_storage_target(
                 request
-                    .arguments
-                    .get(1)
+                    .argument(1)
                     .ok_or_else(|| RuntimeError::Internal("SAVETEXT target is missing".into()))?,
             ) else {
                 return commit_integer_result(vm, request.id, 0);
             };
+            if snake_resources && namespace == StorageNamespace::Data {
+                let Some(normalized) = Self::resource_storage_path(&path, false) else {
+                    return commit_integer_result(vm, request.id, 0);
+                };
+                path = normalized;
+            }
             return self.issue_host_storage(
                 vm,
                 request,
@@ -377,10 +439,12 @@ impl RuntimeSession {
         }
         if name == "LOADTEXT" {
             *status = HostDispatchStatus::Handled;
+            for index in 1..request.arguments.len() {
+                let _ = integer_argument_value(request, index)?;
+            }
             let Ok((namespace, path)) = text_storage_target(
                 request
-                    .arguments
-                    .first()
+                    .argument(0)
                     .ok_or_else(|| RuntimeError::Internal("LOADTEXT target is missing".into()))?,
             ) else {
                 return commit_completion(
@@ -392,12 +456,35 @@ impl RuntimeSession {
                     }),
                 );
             };
+            let pending = if snake_resources && namespace == StorageNamespace::Data {
+                let Some(normalized) = Self::resource_storage_path(&path, false) else {
+                    return commit_completion(
+                        vm,
+                        request.id,
+                        VmHostCompletion::Ready(HostReady {
+                            value: Some(VmValue::String(String::new())),
+                            writes: Vec::new(),
+                        }),
+                    );
+                };
+                PendingStorage::HostResourceText {
+                    request: request.id,
+                    path: normalized,
+                    resource: false,
+                }
+            } else {
+                PendingStorage::HostReadText {
+                    request: request.id,
+                }
+            };
+            let path = match &pending {
+                PendingStorage::HostResourceText { path, .. } => path.clone(),
+                _ => path,
+            };
             return self.issue_host_storage(
                 vm,
                 request,
-                PendingStorage::HostReadText {
-                    request: request.id,
-                },
+                pending,
                 namespace,
                 StorageOperation::Read,
                 path,
@@ -405,17 +492,33 @@ impl RuntimeSession {
         }
         if name == "EXISTFILE" {
             *status = HostDispatchStatus::Handled;
-            let Ok(path) =
-                safe_relative_path(string_argument_value(&request.arguments, 0, "EXISTFILE")?)
+            let Ok(path) = safe_relative_path(string_argument_value(request, 0, "EXISTFILE")?)
             else {
                 return commit_integer_result(vm, request.id, 0);
+            };
+            let path = if snake_resources {
+                let Some(normalized) = Self::resource_storage_path(&path, false) else {
+                    return commit_integer_result(vm, request.id, 0);
+                };
+                normalized
+            } else {
+                path
+            };
+            let pending = if snake_resources {
+                PendingStorage::HostResourceStat {
+                    request: request.id,
+                    path: path.clone(),
+                    resource: false,
+                }
+            } else {
+                PendingStorage::HostStat {
+                    request: request.id,
+                }
             };
             return self.issue_host_storage(
                 vm,
                 request,
-                PendingStorage::HostStat {
-                    request: request.id,
-                },
+                pending,
                 StorageNamespace::Data,
                 StorageOperation::Stat,
                 path,
@@ -424,28 +527,51 @@ impl RuntimeSession {
         if name == "ENUMFILES" {
             *status = HostDispatchStatus::Handled;
             let Ok(directory) =
-                safe_relative_directory(string_argument_value(&request.arguments, 0, "ENUMFILES")?)
+                safe_relative_directory(string_argument_value(request, 0, "ENUMFILES")?)
             else {
                 return commit_integer_result(vm, request.id, -1);
             };
-            let pattern = request.arguments.get(1).and_then(|value| match value {
+            let pattern = request.argument(1).and_then(|value| match value {
                 VmValue::String(value) => Some(value.clone()),
                 _ => None,
             });
             let recursive =
-                matches!(request.arguments.get(2), Some(VmValue::Integer(value)) if *value != 0);
-            let target = request.arguments.get(3).and_then(|value| match value {
+                matches!(request.argument(2), Some(VmValue::Integer(value)) if *value != 0);
+            let target = request.argument(3).and_then(|value| match value {
                 VmValue::StringPlace(place) => Some(place.as_ref().clone()),
                 _ => None,
             });
-            return self.issue_host_storage(
-                vm,
-                request,
+            let directory = if snake_resources {
+                let Some(normalized) = Self::resource_storage_path(&directory, true) else {
+                    return commit_integer_result(vm, request.id, -1);
+                };
+                if !Self::resource_storage_pattern_valid(pattern.as_deref()) {
+                    return commit_integer_result(vm, request.id, -1);
+                }
+                normalized
+            } else {
+                directory
+            };
+            let pending = if snake_resources {
+                PendingStorage::HostResourceList {
+                    request: request.id,
+                    target,
+                    directory: directory.clone(),
+                    pattern: pattern.clone(),
+                    recursive,
+                    data_paths: None,
+                }
+            } else {
                 PendingStorage::HostListFiles {
                     request: request.id,
                     target,
                     strip_character_dat: false,
-                },
+                }
+            };
+            return self.issue_host_storage(
+                vm,
+                request,
+                pending,
                 StorageNamespace::Data,
                 StorageOperation::List { pattern, recursive },
                 directory,
@@ -454,8 +580,7 @@ impl RuntimeSession {
         if name == "FIND_CHARADATA" {
             *status = HostDispatchStatus::Handled;
             let pattern = request
-                .arguments
-                .first()
+                .argument(0)
                 .and_then(|value| match value {
                     VmValue::String(value) => Some(value.as_str()),
                     _ => None,
@@ -480,15 +605,14 @@ impl RuntimeSession {
         if name == "OUTPUTLOG" {
             *status = HostDispatchStatus::Handled;
             let filename = request
-                .arguments
-                .first()
+                .argument(0)
                 .and_then(|value| match value {
                     VmValue::String(value) if !value.is_empty() => Some(value.as_str()),
                     _ => None,
                 })
                 .unwrap_or("emuera.log");
             let path = safe_relative_path(filename)?;
-            let hide_info = matches!(request.arguments.get(1), Some(VmValue::Integer(1)));
+            let hide_info = matches!(request.argument(1), Some(VmValue::Integer(1)));
             let context = self.presentation_observation_context()?;
             return self.issue_host_service(
                 vm,

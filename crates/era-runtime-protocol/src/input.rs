@@ -127,6 +127,8 @@ pub struct InputWait {
     /// not use it to decide timeout completion.
     #[n(12)]
     pub countdown_remaining_ms: Option<u64>,
+    #[n(13)]
+    pub viewport_policy: crate::InputViewportPolicy,
 }
 
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -209,6 +211,14 @@ pub enum InputDeviceKind {
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]
 pub struct DeviceStateChanged {
+    /// Physical event order within this session epoch, starting at 1. Distinct
+    /// from envelope order: retransmitting one event under a new message ID is invalid.
+    #[n(6)]
+    pub event_sequence: u64,
+    #[n(7)]
+    pub toggle: bool,
+    #[n(8)]
+    pub repeat: bool,
     #[n(0)]
     pub device: InputDeviceKind,
     #[n(1)]

@@ -5,11 +5,13 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+erabasic-compat = { path = "../erabasic-compat" }
 blake3.workspace = true
 erabasic-ast = { path = "../erabasic-ast" }
 erabasic-bytecode = { path = "../erabasic-bytecode" }
 erabasic-data = { path = "../erabasic-data" }
 erabasic-html = { path = "../erabasic-html" }
+erabasic-lexer = { path = "../erabasic-lexer" }
 erabasic-parser = { path = "../erabasic-parser" }
 erabasic-validator = { path = "../erabasic-validator" }
 regex.workspace = true
@@ -20,8 +22,11 @@ serde_json = "1.0.112"
 zstd.workspace = true
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
+icu_collections = { version = "=2.2.0", default-features = false }
+zerovec = { version = "=0.11.6", default-features = false }
 
 [dev-dependencies]
+zerovec = { version = "=0.11.6", default-features = false, features = ["alloc"] }
 erabasic-analyzer = { path = "../erabasic-analyzer" }
 erabasic-compiler = { path = "../erabasic-compiler" }
 erabasic-csv = { path = "../erabasic-csv" }

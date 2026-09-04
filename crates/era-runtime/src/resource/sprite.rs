@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct SpriteDefinition {
     pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) revision: u64,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) frames: Vec<SpriteFrame>,
@@ -12,13 +14,18 @@ pub(crate) struct SpriteDefinition {
     pub(crate) position_x: i32,
     pub(crate) position_y: i32,
     pub(crate) canvas_id: Option<i64>,
+    pub(crate) canvas_revision: Option<u64>,
     pub(crate) canvas_rectangle: Option<[i32; 4]>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct SpriteFrame {
     pub(crate) image_path: String,
+    /// Exact project-resource identity captured when this frame is validated or created.
+    #[serde(default)]
+    pub(crate) content_digest: Option<[u8; 32]>,
     pub(crate) canvas_id: Option<i64>,
+    pub(crate) canvas_revision: Option<u64>,
     pub(crate) source_x: i32,
     pub(crate) source_y: i32,
     pub(crate) source_width: Option<u32>,

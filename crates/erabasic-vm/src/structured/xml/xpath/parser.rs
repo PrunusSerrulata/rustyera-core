@@ -3,23 +3,29 @@
 use super::{
     XPathAxis, XPathComparison, XPathExpression, XPathPath, XPathPredicate, XPathStep, XPathTest,
 };
+use crate::ExecutionFailure;
+use crate::structured::parse_failure;
 
-pub(super) fn parse_xpath(value: &str) -> Result<XPathExpression, String> {
+pub(super) fn parse_xpath(value: &str) -> Result<XPathExpression, ExecutionFailure> {
     let parts = split_xpath_top_level(value, '|')?;
     let paths = parts
         .into_iter()
         .map(|part| parse_xpath_path(part.trim()))
         .collect::<Result<Vec<_>, _>>()?;
     if paths.is_empty() {
-        return Err("native.xpath.unsupported: empty XPath expression".into());
+        return Err(parse_failure(
+            "native.xpath.unsupported: empty XPath expression",
+        ));
     }
     Ok(XPathExpression { paths })
 }
 
-fn parse_xpath_path(value: &str) -> Result<XPathPath, String> {
+fn parse_xpath_path(value: &str) -> Result<XPathPath, ExecutionFailure> {
     let value = value.trim();
     if value.is_empty() {
-        return Err("native.xpath.unsupported: empty location path".into());
+        return Err(parse_failure(
+            "native.xpath.unsupported: empty location path",
+        ));
     }
     if value == "." {
         return Ok(XPathPath {
@@ -65,7 +71,7 @@ fn parse_xpath_path(value: &str) -> Result<XPathPath, String> {
                     '[' => bracket_depth += 1,
                     ']' => {
                         bracket_depth = bracket_depth.checked_sub(1).ok_or_else(|| {
-                            "native.xpath.unsupported: malformed predicate".to_owned()
+                            parse_failure("native.xpath.unsupported: malformed predicate")
                         })?;
                     }
                     '/' if bracket_depth == 0 => break,
@@ -75,11 +81,15 @@ fn parse_xpath_path(value: &str) -> Result<XPathPath, String> {
             cursor += ch.len_utf8();
         }
         if quote.is_some() || bracket_depth != 0 {
-            return Err("native.xpath.unsupported: malformed predicate".into());
+            return Err(parse_failure(
+                "native.xpath.unsupported: malformed predicate",
+            ));
         }
         let part = value[start..cursor].trim();
         if part.is_empty() {
-            return Err("native.xpath.unsupported: empty location step".into());
+            return Err(parse_failure(
+                "native.xpath.unsupported: empty location step",
+            ));
         }
         steps.push(parse_xpath_step(part, next_axis)?);
         if cursor == value.len() {
@@ -94,26 +104,30 @@ fn parse_xpath_path(value: &str) -> Result<XPathPath, String> {
         }
     }
     if steps.is_empty() {
-        return Err("native.xpath.unsupported: empty location path".into());
+        return Err(parse_failure(
+            "native.xpath.unsupported: empty location path",
+        ));
     }
     Ok(XPathPath { absolute, steps })
 }
 
-fn parse_xpath_step(value: &str, mut axis: XPathAxis) -> Result<XPathStep, String> {
+fn parse_xpath_step(value: &str, mut axis: XPathAxis) -> Result<XPathStep, ExecutionFailure> {
     let first_predicate = find_xpath_top_level(value, '[')?;
     let (test, mut rest) =
         first_predicate.map_or((value, ""), |index| (&value[..index], &value[index..]));
     let test = test.trim();
     if let Some(name) = test.strip_prefix("descendant::") {
         if !matches!(axis, XPathAxis::Child) {
-            return Err("native.xpath.unsupported: combined explicit axes are unsupported".into());
+            return Err(parse_failure(
+                "native.xpath.unsupported: combined explicit axes are unsupported",
+            ));
         }
         axis = XPathAxis::Descendant;
         ensure_xpath_name(name)?;
     } else if test.contains("::") || test.contains(':') {
-        return Err(
-            "native.xpath.unsupported: namespace and axis expressions are unsupported".into(),
-        );
+        return Err(parse_failure(
+            "native.xpath.unsupported: namespace and axis expressions are unsupported",
+        ));
     }
     let test = if test == "text()" {
         XPathTest::Text
@@ -133,7 +147,9 @@ fn parse_xpath_step(value: &str, mut axis: XPathAxis) -> Result<XPathStep, Strin
     let mut predicates = Vec::new();
     while !rest.is_empty() {
         if !rest.starts_with('[') {
-            return Err("native.xpath.unsupported: malformed predicate".into());
+            return Err(parse_failure(
+                "native.xpath.unsupported: malformed predicate",
+            ));
         }
         let close = matching_xpath_delimiter(rest, 0, '[', ']')?;
         predicates.push(parse_xpath_predicate(&rest[1..close])?);
@@ -146,10 +162,10 @@ fn parse_xpath_step(value: &str, mut axis: XPathAxis) -> Result<XPathStep, Strin
     })
 }
 
-fn parse_xpath_predicate(value: &str) -> Result<XPathPredicate, String> {
+fn parse_xpath_predicate(value: &str) -> Result<XPathPredicate, ExecutionFailure> {
     let value = strip_xpath_parentheses(value.trim())?;
     if value.is_empty() {
-        return Err("native.xpath.unsupported: empty predicate".into());
+        return Err(parse_failure("native.xpath.unsupported: empty predicate"));
     }
     let parts = split_xpath_keyword(value, "or")?;
     if parts.len() > 1 {
@@ -195,7 +211,9 @@ fn parse_xpath_predicate(value: &str) -> Result<XPathPredicate, String> {
     if let Some(arguments) = xpath_function_argument(value, "contains")? {
         let arguments = split_xpath_top_level(arguments, ',')?;
         let [value, fragment] = arguments.as_slice() else {
-            return Err("native.xpath.unsupported: contains() requires two arguments".into());
+            return Err(parse_failure(
+                "native.xpath.unsupported: contains() requires two arguments",
+            ));
         };
         return Ok(XPathPredicate::Contains(
             Box::new(parse_xpath_predicate(value)?),
@@ -205,9 +223,9 @@ fn parse_xpath_predicate(value: &str) -> Result<XPathPredicate, String> {
     if let Some(arguments) = xpath_function_argument(value, "concat")? {
         let arguments = split_xpath_top_level(arguments, ',')?;
         if arguments.len() < 2 {
-            return Err(
-                "native.xpath.unsupported: concat() requires at least two arguments".into(),
-            );
+            return Err(parse_failure(
+                "native.xpath.unsupported: concat() requires at least two arguments",
+            ));
         }
         return Ok(XPathPredicate::Concat(
             arguments
@@ -240,18 +258,23 @@ fn parse_xpath_predicate(value: &str) -> Result<XPathPredicate, String> {
     Ok(XPathPredicate::Path(parse_xpath_path(value)?))
 }
 
-fn ensure_xpath_name(value: &str) -> Result<(), String> {
+fn ensure_xpath_name(value: &str) -> Result<(), ExecutionFailure> {
     if value.is_empty()
         || value != value.trim()
         || value.contains([':', '/', '[', ']', '(', ')', '@', '|'])
     {
-        Err("native.xpath.unsupported: namespace and axis expressions are unsupported".into())
+        Err(parse_failure(
+            "native.xpath.unsupported: namespace and axis expressions are unsupported",
+        ))
     } else {
         Ok(())
     }
 }
 
-fn xpath_function_argument<'a>(value: &'a str, name: &str) -> Result<Option<&'a str>, String> {
+fn xpath_function_argument<'a>(
+    value: &'a str,
+    name: &str,
+) -> Result<Option<&'a str>, ExecutionFailure> {
     let Some(rest) = value.strip_prefix(name) else {
         return Ok(None);
     };
@@ -265,7 +288,7 @@ fn xpath_function_argument<'a>(value: &'a str, name: &str) -> Result<Option<&'a 
     Ok(Some(&rest[1..close]))
 }
 
-fn strip_xpath_parentheses(mut value: &str) -> Result<&str, String> {
+fn strip_xpath_parentheses(mut value: &str) -> Result<&str, ExecutionFailure> {
     loop {
         if !value.starts_with('(') {
             return Ok(value);
@@ -278,7 +301,10 @@ fn strip_xpath_parentheses(mut value: &str) -> Result<&str, String> {
     }
 }
 
-fn split_xpath_keyword<'a>(value: &'a str, keyword: &str) -> Result<Vec<&'a str>, String> {
+fn split_xpath_keyword<'a>(
+    value: &'a str,
+    keyword: &str,
+) -> Result<Vec<&'a str>, ExecutionFailure> {
     let mut output = Vec::new();
     let mut start = 0;
     for (cursor, _) in value.char_indices() {
@@ -302,7 +328,7 @@ fn split_xpath_keyword<'a>(value: &'a str, keyword: &str) -> Result<Vec<&'a str>
     Ok(output)
 }
 
-fn split_xpath_top_level(value: &str, delimiter: char) -> Result<Vec<&str>, String> {
+fn split_xpath_top_level(value: &str, delimiter: char) -> Result<Vec<&str>, ExecutionFailure> {
     let mut output = Vec::new();
     let mut start = 0;
     for (index, ch) in value.char_indices() {
@@ -313,12 +339,14 @@ fn split_xpath_top_level(value: &str, delimiter: char) -> Result<Vec<&str>, Stri
     }
     output.push(value[start..].trim());
     if output.iter().any(|part| part.is_empty()) {
-        return Err("native.xpath.unsupported: malformed union expression".into());
+        return Err(parse_failure(
+            "native.xpath.unsupported: malformed union expression",
+        ));
     }
     Ok(output)
 }
 
-fn find_xpath_top_level(value: &str, needle: char) -> Result<Option<usize>, String> {
+fn find_xpath_top_level(value: &str, needle: char) -> Result<Option<usize>, ExecutionFailure> {
     for (index, ch) in value.char_indices() {
         if ch == needle && xpath_is_top_level(value, index)? {
             return Ok(Some(index));
@@ -327,7 +355,10 @@ fn find_xpath_top_level(value: &str, needle: char) -> Result<Option<usize>, Stri
     Ok(None)
 }
 
-fn find_xpath_top_level_operator(value: &str, operator: &str) -> Result<Option<usize>, String> {
+fn find_xpath_top_level_operator(
+    value: &str,
+    operator: &str,
+) -> Result<Option<usize>, ExecutionFailure> {
     for (cursor, _) in value.char_indices() {
         if value[cursor..].starts_with(operator) && xpath_is_top_level(value, cursor)? {
             return Ok(Some(cursor));
@@ -336,12 +367,12 @@ fn find_xpath_top_level_operator(value: &str, operator: &str) -> Result<Option<u
     Ok(None)
 }
 
-fn xpath_is_top_level(value: &str, index: usize) -> Result<bool, String> {
+fn xpath_is_top_level(value: &str, index: usize) -> Result<bool, ExecutionFailure> {
     xpath_depths(value, index)
         .map(|(brackets, parentheses, quote)| brackets == 0 && parentheses == 0 && quote.is_none())
 }
 
-fn xpath_depths(value: &str, end: usize) -> Result<(usize, usize, Option<char>), String> {
+fn xpath_depths(value: &str, end: usize) -> Result<(usize, usize, Option<char>), ExecutionFailure> {
     let mut brackets = 0usize;
     let mut parentheses = 0usize;
     let mut quote = None;
@@ -356,14 +387,14 @@ fn xpath_depths(value: &str, end: usize) -> Result<(usize, usize, Option<char>),
             '\'' | '"' => quote = Some(ch),
             '[' => brackets += 1,
             ']' => {
-                brackets = brackets
-                    .checked_sub(1)
-                    .ok_or_else(|| "native.xpath.unsupported: malformed predicate".to_owned())?;
+                brackets = brackets.checked_sub(1).ok_or_else(|| {
+                    parse_failure("native.xpath.unsupported: malformed predicate")
+                })?;
             }
             '(' => parentheses += 1,
             ')' => {
                 parentheses = parentheses.checked_sub(1).ok_or_else(|| {
-                    "native.xpath.unsupported: malformed function call".to_owned()
+                    parse_failure("native.xpath.unsupported: malformed function call")
                 })?;
             }
             _ => {}
@@ -377,7 +408,7 @@ fn matching_xpath_delimiter(
     open_index: usize,
     open: char,
     close: char,
-) -> Result<usize, String> {
+) -> Result<usize, ExecutionFailure> {
     let mut depth = 0usize;
     let mut quote = None;
     for (relative, ch) in value[open_index..].char_indices() {
@@ -391,9 +422,9 @@ fn matching_xpath_delimiter(
             '\'' | '"' => quote = Some(ch),
             candidate if candidate == open => depth += 1,
             candidate if candidate == close => {
-                depth = depth
-                    .checked_sub(1)
-                    .ok_or_else(|| "native.xpath.unsupported: malformed expression".to_owned())?;
+                depth = depth.checked_sub(1).ok_or_else(|| {
+                    parse_failure("native.xpath.unsupported: malformed expression")
+                })?;
                 if depth == 0 {
                     return Ok(open_index + relative);
                 }
@@ -401,5 +432,7 @@ fn matching_xpath_delimiter(
             _ => {}
         }
     }
-    Err("native.xpath.unsupported: unclosed expression".into())
+    Err(parse_failure(
+        "native.xpath.unsupported: unclosed expression",
+    ))
 }

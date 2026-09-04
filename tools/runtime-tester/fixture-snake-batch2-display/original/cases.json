@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "original": { "semantic_version": 1, "policy_version": 1 }
+  },
+  "evidenceStatus": "batch_2e_dynamic_observation_not_a_golden",
+  "loadExpect": { "ok": true, "result": { "termination": "waitingInput" } },
+  "allowedOracles": ["original"],
+  "cases": [
+    {
+      "id": "display-original-timer-expression",
+      "group": "DISPLAY_STATE",
+      "targetBatch": 2,
+      "rustCurrentPolicy": "batch_2E_candidate_not_validated",
+      "snakeTargetStatus": "original_profile_baseline",
+      "allowedOracles": ["original"],
+      "requireSuccessfulLoad": true,
+      "observation": true,
+      "expectationStatus": "compare_actual_observables",
+      "requests": [{ "request": { "op": "run", "entry": "PROBE_ORIGINAL_TIMER", "watch": ["FLAG:0", "FLAG:1", "FLAG:2"] } }]
+    },
+    {
+      "id": "display-original-negative-history",
+      "group": "DISPLAY_STATE",
+      "targetBatch": 2,
+      "rustCurrentPolicy": "batch_2E_candidate_not_validated",
+      "snakeTargetStatus": "original_profile_baseline",
+      "allowedOracles": ["original"],
+      "requireSuccessfulLoad": true,
+      "observation": true,
+      "expectationStatus": "compare_actual_observables",
+      "requests": [{ "request": { "op": "run", "entry": "PROBE_ORIGINAL_HISTORY", "watch": ["RESULTS:0"] } }]
+    }
+  ]
+}

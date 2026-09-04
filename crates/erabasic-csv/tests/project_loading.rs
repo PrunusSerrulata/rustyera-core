@@ -1,11 +1,14 @@
+use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
 use erabasic_csv::{
-    CsvDiagnosticCode, CsvLoadOptions, FilePayload, FrontendFile, FrontendIoError,
-    FrontendIoErrorKind, ProjectFiles, load_project, load_project_owned, resolve_deferred_indices,
+    CsvDiagnosticCode, CsvDiagnosticSeverity, CsvLoadOptions, FilePayload, FrontendFile,
+    FrontendIoError, FrontendIoErrorKind, ProjectFiles, load_project, load_project_owned,
+    resolve_deferred_indices,
 };
 use erabasic_data::{CharacterSelection, NameTableKind, UserIndexRegistration};
 
 fn file(path: &str, content: &str) -> FrontendFile {
     FrontendFile {
+        source_path: None,
         relative_path: path.into(),
         payload: FilePayload::Utf8(content.into()),
     }
@@ -18,6 +21,132 @@ fn full_project_options() -> CsvLoadOptions {
         compatible_sp_character: true,
         ..CsvLoadOptions::default()
     }
+}
+
+fn profile_options(profile: CompatibilityProfileId) -> CsvLoadOptions {
+    CsvLoadOptions {
+        compatibility: CompatibilityIdentity::for_profile(profile),
+        ..CsvLoadOptions::default()
+    }
+}
+
+#[test]
+fn character_name_indexes_use_raw_fields_and_no_order_before_callname_fallback() {
+    let mut files = ProjectFiles {
+        csv: vec![
+            file(
+                "CHARA90.CSV",
+                "NO,9\nNAME,Shared\nCALLNAME,Call\nNICKNAME,Nick\nMASTERNAME,Master\n",
+            ),
+            file(
+                "CHARA20.CSV",
+                "NO,2\nNAME,replaced\nNAME,Shared\nCALLNAME,Call\nNICKNAME,Nick\nMASTERNAME,Master\n",
+            ),
+            file("CHARA1.CSV", "NO,1\nNAME,OnlyName\n"),
+            file(
+                "CHARA30.CSV",
+                "NO,3\nNAME,\nCALLNAME,\nNICKNAME,\nMASTERNAME,\n",
+            ),
+            file("CHARA21.CSV", "NO,2\nNAME,Special\nCFLAG,0,1\n"),
+        ],
+        erb: Vec::new(),
+    };
+    for reverse in [false, true] {
+        if reverse {
+            files.csv.reverse();
+        }
+        for compatible_call_name in [false, true] {
+            let options = CsvLoadOptions {
+                compatible_call_name,
+                compatible_sp_character: true,
+                ..profile_options(CompatibilityProfileId::EmueraSkiaSnake)
+            };
+            let project = load_project(&files, &options).data.unwrap();
+            let lookup = &project.static_data.character_name_lookup;
+            for (table, key) in [
+                (&lookup.names, "Shared"),
+                (&lookup.call_names, "Call"),
+                (&lookup.nick_names, "Nick"),
+                (&lookup.master_names, "Master"),
+            ] {
+                assert_eq!(table.get(key), Some(&2), "{key}: reverse={reverse}");
+                assert_eq!(table.get(""), Some(&3));
+                assert!(!table.contains_key(&key.to_ascii_lowercase()));
+            }
+            assert_eq!(lookup.names.get("OnlyName"), Some(&1));
+            assert_eq!(lookup.names.get("Special"), Some(&2));
+            assert!(!lookup.names.contains_key("replaced"));
+            assert!(!lookup.call_names.contains_key("OnlyName"));
+            assert!(!lookup.call_names.contains_key("Special"));
+            let template = project
+                .static_data
+                .characters
+                .iter()
+                .find(|item| item.no == 1)
+                .unwrap();
+            assert_eq!(
+                template.call_name,
+                if compatible_call_name { "OnlyName" } else { "" }
+            );
+        }
+    }
+}
+
+#[test]
+fn raw_callname_presence_changes_project_data_even_when_normalized_templates_match() {
+    let load = |content| {
+        load_project(
+            &ProjectFiles {
+                csv: vec![file("CHARA7.CSV", content)],
+                erb: Vec::new(),
+            },
+            &CsvLoadOptions {
+                compatible_call_name: true,
+                ..CsvLoadOptions::default()
+            },
+        )
+        .data
+        .unwrap()
+    };
+    let missing = load("NO,7\nNAME,Alice\n");
+    let explicit_empty = load("NO,7\nNAME,Alice\nCALLNAME,\n");
+    assert_eq!(
+        missing.static_data.characters,
+        explicit_empty.static_data.characters
+    );
+    assert_eq!(
+        missing.save_load_context(),
+        explicit_empty.save_load_context()
+    );
+    assert_eq!(missing.new_game_seed(), explicit_empty.new_game_seed());
+    assert!(
+        missing
+            .static_data
+            .character_name_lookup
+            .call_names
+            .is_empty()
+    );
+    assert_eq!(
+        explicit_empty
+            .static_data
+            .character_name_lookup
+            .call_names
+            .get(""),
+        Some(&7)
+    );
+    assert_ne!(
+        serde_json::to_vec(&missing).unwrap(),
+        serde_json::to_vec(&explicit_empty).unwrap()
+    );
+    let serialized = serde_json::to_value(&explicit_empty).unwrap();
+    let decoded: erabasic_data::ProjectData = serde_json::from_value(serialized.clone()).unwrap();
+    assert_eq!(decoded, explicit_empty);
+    let mut incomplete = serialized;
+    incomplete["static_data"]
+        .as_object_mut()
+        .unwrap()
+        .remove("character_name_lookup");
+    assert!(serde_json::from_value::<erabasic_data::ProjectData>(incomplete).is_err());
 }
 
 #[test]
@@ -197,6 +326,7 @@ fn reports_frontend_errors_but_treats_not_found_as_absent() {
     let files = ProjectFiles {
         csv: vec![
             FrontendFile {
+                source_path: None,
                 relative_path: "missing.csv".into(),
                 payload: FilePayload::IoError(FrontendIoError {
                     kind: FrontendIoErrorKind::NotFound,
@@ -204,6 +334,7 @@ fn reports_frontend_errors_but_treats_not_found_as_absent() {
                 }),
             },
             FrontendFile {
+                source_path: None,
                 relative_path: "denied.csv".into(),
                 payload: FilePayload::IoError(FrontendIoError {
                     kind: FrontendIoErrorKind::PermissionDenied,
@@ -294,32 +425,310 @@ fn duplicate_deferred_key_is_fatal_for_that_registration() {
         csv: vec![file("KEY.csv", "0,same\n")],
         erb: vec![file("KEY.erd", "1,same\n")],
     };
-    let mut project = load_project(&files, &CsvLoadOptions::default())
-        .data
-        .unwrap();
-    let diagnostics = resolve_deferred_indices(
-        &mut project,
-        &[UserIndexRegistration {
-            variable_name: "V".into(),
-            source_stem: "KEY".into(),
-            dimension: None,
-            length: 2,
-        }],
-        &CsvLoadOptions::default(),
-    );
+    for profile in [
+        CompatibilityProfileId::EmueraEm,
+        CompatibilityProfileId::EmueraSkiaSnake,
+    ] {
+        let options = profile_options(profile);
+        let mut project = load_project(&files, &options).data.unwrap();
+        let diagnostics = resolve_deferred_indices(
+            &mut project,
+            &[UserIndexRegistration {
+                variable_name: "V".into(),
+                source_stem: "KEY".into(),
+                dimension: None,
+                length: 2,
+            }],
+            &options,
+        );
+        assert!(
+            !project
+                .static_data
+                .deferred_indices
+                .resolved
+                .contains_key("V")
+        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == CsvDiagnosticCode::DuplicateUserIndex
+                && diagnostic.severity == CsvDiagnosticSeverity::Fatal
+        }));
+    }
+}
 
-    assert!(
-        !project
-            .static_data
-            .deferred_indices
-            .resolved
-            .contains_key("V")
+#[test]
+fn user_aliases_preserve_signed_indices_and_primary_names_only_for_snake() {
+    let files = ProjectFiles {
+        csv: vec![
+            file("BUFF.csv", "0,primary\n10,z_primary\n"),
+            file(
+                "BUFF.als",
+                "10, a_alias \n11,eleven\n300,far\n-1,negative\n-2147483648,min\n2147483647,max\n11,primary\n11,eleven\n300,eleven\n1,   \n",
+            ),
+        ],
+        erb: vec![],
+    };
+    for profile in [
+        CompatibilityProfileId::EmueraEm,
+        CompatibilityProfileId::EmueraSkiaSnake,
+    ] {
+        let options = profile_options(profile);
+        let mut project = load_project(&files, &options).data.unwrap();
+        let diagnostics = resolve_deferred_indices(
+            &mut project,
+            &[UserIndexRegistration {
+                variable_name: "BUFF".into(),
+                source_stem: "BUFF".into(),
+                dimension: None,
+                length: 50,
+            }],
+            &options,
+        );
+        assert!(diagnostics.is_empty());
+        let resolved = &project.static_data.deferred_indices.resolved["BUFF"];
+        assert_eq!(resolved.entries["primary"], 0);
+        assert_eq!(resolved.canonical_names[&10], "z_primary");
+        if profile == CompatibilityProfileId::EmueraSkiaSnake {
+            assert_eq!(resolved.entries["a_alias"], 10);
+            assert_eq!(resolved.entries["eleven"], 11);
+            assert_eq!(resolved.entries["far"], 300);
+            assert_eq!(resolved.entries["negative"], -1);
+            assert_eq!(resolved.entries["min"], i64::from(i32::MIN));
+            assert_eq!(resolved.entries["max"], i64::from(i32::MAX));
+            assert_eq!(resolved.canonical_names[&-1], "negative");
+            assert!(!resolved.entries.contains_key(""));
+            assert!(!resolved.entries.contains_key(" a_alias "));
+        } else {
+            assert_eq!(resolved.entries.len(), 2);
+        }
+        let encoded = serde_json::to_string(&project).unwrap();
+        let decoded: erabasic_data::ProjectData = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, project);
+    }
+}
+
+#[test]
+fn deferred_aliases_follow_primary_group_order_and_same_directory_root() {
+    let files = ProjectFiles {
+        csv: vec![
+            file("buff.csv", "0,main_from_csv\n"),
+            file("buff.als", "300,shared\n11,csv_only\n"),
+        ],
+        erb: vec![
+            file("z/buff.erd", "0,erd_z\n"),
+            file("z/buff.als", "300,shared\n"),
+            file("a/buff.erd", "0,erd_a\n"),
+            file(
+                "a/buff.als",
+                "11,shared\n1,main_from_csv\n300,z_alias\n300,a_alias\n",
+            ),
+            file("buff.erd", "0,erd_root\n"),
+            file("buff.als", "10,shared\n10,erb_only\n"),
+            file("orphan/buff.als", "1,orphan\n"),
+        ],
+    };
+    for profile in [
+        CompatibilityProfileId::EmueraEm,
+        CompatibilityProfileId::EmueraSkiaSnake,
+    ] {
+        let options = profile_options(profile);
+        let mut project = load_project(&files, &options).data.unwrap();
+        let diagnostics = resolve_deferred_indices(
+            &mut project,
+            &[UserIndexRegistration {
+                variable_name: "BUFF".into(),
+                source_stem: "BUFF".into(),
+                dimension: None,
+                length: 50,
+            }],
+            &options,
+        );
+        assert!(diagnostics.is_empty());
+        let resolved = &project.static_data.deferred_indices.resolved["BUFF"];
+        assert_eq!(resolved.entries["main_from_csv"], 0);
+        if profile == CompatibilityProfileId::EmueraSkiaSnake {
+            assert_eq!(resolved.canonical_names[&0], "erd_a");
+            assert_eq!(resolved.canonical_names[&300], "z_alias");
+            assert_eq!(resolved.entries["shared"], 11);
+            assert_eq!(resolved.entries["csv_only"], 11);
+            assert_eq!(resolved.entries["erb_only"], 10);
+            assert!(!resolved.entries.contains_key("orphan"));
+        } else {
+            assert_eq!(resolved.canonical_names[&0], "main_from_csv");
+            assert_eq!(resolved.entries.len(), 4);
+        }
+    }
+}
+
+#[test]
+fn multidimensional_user_aliases_require_registered_primary_tables_and_use_erd() {
+    let files = ProjectFiles {
+        csv: vec![file("ORPHAN.als", "1,ignored\n")],
+        erb: vec![
+            file("columns/COLUMNDIV@2.ERD", "10,column\n"),
+            file("columns/COLUMNDIV@2.als", "11,column_alias\n"),
+            file("matrix/SEMEN_MATRIX@2.ERD", "11,matrix\n"),
+            file("matrix/SEMEN_MATRIX@2.als", "300,matrix_alias\n"),
+        ],
+    };
+    let registrations = [
+        UserIndexRegistration {
+            variable_name: "COLUMNDIV".into(),
+            source_stem: "COLUMNDIV@2".into(),
+            dimension: Some(2),
+            length: 12,
+        },
+        UserIndexRegistration {
+            variable_name: "SEMEN_MATRIX".into(),
+            source_stem: "SEMEN_MATRIX@2".into(),
+            dimension: Some(2),
+            length: 12,
+        },
+        UserIndexRegistration {
+            variable_name: "ORPHAN".into(),
+            source_stem: "ORPHAN".into(),
+            dimension: None,
+            length: 12,
+        },
+    ];
+    let options = profile_options(CompatibilityProfileId::EmueraSkiaSnake);
+    let mut project = load_project(&files, &options).data.unwrap();
+    assert!(resolve_deferred_indices(&mut project, &registrations, &options).is_empty());
+    let resolved = &project.static_data.deferred_indices.resolved;
+    assert_eq!(resolved["COLUMNDIV@2"].entries["column_alias"], 11);
+    assert_eq!(resolved["SEMEN_MATRIX@2"].entries["matrix_alias"], 300);
+    assert!(!resolved.contains_key("ORPHAN"));
+
+    let disabled = CsvLoadOptions {
+        use_erd: false,
+        ..options
+    };
+    let mut project = load_project(&files, &disabled).data.unwrap();
+    assert!(project.static_data.deferred_indices.groups.is_empty());
+    assert!(resolve_deferred_indices(&mut project, &registrations, &disabled).is_empty());
+    assert!(project.static_data.deferred_indices.resolved.is_empty());
+}
+
+#[test]
+fn builtin_alias_duplicate_recovery_and_trimming_are_profile_scoped() {
+    let files = ProjectFiles {
+        csv: vec![
+            file("CFLAG.csv", "0,primary\n"),
+            file(
+                "CFLAG.als",
+                "10, trimmed \n11,shared\n11,another\n300,shared\n300,later\n-1,negative\n11,primary\n",
+            ),
+        ],
+        erb: vec![],
+    };
+    for profile in [
+        CompatibilityProfileId::EmueraEm,
+        CompatibilityProfileId::EmueraSkiaSnake,
+    ] {
+        let report = load_project(&files, &profile_options(profile));
+        let project = report.data.unwrap();
+        let table = &project.static_data.name_tables[&NameTableKind::Cflag];
+        assert_eq!(table.lookup["primary"], 0);
+        assert_eq!(table.lookup["shared"], 11);
+        let duplicate = report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == CsvDiagnosticCode::DuplicateAlias)
+            .unwrap();
+        if profile == CompatibilityProfileId::EmueraSkiaSnake {
+            assert_eq!(table.lookup["trimmed"], 10);
+            assert_eq!(table.lookup["another"], 11);
+            assert_eq!(table.lookup["later"], 300);
+            assert_eq!(table.lookup["negative"], -1);
+            assert_eq!(duplicate.severity, CsvDiagnosticSeverity::Warning);
+            assert!(
+                !report
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| { diagnostic.code == CsvDiagnosticCode::DuplicateIndex })
+            );
+        } else {
+            assert_eq!(table.lookup[" trimmed "], 10);
+            assert!(!table.lookup.contains_key("later"));
+            assert!(!table.lookup.contains_key("negative"));
+            assert_eq!(duplicate.severity, CsvDiagnosticSeverity::Error);
+            assert!(
+                report
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| { diagnostic.code == CsvDiagnosticCode::DuplicateIndex })
+            );
+        }
+    }
+}
+
+#[test]
+fn deferred_primary_duplicates_and_invalid_aliases_keep_distinct_error_paths() {
+    let files = ProjectFiles {
+        csv: vec![
+            file(
+                "BUFF.csv",
+                "1,discarded\n1,kept\n-1,negative_main\n50,too_large_main\n",
+            ),
+            file(
+                "BUFF.als",
+                "broken\n2147483648,too_large_integer\n11,valid\n",
+            ),
+        ],
+        erb: vec![],
+    };
+    let options = profile_options(CompatibilityProfileId::EmueraSkiaSnake);
+    let registration = UserIndexRegistration {
+        variable_name: "BUFF".into(),
+        source_stem: "BUFF".into(),
+        dimension: None,
+        length: 50,
+    };
+    let mut project = load_project(&files, &options).data.unwrap();
+    let diagnostics = resolve_deferred_indices(&mut project, &[registration], &options);
+    let resolved = &project.static_data.deferred_indices.resolved["BUFF"];
+    assert_eq!(
+        resolved.entries,
+        [("kept".into(), 1), ("valid".into(), 11)]
+            .into_iter()
+            .collect()
     );
-    assert!(
+    assert_eq!(
         diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == CsvDiagnosticCode::DuplicateUserIndex)
+            .map(|diagnostic| diagnostic.code)
+            .collect::<Vec<_>>(),
+        [
+            CsvDiagnosticCode::DuplicateIndex,
+            CsvDiagnosticCode::IndexOutOfRange,
+            CsvDiagnosticCode::IndexOutOfRange,
+            CsvDiagnosticCode::MissingComma,
+            CsvDiagnosticCode::InvalidInteger,
+        ]
     );
+}
+
+#[test]
+fn missing_submitted_alias_and_erd_inputs_are_reported() {
+    let missing = |path: &str| FrontendFile {
+        source_path: None,
+        relative_path: path.into(),
+        payload: FilePayload::IoError(FrontendIoError {
+            kind: FrontendIoErrorKind::NotFound,
+            message: "file disappeared after scanning".into(),
+        }),
+    };
+    let files = ProjectFiles {
+        csv: vec![missing("BUFF.als"), missing("optional.csv")],
+        erb: vec![missing("nested/BUFF.ERD")],
+    };
+    let report = load_project(&files, &CsvLoadOptions::default());
+    let failed_paths: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == CsvDiagnosticCode::IoError)
+        .map(|diagnostic| diagnostic.source.as_ref().unwrap().relative_path.as_str())
+        .collect();
+    assert_eq!(failed_paths, ["BUFF.als", "nested/BUFF.ERD"]);
 }
 
 #[test]

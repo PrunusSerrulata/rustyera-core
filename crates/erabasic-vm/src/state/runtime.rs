@@ -1,5 +1,6 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
+use crate::state::array_leases::ArrayLeases;
 
 pub(super) fn replace_cell_values(
     cell: &mut VariableCell,
@@ -17,6 +18,7 @@ impl VmRuntimeStatePort for Vm {
             .collect()
     }
 
+    #[allow(clippy::too_many_lines)] // The transaction is prepared atomically in one cloned state.
     fn prepare_runtime_state(
         &self,
         transaction: VmRuntimeStateTransaction,
@@ -28,7 +30,16 @@ impl VmRuntimeStatePort for Vm {
                 | VmRuntimeStateTransaction::RestoreOrdinary(_)
                 | VmRuntimeStateTransaction::RestoreOrdinaryWithLastLoad { .. }
         );
+        if reset_execution && !self.memory.array_leases.protected.is_empty() {
+            return Err(VmError::InvalidState(
+                "cannot reset an isolated candidate with protected parent array leases".into(),
+            ));
+        }
+        let base_array_stamp = self.array_lease_stamp()?;
         let mut memory = prepare_transaction_memory(artifact, &self.memory, &transaction)?;
+        if reset_execution {
+            memory.array_leases = ArrayLeases::default();
+        }
         if let VmRuntimeStateTransaction::Mutate {
             writes,
             fills,
@@ -37,6 +48,9 @@ impl VmRuntimeStatePort for Vm {
         } = transaction
         {
             if clear_characters {
+                memory
+                    .array_leases
+                    .remap_characters(None, &memory.characters, &[])?;
                 memory.characters.clear();
             }
             for csv_number in add_characters_from_csv {
@@ -116,6 +130,9 @@ impl VmRuntimeStatePort for Vm {
             memory,
             reset_execution,
             structured_state: None,
+            base_column_stamp: None,
+            base_map_stamp: None,
+            base_array_stamp,
         })
     }
 
@@ -125,6 +142,7 @@ impl VmRuntimeStatePort for Vm {
                 "runtime state transaction belongs to a stale generation".into(),
             ));
         }
+        self.validate_array_lease_stamp(&prepared.base_array_stamp)?;
         self.memory = prepared.memory;
         if prepared.reset_execution {
             self.clear_execution();
@@ -143,7 +161,12 @@ fn prepare_transaction_memory(
             crate::save::prepare_new_game_memory(artifact, current)
         }
         VmRuntimeStateTransaction::ResetGameData => {
-            crate::save::prepare_reset_game_memory(artifact, current)
+            let mut memory = crate::save::prepare_reset_game_memory(artifact, current);
+            memory.array_leases = current.array_leases.clone();
+            memory
+                .array_leases
+                .remap_characters(None, &current.characters, &[])?;
+            memory
         }
         VmRuntimeStateTransaction::ResetGlobalData => {
             crate::save::prepare_reset_global_memory(artifact, current)

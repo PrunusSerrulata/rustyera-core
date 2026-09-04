@@ -27,12 +27,14 @@ pub(crate) struct Memory {
     pub statics: VariableMap,
     pub characters: Vec<VariableMap>,
     pub legacy: BTreeMap<GenerationId, LegacyMemory>,
+    pub(crate) array_leases: crate::state::array_leases::ArrayLeases,
     #[serde(skip)]
     initialized_static_functions: StaticInitializationCache,
 }
 
 impl Memory {
     pub(crate) fn materialize_snapshot(&mut self) -> Result<(), String> {
+        self.array_leases.materialize_snapshot()?;
         for cell in self
             .shared
             .values_mut()
@@ -483,6 +485,16 @@ impl Memory {
                 BytecodeStorage::FunctionLocal => {}
             }
         }
+        self.array_leases.migrate_generation(
+            old_generation,
+            &legacy.shared.keys().copied().collect(),
+            &legacy.statics.keys().copied().collect(),
+            &legacy
+                .characters
+                .iter()
+                .flat_map(|row| row.keys().copied())
+                .collect(),
+        );
         for definition in &target.globals {
             let old_definition = old.globals.iter().find(|old| old.key == definition.key);
             let changed = old_definition.is_none_or(|old| old.dimensions != definition.dimensions);

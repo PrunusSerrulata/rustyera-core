@@ -43,6 +43,25 @@ impl Vm {
         arguments: Vec<VmValue>,
         natives: &mut NativeServiceRegistry,
     ) -> Result<(NativeReady, Option<Vec<u8>>), StepError> {
+        self.call_registered_native_with_omissions(
+            fiber,
+            key,
+            import,
+            arguments,
+            Vec::new(),
+            natives,
+        )
+    }
+
+    pub(super) fn call_registered_native_with_omissions(
+        &mut self,
+        fiber: &mut Fiber,
+        key: SymbolKey,
+        import: erabasic_bytecode::RuntimeImport,
+        arguments: Vec<VmValue>,
+        omitted_arguments: Vec<usize>,
+        natives: &mut NativeServiceRegistry,
+    ) -> Result<(NativeReady, Option<Vec<u8>>), StepError> {
         let places = native_place_views(self, fiber, &arguments).map_err(map_vm_error)?;
         let implicit_place_names = natives
             .implicit_place_names(key)
@@ -52,17 +71,31 @@ impl Vm {
         let rollback = natives
             .checkpoint(key)
             .map_err(|error| StepError::new(VmFaultCode::Native, error))?;
-        let ready = natives
-            .call(
-                key,
-                NativeCallRequest {
-                    import,
-                    arguments,
-                    places,
-                    implicit_places,
-                },
-            )
-            .map_err(|error| StepError::new(VmFaultCode::Native, error))?;
+        let ready = match natives.call(
+            key,
+            NativeCallRequest {
+                service_key: key,
+                omitted_arguments,
+                import,
+                arguments,
+                places,
+                implicit_places,
+            },
+        ) {
+            Ok(ready) => ready,
+            Err(error) => {
+                if let Some(state) = &rollback {
+                    natives.rollback(key, state).map_err(|failure| {
+                        StepError::classified(
+                            crate::FaultCategory::HostContract,
+                            VmFaultCode::Native,
+                            format!("native rollback failed: {failure}"),
+                        )
+                    })?;
+                }
+                return Err(error);
+            }
+        };
         Ok((ready, rollback))
     }
 
@@ -251,6 +284,7 @@ impl Vm {
         self.fill_place_array_range(
             fiber,
             &PlaceDescriptor {
+                backing: None,
                 variable: target.key,
                 indices: Vec::new(),
                 character: None,
@@ -315,19 +349,18 @@ impl Vm {
         code: VmFaultCode,
         message: impl Into<String>,
     ) -> VmFault {
+        self.make_classified_fault(fiber, position, super::StepError::new(code, message))
+    }
+
+    pub(super) fn make_classified_fault(
+        &self,
+        fiber: FiberId,
+        position: &InstructionPosition<'_>,
+        failure: super::StepError,
+    ) -> VmFault {
         let command = self.command_for_position(position);
         let origin = self.execution_origin(position, &command);
-        VmFault {
-            code,
-            message: message.into(),
-            fiber,
-            generation: position.generation,
-            function: position.function,
-            function_name: origin.function_name,
-            instruction: u32::try_from(position.instruction).unwrap_or(u32::MAX),
-            command,
-            source: origin.source,
-        }
+        VmFault::from_origin(fiber, origin, failure)
     }
 
     pub(super) fn execution_origin(

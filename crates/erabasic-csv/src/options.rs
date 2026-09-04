@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct CsvLoadOptions {
+    #[serde(default)]
+    pub compatibility: erabasic_compat::CompatibilityIdentity,
     pub ignore_case: bool,
     pub use_rename_file: bool,
     pub use_replace_file: bool,
@@ -20,6 +22,7 @@ pub struct CsvLoadOptions {
 impl Default for CsvLoadOptions {
     fn default() -> Self {
         Self {
+            compatibility: erabasic_compat::CompatibilityIdentity::default(),
             ignore_case: true,
             use_rename_file: false,
             use_replace_file: true,

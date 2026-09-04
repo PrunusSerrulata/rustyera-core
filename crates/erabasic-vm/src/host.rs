@@ -9,9 +9,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::memory::SymbolKeyHasher;
 use crate::sfmt::Sfmt19937;
-use crate::structured::{StructuredExtension, StructuredScope};
+use crate::structured::{ColumnIdentityStamp, StructuredExtension, StructuredScope};
 use crate::structured::{StructuredNative, StructuredState, bundle_key, is_structured_name};
-use crate::{FiberId, HostRequestId, HostWrite, PlaceDescriptor, VmExecutionOrigin, VmValue};
+use crate::{
+    ExecutionFailure, FaultCategory, FiberId, HostRequestId, HostWrite, PlaceDescriptor,
+    ScriptFaultKind, VmExecutionOrigin, VmFaultCode, VmValue,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -22,6 +25,8 @@ pub enum HostWaitStability {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HostCallRequest {
+    /// Explicit omitted source slots, separate from a real Integer MIN value.
+    pub omitted_arguments: Vec<usize>,
     pub id: HostRequestId,
     pub fiber: FiberId,
     pub import: RuntimeImport,
@@ -38,6 +43,7 @@ pub struct ImmediateHostCall<'a> {
     pub import: &'a HostImport,
     pub normalized_name: &'a str,
     pub arguments: &'a [VmValue],
+    pub omitted_arguments: &'a [usize],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -72,7 +78,7 @@ pub enum HostCallResult {
         stability: HostWaitStability,
         rebind_payload: Vec<u8>,
     },
-    Error(String),
+    Error(ExecutionFailure),
     /// Runtime-port adapter sentinel. Unlike `Pending`, this only unwinds the
     /// interpreter; the runtime must immediately classify the captured request.
     Deferred,
@@ -117,6 +123,9 @@ pub trait VmHost {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NativeCallRequest {
+    /// Registry/transaction key. Dynamic physical import.key is deliberately separate.
+    pub service_key: SymbolKey,
+    pub omitted_arguments: Vec<usize>,
     pub import: RuntimeImport,
     pub arguments: Vec<VmValue>,
     /// Immutable snapshots of place arguments. Native services cannot dereference
@@ -125,6 +134,15 @@ pub struct NativeCallRequest {
     pub places: Vec<NativePlaceView>,
     /// Reference pseudo-variables used by legacy multi-result functions.
     pub implicit_places: BTreeMap<String, NativePlaceView>,
+}
+
+impl NativeCallRequest {
+    #[must_use]
+    pub fn argument(&self, index: usize) -> Option<&VmValue> {
+        (!self.omitted_arguments.contains(&index))
+            .then(|| self.arguments.get(index))
+            .flatten()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -161,7 +179,7 @@ pub trait NativeService: Send {
     /// # Errors
     ///
     /// Returns an error when the service rejects the request or cannot produce a result.
-    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, String>;
+    fn call(&mut self, request: NativeCallRequest) -> Result<NativeReady, ExecutionFailure>;
 
     /// Whether the interpreter must snapshot this service before invoking it.
     /// Services may opt out only when calls validate all fallible work before
@@ -230,6 +248,9 @@ pub struct NativeServiceRegistry {
     random: Option<Arc<Mutex<Sfmt19937>>>,
     structured: Option<Arc<Mutex<StructuredState>>>,
     structured_keys: SymbolKeySet,
+    staged_map_keys: SymbolKeySet,
+    /// Parent VM roots retained only while this registry belongs to an isolated candidate.
+    protected_map_leases: BTreeSet<crate::structured::MapLease>,
     extensions: erabasic_data::ExtensionData,
     character_width_mode: CharacterWidthModeHandle,
 }
@@ -261,94 +282,65 @@ impl NativeServiceRegistry {
         let random = Arc::new(Mutex::new(Sfmt19937::new(seed)));
         let structured = Arc::new(Mutex::new(StructuredState::default()));
         registry.random = Some(Arc::clone(&random));
-        for native in &artifact.native_imports {
-            let name = native.import.name.as_str();
+        let services = artifact
+            .native_imports
+            .iter()
+            .map(|native| (native.import.key, native.import.name.as_str()))
+            .chain(
+                artifact
+                    .runtime_native_authorizations
+                    .iter()
+                    .map(|family| (family.key, family.name.as_str())),
+            );
+        for (service_key, name) in services {
             if is_structured_name(name) {
                 registry.structured = Some(Arc::clone(&structured));
-                registry.structured_keys.insert(native.import.key);
+                registry.structured_keys.insert(service_key);
                 registry.register(
-                    native.import.key,
+                    service_key,
                     StructuredNative::new(name, Arc::clone(&structured)),
                 );
+                if erabasic_bytecode::MapCallKind::from_name(name).is_some() {
+                    registry.staged_map_keys.insert(service_key);
+                }
             } else if matches!(name, "format_integer" | "format_string" | "times")
                 || name.starts_with("control_")
             {
                 registry.register(
-                    native.import.key,
+                    service_key,
                     CompilerNative {
                         name: name.into(),
                         character_width_mode: registry.character_width_mode.clone(),
                     },
                 );
                 if compiler_native_path_memo_safe(name) {
-                    registry.path_memo_safe_keys.insert(native.import.key);
+                    registry.path_memo_safe_keys.insert(service_key);
                 }
             } else if matches!(name, "rand" | "randomize" | "initrand" | "dumprand") {
                 registry.register(
-                    native.import.key,
+                    service_key,
                     RandomNative {
                         name: name.into(),
                         state: Arc::clone(&random),
                     },
                 );
-            } else if matches!(
-                name,
-                "abs"
-                    | "sign"
-                    | "sqrt"
-                    | "cbrt"
-                    | "log"
-                    | "log10"
-                    | "exponent"
-                    | "power"
-                    | "getbit"
-                    | "bitcount"
-                    | "strlen"
-                    | "strlenu"
-                    | "strform"
-                    | "toint"
-                    | "isnumeric"
-                    | "unicode"
-                    | "convert"
-                    | "color_fromrgb"
-                    | "color_fromname"
-                    | "max"
-                    | "min"
-                    | "limit"
-                    | "inrange"
-                    | "tostr"
-                    | "substring"
-                    | "substringu"
-                    | "strfind"
-                    | "strfindu"
-                    | "strcount"
-                    | "strlens"
-                    | "strlensu"
-                    | "getpalamlv"
-                    | "getexplv"
-                    | "replace"
-                    | "escape"
-                    | "unicodetostr"
-                    | "encodetouni"
-                    | "unicodebyte"
-                    | "charatu"
-                    | "tolower"
-                    | "toupper"
-            ) {
+            } else if core_native_name(name) {
                 registry.register(
-                    native.import.key,
+                    service_key,
                     CoreNative::new(
                         name.into(),
                         artifact.project_data.static_data.legacy_encoding,
-                    ),
+                    )
+                    .with_compatibility(&artifact.manifest.compatibility),
                 );
-                registry.path_memo_safe_keys.insert(native.import.key);
+                registry.path_memo_safe_keys.insert(service_key);
             }
         }
         registry
     }
 
     pub fn register(&mut self, key: SymbolKey, service: impl NativeService + 'static) -> bool {
+        self.staged_map_keys.remove(&key);
         self.path_memo_safe_keys.remove(&key);
         self.services.insert(key, Box::new(service)).is_none()
     }
@@ -365,10 +357,22 @@ impl NativeServiceRegistry {
         &mut self,
         key: SymbolKey,
         request: NativeCallRequest,
-    ) -> Result<NativeReady, String> {
+    ) -> Result<NativeReady, ExecutionFailure> {
+        if request.service_key != key
+            || request
+                .omitted_arguments
+                .iter()
+                .any(|index| *index >= request.arguments.len())
+        {
+            return Err(native_contract_failure(
+                "Native request service key differs from registry key",
+            ));
+        }
         self.services
             .get_mut(&key)
-            .ok_or_else(|| format!("native service {key:?} is not registered"))?
+            .ok_or_else(|| {
+                native_contract_failure(format!("native service {key:?} is not registered"))
+            })?
             .call(request)
     }
 
@@ -420,7 +424,9 @@ impl NativeServiceRegistry {
             .lock()
             .map_err(|_| "structured native state lock is poisoned".to_owned())?
             .clone();
-        candidate.clear_for_transaction(&self.extensions, transaction);
+        candidate
+            .clear_for_transaction(&self.extensions, transaction)
+            .map_err(|failure| failure.to_string())?;
         candidate.encode().map(Some)
     }
 
@@ -437,7 +443,9 @@ impl NativeServiceRegistry {
             .lock()
             .map_err(|_| "structured native state lock is poisoned".to_owned())?
             .clone();
-        candidate.clear_for_transaction(&self.extensions, transaction);
+        candidate
+            .clear_for_transaction(&self.extensions, transaction)
+            .map_err(|failure| failure.to_string())?;
         let imported = candidate.import_extensions(&self.extensions, scope, values)?;
         Ok((Some(candidate.encode()?), imported))
     }
@@ -457,14 +465,53 @@ impl NativeServiceRegistry {
         )
     }
 
-    pub(crate) fn commit_structured_state(&mut self, bytes: &[u8]) -> Result<(), String> {
+    pub(crate) fn column_identity_stamp(&self) -> Result<Option<ColumnIdentityStamp>, String> {
+        self.structured
+            .as_ref()
+            .map(|state| {
+                state
+                    .lock()
+                    .map(|state| state.column_identity_stamp())
+                    .map_err(|_| "structured native state lock is poisoned".to_owned())
+            })
+            .transpose()
+    }
+
+    pub(crate) fn validate_column_identity_stamp(
+        &self,
+        expected: Option<ColumnIdentityStamp>,
+    ) -> Result<(), String> {
+        if self.column_identity_stamp()? != expected {
+            return Err("structured state belongs to a stale column identity timeline".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn commit_structured_state(
+        &mut self,
+        bytes: &[u8],
+        expected: Option<ColumnIdentityStamp>,
+        expected_maps: Option<crate::structured::MapLeaseStamp>,
+    ) -> Result<(), String> {
         let decoded = StructuredState::decode(bytes)?;
-        *self
+        let mut state = self
             .structured
             .as_ref()
             .ok_or_else(|| "structured native bundle is not registered".to_owned())?
             .lock()
-            .map_err(|_| "structured native state lock is poisoned".to_owned())? = decoded;
+            .map_err(|_| "structured native state lock is poisoned".to_owned())?;
+        if Some(state.column_identity_stamp()) != expected {
+            return Err("structured state belongs to a stale column identity timeline".into());
+        }
+        if Some(
+            state
+                .map_lease_stamp()
+                .map_err(|failure| failure.to_string())?,
+        ) != expected_maps
+        {
+            return Err("structured state belongs to a stale MAP timeline".into());
+        }
+        *state = decoded;
         Ok(())
     }
 
@@ -478,13 +525,34 @@ impl NativeServiceRegistry {
     }
 
     pub(crate) fn set_random_values(&mut self, values: &[i64]) -> Result<(), String> {
-        let candidate = Sfmt19937::from_era_values(values)?;
+        self.set_random_values_execution(values)
+            .map_err(|error| error.message)
+    }
+
+    pub(crate) fn set_random_values_execution(
+        &mut self,
+        values: &[i64],
+    ) -> Result<(), crate::ExecutionFailure> {
+        let candidate = Sfmt19937::from_era_values(values).map_err(|message| {
+            crate::ExecutionFailure::script(
+                crate::ScriptFaultKind::Argument,
+                crate::VmFaultCode::Native,
+                message,
+            )
+        })?;
+        let internal = |message: &str| {
+            crate::ExecutionFailure::classified(
+                crate::FaultCategory::InternalInvariant,
+                crate::VmFaultCode::Native,
+                message,
+            )
+        };
         let mut state = self
             .random
             .as_ref()
-            .ok_or_else(|| "random native service is not registered".to_owned())?
+            .ok_or_else(|| internal("random native service is not registered"))?
             .lock()
-            .map_err(|_| "SFMT state lock is poisoned".to_owned())?;
+            .map_err(|_| internal("SFMT state lock is poisoned"))?;
         *state = candidate;
         Ok(())
     }
@@ -565,6 +633,32 @@ impl NativeServiceRegistry {
     ) -> Result<Self, String> {
         let previous = self.snapshots()?;
         let mut target = Self::for_artifact(artifact);
+        let active_maps = self
+            .structured
+            .as_ref()
+            .map(|state| {
+                state
+                    .lock()
+                    .map(|state| !state.all_map_leases().is_empty())
+                    .map_err(|_| "MAP state lock poisoned".to_owned())
+            })
+            .transpose()?
+            .unwrap_or(false);
+        if active_maps && !self.staged_map_keys.is_subset(&target.staged_map_keys) {
+            return Err(
+                "hot reload removes a MAP provider still owned by an active continuation".into(),
+            );
+        }
+        if target.structured.is_none()
+            && let Some(state) = &self.structured
+        {
+            let state = state
+                .lock()
+                .map_err(|_| "MAP state lock poisoned".to_owned())?;
+            if !state.all_map_leases().is_empty() {
+                target.structured = Some(Arc::new(Mutex::new(state.clone())));
+            }
+        }
         let retained = previous
             .into_iter()
             .filter(|(key, _)| {
@@ -573,6 +667,9 @@ impl NativeServiceRegistry {
             })
             .collect();
         target.restore_snapshots(&retained)?;
+        target
+            .protected_map_leases
+            .clone_from(&self.protected_map_leases);
         target.set_character_width_mode(self.character_width_mode.get());
         Ok(target)
     }
@@ -583,12 +680,13 @@ fn compiler_native_path_memo_safe(name: &str) -> bool {
 }
 
 mod core;
+mod maps;
 mod services;
 #[cfg(test)]
 mod tests;
 
 use core::CoreNative;
-pub use core::evaluate_pure_native;
+pub use core::{evaluate_pure_native, evaluate_pure_native_with_compatibility};
 #[cfg(test)]
 use core::{parse_era_numeric, substring_legacy_bytes, substring_scalars};
 pub(crate) use services::apply_owned_width_with_mode;
@@ -597,3 +695,118 @@ use services::apply_width;
 #[cfg(test)]
 pub(crate) use services::apply_width_with_mode;
 use services::{CompilerNative, RandomNative};
+
+// Native execution keeps the historical Native fault code. These source constructors choose
+// catchability explicitly; no caller infers it from a message or the old broad fault code.
+pub(crate) fn native_contract_failure(message: impl Into<String>) -> ExecutionFailure {
+    ExecutionFailure::classified(FaultCategory::HostContract, VmFaultCode::Native, message)
+}
+
+fn native_script_failure(kind: ScriptFaultKind, message: impl Into<String>) -> ExecutionFailure {
+    ExecutionFailure::script(kind, VmFaultCode::Native, message)
+}
+
+fn native_resource_failure(message: impl Into<String>) -> ExecutionFailure {
+    ExecutionFailure::classified(FaultCategory::ResourceLimit, VmFaultCode::Native, message)
+}
+
+fn core_native_name(name: &str) -> bool {
+    matches!(
+        name,
+        "abs"
+            | "sign"
+            | "sqrt"
+            | "cbrt"
+            | "log"
+            | "log10"
+            | "exponent"
+            | "power"
+            | "getbit"
+            | "bitcount"
+            | "strlen"
+            | "strlenu"
+            | "strform"
+            | "toint"
+            | "isnumeric"
+            | "unchecked_add"
+            | "unchecked_sub"
+            | "unchecked_mul"
+            | "unchecked_neg"
+            | "unicode"
+            | "convert"
+            | "color_fromrgb"
+            | "color_fromname"
+            | "max"
+            | "min"
+            | "limit"
+            | "inrange"
+            | "tostr"
+            | "substring"
+            | "substringu"
+            | "strfind"
+            | "strfindu"
+            | "strcount"
+            | "strlens"
+            | "strlensu"
+            | "getpalamlv"
+            | "getexplv"
+            | "replace"
+            | "escape"
+            | "unicodetostr"
+            | "encodetouni"
+            | "unicodebyte"
+            | "charatu"
+            | "tolower"
+            | "toupper"
+    )
+}
+
+impl HostCallRequest {
+    /// Source-aware argument lookup; an explicit omission is not a literal MIN.
+    #[must_use]
+    pub fn argument(&self, index: usize) -> Option<&VmValue> {
+        if self.omitted_arguments.binary_search(&index).is_ok() {
+            None
+        } else {
+            self.arguments.get(index)
+        }
+    }
+}
+
+#[cfg(test)]
+mod source_presence_tests {
+    use super::*;
+    #[test]
+    fn direct_host_omission_does_not_remove_slots_or_hide_literal_minimum() {
+        let request = HostCallRequest {
+            id: crate::HostRequestId(1),
+            fiber: crate::FiberId(1),
+            import: erabasic_bytecode::RuntimeImport {
+                key: erabasic_bytecode::SymbolKey::default(),
+                namespace: "test".into(),
+                name: "source-presence".into(),
+                abi_version: 1,
+                parameters: vec![erabasic_bytecode::BytecodeType::Integer; 3],
+                result: None,
+            },
+            arguments: vec![
+                VmValue::Integer(i64::MIN),
+                VmValue::Integer(i64::MIN),
+                VmValue::Integer(9),
+            ],
+            omitted_arguments: vec![1],
+            origin: crate::VmExecutionOrigin {
+                generation: crate::GenerationId(1),
+                function: erabasic_bytecode::SymbolKey::default(),
+                function_name: "test".into(),
+                instruction: 0,
+                command: "source-presence".into(),
+                source: None,
+            },
+        };
+        assert_eq!(request.argument(0), Some(&VmValue::Integer(i64::MIN)));
+        assert_eq!(request.argument(1), None);
+        assert_eq!(request.argument(2), Some(&VmValue::Integer(9)));
+        assert_eq!(request.arguments.len(), 3);
+    }
+}

@@ -1,0 +1,153 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "26a35dc9334bb67590b96f7b8efbefbf199e391e",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "original": { "semantic_version": 1, "policy_version": 1 },
+    "snake": { "semantic_version": 8, "policy_version": 8 }
+  },
+  "evidenceStatus": "source_derived_candidates_not_executed",
+  "allowedOracles": ["snake"],
+  "loadExpect": {
+    "ok": true,
+    "result": { "termination": "waitingInput" }
+  },
+  "cases": [
+    {
+      "id": "data-csv-lookup",
+      "group": "COLUMNS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2C_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2C_acceptance",
+      "requests": [{
+        "request": {
+          "op": "run",
+          "entry": "B2C_CSV_LOOKUP",
+          "watch": ["RESULT:10", "RESULT:11", "RESULT:12", "RESULT:13", "RESULT:14", "RESULT:15", "RESULT:16", "RESULT:17"]
+        },
+        "expect": { "snake": { "ok": true, "result": { "termination": "completed", "watches": {
+          "RESULT:10": 2, "RESULT:11": 2, "RESULT:12": 2, "RESULT:13": 2,
+          "RESULT:14": -1, "RESULT:15": 3, "RESULT:16": -1, "RESULT:17": 3
+        }}}}
+      }]
+    },
+    {
+      "id": "data-match-integer",
+      "group": "COLUMNS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2C_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2C_acceptance",
+      "requests": [{
+        "request": { "op": "run", "entry": "B2C_MATCH_INTEGER", "watch": ["RESULT:10", "RESULT:11", "RESULT:12", "RESULT:13"] },
+        "expect": { "snake": { "ok": true, "result": { "termination": "completed", "watches": {
+          "RESULT:10": 3, "RESULT:11": 0, "RESULT:12": 2, "RESULT:13": 2
+        }}}}
+      }]
+    },
+    {
+      "id": "data-match-string",
+      "group": "COLUMNS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2C_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2C_acceptance",
+      "requests": [{
+        "request": { "op": "run", "entry": "B2C_MATCH_STRING", "watch": ["RESULT:10", "RESULT:11", "RESULT:12", "RESULT:13"] },
+        "expect": { "snake": { "ok": true, "result": { "termination": "completed", "watches": {
+          "RESULT:10": 3, "RESULT:11": 0, "RESULT:12": 2, "RESULT:13": 0
+        }}}}
+      }]
+    },
+    {
+      "id": "data-bit-boundaries",
+      "group": "COLUMNS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2C_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2C_acceptance",
+      "requests": [{
+        "request": {
+          "op": "run", "entry": "B2C_BIT_BOUNDARIES",
+          "watch": ["RESULT:10", "RESULT:11", "RESULT:12", "RESULT:13", "RESULT:14", "RESULT:15", "RESULT:16", "RESULT:17", "RESULT:18", "RESULT:19", "RESULT:20", "RESULT:21", "RESULT:22"]
+        },
+        "expect": { "snake": { "ok": true, "result": { "termination": "completed", "watches": {
+          "RESULT:10": 1, "RESULT:11": -9223372036854775808, "RESULT:12": 1,
+          "RESULT:13": 1, "RESULT:14": 1, "RESULT:15": 0, "RESULT:16": -1,
+          "RESULT:17": 0, "RESULT:18": 63, "RESULT:19": 0, "RESULT:20": 1,
+          "RESULT:21": 1, "RESULT:22": 1
+        }}}}
+      }]
+    },
+    {
+      "id": "data-map-order-merge",
+      "group": "COLUMNS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2C_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2C_acceptance",
+      "requests": [{
+        "request": { "op": "run", "entry": "B2C_MAP_ORDER_MERGE", "watch": ["RESULT:10", "RESULT:11", "RESULTS:10", "RESULTS:11"] },
+        "expect": { "snake": { "ok": true, "result": { "termination": "completed", "watches": {
+          "RESULT:10": 1, "RESULT:11": 1,
+          "RESULTS:10": "b=new,a=keep,c=added", "RESULTS:11": "b:new|a:keep|c:added"
+        }}}}
+      }]
+    },
+    {
+      "id": "data-map-filters",
+      "group": "COLUMNS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2C_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2C_acceptance",
+      "requests": [{
+        "request": { "op": "run", "entry": "B2C_MAP_FILTERS", "watch": ["RESULT:10", "RESULT:11", "RESULT:12", "RESULTS:10", "RESULTS:11"] },
+        "expect": { "snake": { "ok": true, "result": { "termination": "completed", "watches": {
+          "RESULT:10": 2, "RESULT:11": 2, "RESULT:12": -1,
+          "RESULTS:10": "ab,ba", "RESULTS:11": "c=blue"
+        }}}}
+      }]
+    },
+    {
+      "id": "data-map-string",
+      "group": "COLUMNS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2C_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2C_acceptance",
+      "requests": [{
+        "request": { "op": "run", "entry": "B2C_MAP_STRING", "watch": ["RESULT:10", "RESULT:11", "RESULTS:10", "RESULTS:11"] },
+        "expect": { "snake": { "ok": true, "result": { "termination": "completed", "watches": {
+          "RESULT:10": 4, "RESULT:11": 2,
+          "RESULTS:10": "keep=old,a=2,=empty,b=x=y",
+          "RESULTS:11": "keep=>old||a=>new||=>empty||b=>x=y||z=>x=>y"
+        }}}}
+      }]
+    },
+    {
+      "id": "data-map-values",
+      "group": "COLUMNS",
+      "targetBatch": 2,
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "batch_2C_candidate_not_validated",
+      "snakeTargetStatus": "requires_batch_2C_acceptance",
+      "requests": [{
+        "request": { "op": "run", "entry": "B2C_MAP_VALUES", "watch": ["RESULT:10", "RESULTS:10", "RESULTS:11", "RESULTS:12", "RESULTS:13"] },
+        "expect": { "snake": { "ok": true, "result": { "termination": "completed", "watches": {
+          "RESULT:10": 3, "RESULTS:10": "one,two,three", "RESULTS:11": "",
+          "RESULTS:12": "one", "RESULTS:13": "two"
+        }}}}
+      }]
+    }
+  ]
+}

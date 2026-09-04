@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use erabasic_ast::{BinaryOp, Expr, ExprKind};
+use erabasic_compat::IntegerArithmeticPolicy;
 use erabasic_hir::ConstantValue;
 
 pub(super) fn normalize_colon_indices(indices: &[Expr], maximum: usize) -> Cow<'_, [Expr]> {
@@ -44,6 +45,7 @@ pub(super) fn fold_binary(
     op: BinaryOp,
     left: Option<&ConstantValue>,
     right: Option<&ConstantValue>,
+    policy: IntegerArithmeticPolicy,
 ) -> Option<ConstantValue> {
     match (left?, right?) {
         (ConstantValue::String(left), ConstantValue::String(right)) => match op {
@@ -65,6 +67,18 @@ pub(super) fn fold_binary(
             ))
         }
         (ConstantValue::Integer(left), ConstantValue::Integer(right)) => {
+            if policy == IntegerArithmeticPolicy::SnakeSaturatingV1
+                && let Some(operation) = crate::integer::binary_operation(op)
+            {
+                let result = policy.evaluate(operation, *left, Some(*right)).ok()?;
+                // A folded constant would bypass the VM diagnostic and its source identity.
+                return result
+                    .warning
+                    .is_none()
+                    .then_some(ConstantValue::Integer(result.value));
+            }
+            // Keep the established reference load-time behavior, including wrapping
+            // MIN / -1 and MIN % -1; changing that legacy difference is out of scope.
             Some(ConstantValue::Integer(match op {
                 BinaryOp::Multiply => left.wrapping_mul(*right),
                 BinaryOp::Divide if *right != 0 => left.wrapping_div(*right),
@@ -93,5 +107,78 @@ pub(super) fn fold_binary(
             }))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snake_folding_retains_operations_that_warn_or_fault() {
+        let left = ConstantValue::Integer(i64::MAX);
+        let one = ConstantValue::Integer(1);
+        assert_eq!(
+            fold_binary(
+                BinaryOp::Add,
+                Some(&left),
+                Some(&one),
+                IntegerArithmeticPolicy::SnakeSaturatingV1
+            ),
+            None,
+        );
+        assert_eq!(
+            fold_binary(
+                BinaryOp::Add,
+                Some(&left),
+                Some(&one),
+                IntegerArithmeticPolicy::ReferenceWrappingV1
+            ),
+            Some(ConstantValue::Integer(i64::MIN)),
+        );
+        for operation in [BinaryOp::Divide, BinaryOp::Modulo] {
+            let minimum = ConstantValue::Integer(i64::MIN);
+            let negative_one = ConstantValue::Integer(-1);
+            assert_eq!(
+                fold_binary(
+                    operation,
+                    Some(&minimum),
+                    Some(&negative_one),
+                    IntegerArithmeticPolicy::SnakeSaturatingV1
+                ),
+                None
+            );
+            assert_eq!(
+                fold_binary(
+                    operation,
+                    Some(&minimum),
+                    Some(&negative_one),
+                    IntegerArithmeticPolicy::ReferenceWrappingV1
+                ),
+                Some(ConstantValue::Integer(if operation == BinaryOp::Divide {
+                    i64::MIN
+                } else {
+                    0
+                }))
+            );
+            assert_eq!(
+                fold_binary(
+                    operation,
+                    Some(&one),
+                    Some(&ConstantValue::Integer(0)),
+                    IntegerArithmeticPolicy::SnakeSaturatingV1
+                ),
+                None
+            );
+        }
+        assert_eq!(
+            fold_binary(
+                BinaryOp::Add,
+                Some(&one),
+                Some(&one),
+                IntegerArithmeticPolicy::SnakeSaturatingV1
+            ),
+            Some(ConstantValue::Integer(2))
+        );
     }
 }

@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "semanticBaseline": "fc4fb21416768c17256d0e82f997e5f99c9bba91",
+  "implementation": "emuera_lazyloading_selfmodified_version",
+  "seed": 123456,
+  "cases": [
+    {
+      "id": "connection-transaction",
+      "entry": "SQL_ORACLE_CONNECTION_TRANSACTION",
+      "expectedTermination": "completed",
+      "watches": ["RESULT:0", "RESULT:1", "RESULT:2", "RESULT:3", "RESULT:4", "RESULT:5", "RESULT:6", "RESULT:7", "RESULT:8", "RESULT:9", "RESULT:10", "RESULT:11", "RESULT:12", "RESULTS:0", "RESULT:13", "RESULT:14"],
+      "absentPaths": ["plugins/conflict.db"]
+    },
+    {
+      "id": "scalar-parameters",
+      "entry": "SQL_ORACLE_SCALAR_AND_PARAMETERS",
+      "expectedTermination": "completed",
+      "watches": ["RESULT:0", "RESULTS:0", "RESULT:1", "RESULTS:1", "RESULT:2", "RESULTS:2", "RESULT:3", "RESULTS:3", "RESULTS:4", "RESULT:4"]
+    },
+    {
+      "id": "reader-lifecycle",
+      "entry": "SQL_ORACLE_READER_LIFECYCLE",
+      "expectedTermination": "completed",
+      "watches": ["RESULT:0", "RESULT:1", "RESULTS:0", "RESULT:2", "RESULT:3", "RESULTS:1", "RESULT:4", "RESULT:5", "RESULTS:2", "RESULT:6", "RESULT:7", "RESULT:8", "RESULT:9", "RESULT:10", "RESULT:11", "RESULT:12", "RESULT:13"]
+    },
+    {
+      "id": "reader-conversions",
+      "entry": "SQL_ORACLE_READER_CONVERSIONS",
+      "expectedTermination": "completed",
+      "watches": ["RESULT:0", "RESULTS:0", "RESULT:1"]
+    },
+    {
+      "id": "parameterized-reader",
+      "entry": "SQL_ORACLE_PARAMETERIZED_READER",
+      "expectedTermination": "completed",
+      "watches": ["RESULT:0", "RESULTS:0", "RESULT:1", "RESULTS:1", "RESULTS:2", "RESULT:2", "RESULT:3"]
+    },
+    {
+      "id": "map-xml",
+      "entry": "SQL_ORACLE_MAP_XML",
+      "expectedTermination": "completed",
+      "watches": ["RESULT:0", "RESULT:1", "RESULTS:0", "RESULTS:1", "RESULTS:2", "RESULTS:3", "RESULTS:4", "RESULT:2", "RESULT:3", "RESULT:4"]
+    },
+    {"id": "error-disconnected", "entry": "SQL_ORACLE_ERROR_DISCONNECTED", "expectedTermination": "error", "watches": []},
+    {"id": "error-invalid-reader", "entry": "SQL_ORACLE_ERROR_INVALID_READER", "expectedTermination": "error", "watches": []},
+    {"id": "error-column-range", "entry": "SQL_ORACLE_ERROR_COLUMN_RANGE", "expectedTermination": "error", "watches": []},
+    {"id": "error-scalar-type", "entry": "SQL_ORACLE_ERROR_SCALAR_TYPE", "expectedTermination": "error", "watches": []},
+    {"id": "reader-text-conversion", "entry": "SQL_ORACLE_READER_TEXT_CONVERSION", "expectedTermination": "completed", "watches": ["RESULT"]},
+    {
+      "id": "error-transaction",
+      "entry": "SQL_ORACLE_ERROR_TRANSACTION",
+      "expectedTermination": "error",
+      "watches": [],
+      "sqliteAfterClose": {"glob": "**/sql_error.db", "table": "side_effect", "rowCount": 0}
+    }
+  ],
+  "bbasPreflight": {
+    "entry": "CREATE_BBAS_DATABASE",
+    "expectedTermination": "completed",
+    "watches": ["DT_ROW_LENGTH(\"bbas_dataset\")", "DT_ROW_LENGTH(\"bbas_map\")"],
+    "source": "ERB/BODY_INFO/BBAS_DATASET.ERB",
+    "presentResources": ["plugins/schema.xml", "plugins/bbas_dataset.xml"],
+    "missingResources": ["plugins/bbas_map_schema.xml", "plugins/bbas_map.xml"]
+  },
+  "snakeTwResources": {
+    "mustExist": [
+      "plugins/qol_data.db",
+      "plugins/tw_csv_chs.xml",
+      "plugins/tw_taste_chs.xml",
+      "plugins/schema.xml",
+      "plugins/bbas_dataset.xml"
+    ],
+    "mustBeMissing": [
+      "plugins/bbas_map_schema.xml",
+      "plugins/bbas_map.xml"
+    ]
+  }
+}

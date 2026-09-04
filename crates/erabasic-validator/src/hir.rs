@@ -12,6 +12,12 @@ use crate::{ValidationCode, ValidationDiagnostic, ValidationReport};
 #[allow(clippy::too_many_lines)]
 pub fn validate_hir(program: &Program, _data: &ProjectData) -> ValidationReport<()> {
     let mut diagnostics = Vec::new();
+    if let Err(error) = program.compatibility.validate() {
+        diagnostics.push(ValidationDiagnostic::project(
+            ValidationCode::UnsupportedVersion,
+            format!("unsupported HIR compatibility: {error}"),
+        ));
+    }
     if program.format_version != HIR_FORMAT_VERSION {
         diagnostics.push(ValidationDiagnostic::project(
             ValidationCode::UnsupportedVersion,
@@ -49,6 +55,19 @@ pub fn validate_hir(program: &Program, _data: &ProjectData) -> ValidationReport<
             ValidationCode::DuplicateIdentity,
             "variable IDs are not unique",
         ));
+    }
+    for variable in &program.variables {
+        if (variable.reference_semantics.can_restructure && !variable.reference_semantics.is_const)
+            || (variable.reference && variable.reference_semantics.is_const)
+        {
+            diagnostics.push(ValidationDiagnostic::project(
+                ValidationCode::InvalidHir,
+                format!(
+                    "variable {} has inconsistent reference token semantics",
+                    variable.name
+                ),
+            ));
+        }
     }
     let function_ids: BTreeSet<_> = program
         .functions

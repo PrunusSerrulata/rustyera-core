@@ -278,9 +278,26 @@ fn compile_project_inner(
         consume_owned_hir,
     } = policy;
     let mut project = project;
-    let total_functions = project.project().program.functions.len();
-    let compiling_progress =
-        CompileProgressCounter::new(CompileProgressStage::Compiling, total_functions, progress);
+    let (total_functions, total_variables, total_sources) = {
+        let program = &project.project().program;
+        (
+            program.functions.len(),
+            program.variables.len(),
+            program.sources.len(),
+        )
+    };
+    // Compiling includes stable-key/signature indexing and call-dependency preparation before
+    // bytecode lowering. Count those real work units so large projects keep reporting progress
+    // instead of appearing stalled before the first function body is emitted.
+    let total_compile_work = total_functions
+        .saturating_mul(5)
+        .saturating_add(total_variables.saturating_mul(2))
+        .saturating_add(total_sources);
+    let compiling_progress = CompileProgressCounter::new(
+        CompileProgressStage::Compiling,
+        total_compile_work,
+        progress,
+    );
     let hir_report = {
         let project_ref = project.project();
         validate_hir(&project_ref.program, &project_ref.data)
@@ -298,9 +315,19 @@ fn compile_project_inner(
                     .diagnostics
                     .into_iter()
                     .map(|diagnostic| {
+                        let context = match (diagnostic.function, diagnostic.instruction) {
+                            (Some(function), Some(instruction)) => {
+                                format!(" in function {function} at HIR instruction {instruction}")
+                            }
+                            (Some(function), None) => format!(" in function {function}"),
+                            (None, Some(instruction)) => {
+                                format!(" at HIR instruction {instruction}")
+                            }
+                            (None, None) => String::new(),
+                        };
                         CompilerDiagnostic::new(
                             CompilerDiagnosticCode::InvalidHir,
-                            diagnostic.message,
+                            format!("{}{context}", diagnostic.message),
                         )
                     })
                     .collect(),
@@ -312,15 +339,19 @@ fn compile_project_inner(
     let compiler_options = canonical_digest("rustyera.compiler.options.v2", &options.optimization);
     let (function_keys, variable_keys, function_signatures, artifact_event_groups) = {
         let project_ref = project.project();
-        let function_keys =
-            function_keys(&project_ref.program.functions, &project_ref.program.sources);
-        let variable_keys = variable_keys(&project_ref.program.variables, &function_keys);
-        let function_signatures = project_ref
-            .program
-            .functions
-            .iter()
-            .map(FunctionSignature::from)
-            .collect::<Vec<_>>();
+        let function_keys = function_keys(
+            &project_ref.program.functions,
+            &project_ref.program.sources,
+            || compiling_progress.advance(),
+        );
+        let variable_keys = variable_keys(&project_ref.program.variables, &function_keys, || {
+            compiling_progress.advance();
+        });
+        let mut function_signatures = Vec::with_capacity(total_functions);
+        for function in &project_ref.program.functions {
+            function_signatures.push(FunctionSignature::from(function));
+            compiling_progress.advance();
+        }
         let artifact_event_groups = event_groups(&project_ref.program.functions, &function_keys);
         (
             function_keys,
@@ -335,14 +366,17 @@ fn compile_project_inner(
         let mut functions_by_id = DenseIdIndex::new(function_signatures.len());
         for function in &function_signatures {
             functions_by_id.insert(function.id.0, function);
+            compiling_progress.advance();
         }
         let mut source_indices = DenseIdIndex::new(project_ref.program.sources.len());
         for (index, source) in project_ref.program.sources.iter().enumerate() {
             source_indices.insert(source.id.0, u32::try_from(index).unwrap_or(u32::MAX));
+            compiling_progress.advance();
         }
         let context = LoweringContext {
             program: LoweringProgram {
                 variables: &project_ref.program.variables,
+                snake_input: project_ref.program.compatibility.supports_snake_input(),
                 call_compatibility: project_ref.program.call_compatibility,
             },
             function_keys: &function_keys,
@@ -351,10 +385,22 @@ fn compile_project_inner(
             source_indices: &source_indices,
             host_registry,
         };
+        let call_dependencies = super::call_dependencies::CallDependencies::new(
+            &function_signatures,
+            &function_keys,
+            &project_ref.program.variables,
+            || compiling_progress.advance(),
+        );
+        let variable_dependencies =
+            shared_variable_dependencies(&project_ref.program.variables, || {
+                compiling_progress.advance();
+            });
         let shared_dependencies = canonical_digest(
-            "rustyera.compiler.shared-dependencies.v2",
+            "rustyera.compiler.shared-dependencies.v5",
             &(
-                &project_ref.program.variables,
+                &project_ref.program.compatibility,
+                &project_ref.program.call_compatibility,
+                variable_dependencies,
                 host_registry,
                 options.optimization,
             ),
@@ -363,8 +409,9 @@ fn compile_project_inner(
             .filter(|state| state.compiler_abi == erabasic_bytecode::COMPILER_ABI_VERSION)
             .map(|state| &state.functions);
         let previous_artifact = previous_artifact.filter(|artifact| {
-            previous.and_then(IncrementalState::base_artifact_id)
-                == Some(artifact.manifest.artifact_id)
+            artifact.manifest.compatibility == project_ref.program.compatibility
+                && previous.and_then(IncrementalState::base_artifact_id)
+                    == Some(artifact.manifest.artifact_id)
         });
         let previous_artifact_index = previous_artifact.map(PreviousArtifactIndex::new);
         let compile_one = |function: &Function| {
@@ -372,12 +419,13 @@ fn compile_project_inner(
                 let key = *function_keys
                     .get(function.id.0)
                     .expect("validated function IDs have stable keys");
-                let function_digest =
-                    canonical_digest("rustyera.compiler.hir-function.v3", function);
+                let function_digest = binary_digest("rustyera.compiler.hir-function.v4", function);
+                let signature_dependencies = call_dependencies.for_function(function);
                 let cache_key = Digest::hash(
-                    "rustyera.compiler.function.v3",
+                    "rustyera.compiler.function.v4",
                     &[
                         &function_digest.0,
+                        &signature_dependencies.0,
                         &shared_dependencies.0,
                         &compiler_options.0,
                     ],
@@ -534,6 +582,7 @@ fn compile_project_inner(
     // project so its function/variable graphs are released before source-map
     // interning and artifact hashing reach their peak.
     let call_compatibility = erabasic_bytecode::BytecodeCallCompatibility {
+        user_argument_policy: project_ref.program.call_compatibility.user_argument_policy,
         allow_event_as_normal: project_ref.program.call_compatibility.allow_event_as_normal,
         allow_omitted_arguments: project_ref
             .program
@@ -549,12 +598,24 @@ fn compile_project_inner(
             .allow_full_width_space,
         debug_semicolon: project_ref.program.call_compatibility.debug_semicolon,
         ignore_triple_symbols: project_ref.program.call_compatibility.ignore_triple_symbols,
+        compatible_rand: project_ref.program.call_compatibility.compatible_rand,
+        system_no_target: project_ref.program.call_compatibility.system_no_target,
+        ignore_case: project_ref.program.call_compatibility.ignore_case,
+        before_error_throw_hooks: project_ref
+            .program
+            .call_compatibility
+            .before_error_throw_hooks,
     };
+    let runtime_variables = super::runtime_symbols::runtime_variable_symbols(
+        &project_ref.program.variables,
+        &variable_keys,
+    );
     let artifact_globals = globals(
         &project_ref.program.variables,
         &variable_keys,
         &function_keys,
     );
+    let compatibility = project.project().program.compatibility.clone();
     let (project_data, source_ids, project_sources) = project.into_artifact_parts();
     drop(variable_keys);
     drop(function_keys);
@@ -653,6 +714,16 @@ fn compile_project_inner(
     }
     drop(native_import_indices);
     drop(host_import_indices);
+    if compatibility.supports_snake_input() {
+        for import in super::runtime_symbols::runtime_input_imports(host_registry) {
+            if !host_imports
+                .iter()
+                .any(|existing| existing.import.key == import.import.key)
+            {
+                host_imports.push(import);
+            }
+        }
+    }
     native_imports.sort_unstable_by_key(|value| value.import.key);
     host_imports.sort_unstable_by_key(|value| value.import.key);
     assert!(
@@ -692,9 +763,36 @@ fn compile_project_inner(
     drop(fingerprint_order);
     drop(fingerprint_prefixes);
     finalizing_progress.checkpoint();
+    let mut expression_signatures = erabasic_analyzer::builtin_function_signatures(&compatibility);
+    for signature in &mut expression_signatures {
+        if signature.name == "EXISTVAR" && compatibility.supports_existvar_expression_probe() {
+            signature.arguments = vec![
+                erabasic_analyzer::ArgumentConstraint::String,
+                erabasic_analyzer::ArgumentConstraint::Integer,
+            ];
+        }
+    }
+    let runtime_builtins = super::runtime_symbols::runtime_builtin_symbols(expression_signatures);
+    let runtime_native_authorizations =
+        super::runtime_symbols::runtime_native_authorizations(&runtime_builtins, host_registry);
+    let runtime_staged_authorizations =
+        super::runtime_symbols::runtime_staged_authorizations(&runtime_builtins, host_registry);
+    let runtime_host_authorizations = super::runtime_symbols::runtime_host_authorizations(
+        &runtime_builtins,
+        host_registry,
+        &compatibility,
+    );
     let artifact = BytecodeArtifact {
-        manifest: ArtifactManifest::new(compiler_options),
+        manifest: ArtifactManifest {
+            compatibility,
+            ..ArtifactManifest::new(compiler_options)
+        },
         call_compatibility,
+        runtime_builtins,
+        runtime_variables,
+        runtime_native_authorizations,
+        runtime_host_authorizations,
+        runtime_staged_authorizations,
         project_data,
         globals: artifact_globals,
         native_imports,
@@ -711,7 +809,7 @@ fn compile_project_inner(
     // Compiler output has no identity to verify yet. Validate its structure in
     // place, then serialize the complete artifact only once to assign final IDs.
     // Untrusted decoded artifacts continue to use the validator's identity-checking path.
-    let validation_context = ValidationContext::for_artifact(&artifact);
+    let validation_context = super::runtime_native_validation_context(&artifact, host_registry);
     let validation = validate_compiler_output(artifact, &validation_context);
     finalizing_progress.checkpoint();
     if !validation.is_valid() {
@@ -861,5 +959,54 @@ mod tests {
         assert_eq!(consumed.report, expected);
         assert_eq!(consumed.source_ids, [SourceId(0)]);
         assert!(consumed.diagnostic_sources.is_empty());
+    }
+
+    #[test]
+    fn compilation_preparation_reports_intermediate_work() {
+        let events = std::sync::Mutex::new(Vec::new());
+        let callback = |progress| events.lock().unwrap().push(progress);
+        let project = analyzed("@SYSTEM_TITLE\nCALL HELPER\nRETURN\n@HELPER\nRETURN\n");
+        let expected_work = project
+            .program
+            .functions
+            .len()
+            .saturating_mul(5)
+            .saturating_add(project.program.variables.len().saturating_mul(2))
+            .saturating_add(project.program.sources.len());
+        let report = compile_project_inner(
+            ProjectInput::Owned(Box::new(project)),
+            &CompilerOptions::default(),
+            &default_host_registry(),
+            None,
+            None,
+            CompilePolicy {
+                compact_cache: true,
+                consume_owned_hir: true,
+            },
+            Some(&callback),
+        );
+
+        assert!(
+            report.report.artifact.is_some(),
+            "{:#?}",
+            report.report.diagnostics
+        );
+        let events = events.into_inner().unwrap();
+        let compiling = events
+            .iter()
+            .filter(|progress| progress.stage == CompileProgressStage::Compiling)
+            .collect::<Vec<_>>();
+        assert_eq!(compiling.first().unwrap().completed, 0);
+        assert_eq!(compiling.last().unwrap().total, expected_work);
+        assert_eq!(
+            compiling.last().unwrap().completed,
+            compiling.last().unwrap().total
+        );
+        assert!(
+            compiling
+                .iter()
+                .any(|progress| progress.completed > 0 && progress.completed < progress.total),
+            "compilation preparation did not expose intermediate progress: {compiling:?}"
+        );
     }
 }

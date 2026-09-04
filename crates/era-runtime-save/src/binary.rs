@@ -4,7 +4,7 @@ mod encode;
 use std::borrow::Cow;
 use std::io::Read;
 
-use flate2::read::GzDecoder;
+use flate2::bufread::GzDecoder;
 
 use cursor::Cursor;
 pub use encode::{encode_binary, encode_save_extension};
@@ -77,15 +77,22 @@ fn decode_binary_with_array_mode(
             .ok_or(SaveCodecError::LimitExceeded("header data"))?,
     )?;
     let body = if header == ZIP_HEADER {
-        let mut decoded = Vec::new();
-        GzDecoder::new(outer.remaining())
-            .take((limits.maximum_bytes + 1) as u64)
-            .read_to_end(&mut decoded)
+        let compressed = outer.remaining();
+        let mut gzip = GzDecoder::new(std::io::Cursor::new(compressed));
+        let mut decompressed = Vec::new();
+        gzip.by_ref()
+            .take(u64::try_from(limits.maximum_bytes.saturating_add(1)).unwrap_or(u64::MAX))
+            .read_to_end(&mut decompressed)
             .map_err(|error| SaveCodecError::Compression(error.to_string()))?;
-        if decoded.len() > limits.maximum_bytes {
+        if decompressed.len() > limits.maximum_bytes {
             return Err(SaveCodecError::LimitExceeded("decompressed bytes"));
         }
-        Cow::Owned(decoded)
+        if usize::try_from(gzip.into_inner().position()).unwrap_or(usize::MAX) != compressed.len() {
+            return Err(SaveCodecError::InvalidFormat(
+                "trailing data follows the compressed save".into(),
+            ));
+        }
+        Cow::Owned(decompressed)
     } else {
         Cow::Borrowed(outer.remaining())
     };
@@ -124,15 +131,11 @@ fn decode_binary_with_array_mode(
             character_user_defined_starts.push(user_defined_start);
         }
     }
-    let variables = if reader.remaining().is_empty() {
-        Vec::new()
-    } else {
-        reader.entries(EOF)?
-    };
+    let variables = reader.entries(EOF)?;
     let mut opaque_extensions = Vec::new();
     if matches!(kind, SaveFileKind::Normal | SaveFileKind::Global) && !reader.remaining().is_empty()
     {
-        while !reader.remaining().is_empty() {
+        loop {
             let tag = reader.u8()?;
             if tag == EOF {
                 break;
@@ -170,6 +173,11 @@ fn decode_binary_with_array_mode(
                 payload: body[start..reader.position].to_vec(),
             });
         }
+    }
+    if !reader.remaining().is_empty() {
+        return Err(SaveCodecError::InvalidFormat(
+            "trailing data follows the save terminator".into(),
+        ));
     }
     Ok(SaveDocument {
         format: if header == ZIP_HEADER {

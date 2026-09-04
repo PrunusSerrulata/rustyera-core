@@ -5,10 +5,10 @@ use crate::{ConfigStore, ConfigValue};
 use super::*;
 
 #[test]
-fn catalog_has_explicit_unique_ids_paths_codes_and_unified_defaults() {
+fn catalog_has_explicit_unique_ids_paths_and_codes() {
     catalog::validate_catalog();
     let specs = rera_catalog();
-    assert_eq!(specs.len(), 87);
+    assert_eq!(specs.len(), 89);
     let mappings = specs
         .iter()
         .map(|spec| (spec.code, spec.id, spec.path))
@@ -23,20 +23,23 @@ fn catalog_has_explicit_unique_ids_paths_codes_and_unified_defaults() {
             "text.replace_full_width_spaces",
         ),
         ("CharacterWidthMode", 127, "text.character_width_mode"),
+        (
+            "StrictUserCallArguments",
+            128,
+            "diagnostics.strict_user_call_arguments",
+        ),
+        (
+            "DisableBeforeErrorThrow",
+            129,
+            "runtime.disable_before_error_throw",
+        ),
     ] {
         assert!(
             mappings.contains(&expected),
             "missing pinned mapping {expected:?}"
         );
     }
-    assert_eq!(RERACONFIG_SCHEMA_VERSION, 3);
-    assert_eq!(
-        ConfigStore::default().get_code("UseMenu"),
-        Some(&ConfigValue::Enum {
-            value: "AUTO".into(),
-            allowed: vec!["SHOW".into(), "AUTO".into(), "HIDE".into()],
-        })
-    );
+    assert_eq!(RERACONFIG_SCHEMA_VERSION, 5);
     let active_ids = specs.iter().map(|spec| spec.id).collect::<BTreeSet<_>>();
     assert_eq!(retired::RETIRED_CONFIG_SPECS.len(), 40);
     assert_eq!(
@@ -80,21 +83,29 @@ fn catalog_has_explicit_unique_ids_paths_codes_and_unified_defaults() {
     ] {
         assert!(specs.iter().all(|spec| spec.code != retired));
     }
+}
+
+#[test]
+fn catalog_defaults_are_unified() {
+    let defaults = ConfigStore::default();
     assert_eq!(
-        ConfigStore::default().get_code("MaxLog"),
-        Some(&ConfigValue::Integer(1000))
+        defaults.get_code("UseMenu"),
+        Some(&ConfigValue::Enum {
+            value: "AUTO".into(),
+            allowed: vec!["SHOW".into(), "AUTO".into(), "HIDE".into()],
+        })
     );
+    for (code, expected) in [
+        ("MaxLog", ConfigValue::Integer(1000)),
+        ("PrintCPerLine", ConfigValue::Integer(5)),
+        ("PrintCLength", ConfigValue::Integer(24)),
+        ("AudioVolume", ConfigValue::Integer(100)),
+    ] {
+        assert_eq!(defaults.get_code(code), Some(&expected));
+    }
     assert_eq!(
-        ConfigStore::default().get_code("PrintCPerLine"),
-        Some(&ConfigValue::Integer(5))
-    );
-    assert_eq!(
-        ConfigStore::default().get_code("PrintCLength"),
-        Some(&ConfigValue::Integer(24))
-    );
-    assert_eq!(
-        ConfigStore::default().get_code("AudioVolume"),
-        Some(&ConfigValue::Integer(100))
+        defaults.get_code("DisableBeforeErrorThrow"),
+        Some(&ConfigValue::Boolean(false))
     );
 }
 
@@ -386,7 +397,7 @@ fn schema_v1_is_upgraded_and_retired_locks_and_fields_are_removed() {
         &["TextDrawingMode", "CompatiDRAWLINE"]
     );
     let output = document.to_lf_string();
-    assert!(output.contains("schema_version = 3"));
+    assert!(output.contains("schema_version = 5"));
     assert!(output.contains("font_size = 20 # keep"));
     assert!(output.contains("legacy_nonbutton_wrapping = true"));
     assert!(!output.contains("drawing_method"));
@@ -413,7 +424,7 @@ fn schema_v2_menu_visibility_is_upgraded_to_menu_mode() {
         );
         assert!(document.values().unwrap().is_fixed("UseMenu"));
         let output = document.to_lf_string();
-        assert!(output.contains("schema_version = 3"));
+        assert!(output.contains("schema_version = 5"));
         assert!(output.contains(&format!(
             "menu_mode = \"{}\" # keep",
             expected.to_lowercase()
@@ -459,7 +470,7 @@ fn canonical_materialization_rejects_values_from_an_old_catalog_type() {
 fn schema_v2_menu_upgrade_preserves_unrelated_lock_formatting() {
     let input = "[meta]\nschema_version = 2\nlocked_settings = [\n  \"text.font_size\", # font\n  \"interface.menu_visible\", # menu\n  \"input.mouse_enabled\", # mouse\n] # locks\n\n[interface]\nmenu_visible = true # value\n";
     let expected = input
-        .replace("schema_version = 2", "schema_version = 3")
+        .replace("schema_version = 2", "schema_version = 5")
         .replace("interface.menu_visible", "interface.menu_mode")
         .replace("menu_visible = true", "menu_mode = \"auto\"");
     let document = ReraConfigDocument::parse(input).unwrap();
@@ -549,4 +560,36 @@ fn generated_artifacts_are_current_deterministic_and_document_every_setting() {
 
 fn specs_as_ids() -> BTreeSet<u16> {
     rera_catalog().into_iter().map(|spec| spec.id).collect()
+}
+
+#[test]
+fn compatibility_profile_is_strict_and_survives_canonicalization() {
+    use erabasic_compat::CompatibilityProfileId;
+    let source = "[meta]\nschema_version = 4\n[compatibility]\nprofile = \"emuera.skia.snake\"\n";
+    let document = ReraConfigDocument::parse(source).unwrap();
+    let values = document.values().unwrap();
+    assert_eq!(
+        values.compatibility_profile(),
+        CompatibilityProfileId::EmueraSkiaSnake
+    );
+    let rebuilt = ReraConfigDocument::from_values(&values).unwrap();
+    assert_eq!(
+        rebuilt.values().unwrap().compatibility_profile(),
+        values.compatibility_profile()
+    );
+    for invalid in [
+        source.replace("emuera.skia.snake", "snake"),
+        source.replace("schema_version = 4", "schema_version = 3"),
+        source.replace("\"emuera.skia.snake\"", "true"),
+    ] {
+        assert!(ReraConfigDocument::parse(&invalid).is_err());
+    }
+    assert_eq!(
+        ReraConfigDocument::parse("[meta]\nschema_version = 3\n")
+            .unwrap()
+            .values()
+            .unwrap()
+            .compatibility_profile(),
+        CompatibilityProfileId::EmueraEm
+    );
 }

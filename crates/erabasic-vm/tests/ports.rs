@@ -21,6 +21,7 @@ fn prospective_host_completion_is_data_not_a_callback() {
 fn local_debug_targets_are_generation_and_frame_scoped() {
     let target = VmDebugVariableRef {
         target: PlaceDescriptor {
+            backing: None,
             variable: SymbolKey([1; 16]),
             indices: vec![3],
             character: None,

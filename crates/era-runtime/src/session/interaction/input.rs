@@ -55,6 +55,7 @@ impl RuntimeSession {
                 timeout_message: None,
                 submission_token: submission,
                 countdown_remaining_ms: None,
+                viewport_policy: era_runtime_protocol::InputViewportPolicy::FollowOutput,
             },
             result_name: Some("RESULT".into()),
             choices: BTreeMap::from([(no, VmValue::Integer(1)), (yes, VmValue::Integer(2))]),
@@ -120,6 +121,7 @@ impl RuntimeSession {
         if let InputIntent::CommitText(command) = &input.intent
             && command.len() > 1
             && command.starts_with('@')
+            && self.input_controller.macro_enabled
             && !pending.wait.one_input
         {
             return self.handle_system_input_command(message_id, command);
@@ -127,22 +129,19 @@ impl RuntimeSession {
         if let InputIntent::ActivateKeyMacro { group, slot } = &input.intent {
             return self.recall_key_macro(message_id, *group, *slot);
         }
-        let mut submitted_message_skip = input.message_skip;
-        let mut intent = input.intent;
-        if let InputIntent::CommitText(text) = intent {
-            let Ok(pieces) = preprocess_input(&text) else {
-                return self.reject(
+        self.active_input_source = None;
+        let submitted_message_skip = input.message_skip;
+        let intent = match input.intent {
+            InputIntent::CommitText(text) => {
+                return self.complete_text_input(
                     message_id,
-                    CommandErrorCode::ResourceLimit,
-                    "input macro expansion exceeds the runtime limit",
+                    &pending,
+                    text,
+                    submitted_message_skip,
                 );
-            };
-            let mut pieces = pieces.into_iter();
-            let segment = pieces.next().expect("input preprocessing yields one piece");
-            submitted_message_skip |= segment.message_skip;
-            self.queued_input.extend(pieces);
-            intent = InputIntent::CommitText(segment.text);
-        }
+            }
+            intent => intent,
+        };
         let allow_long_activation = self
             .project_snapshot
             .as_ref()
@@ -161,6 +160,41 @@ impl RuntimeSession {
         };
         self.message_skip = submitted_message_skip;
         let replay = self.replay_step_draft(&pending, &intent, &submission, submitted_message_skip);
+        self.finish_input(submission, false)?;
+        if let Some(replay) = replay {
+            self.input_replay
+                .record(replay, self.options.limits.maximum_transfer_bytes);
+        }
+        Ok(())
+    }
+
+    fn complete_text_input(
+        &mut self,
+        message_id: u64,
+        pending: &PendingInput,
+        text: String,
+        submitted_message_skip: bool,
+    ) -> Result<(), RuntimeError> {
+        let intent = InputIntent::CommitText(text.clone());
+        let source = self
+            .input_controller
+            .admit(InputRoot::External, text, submitted_message_skip)
+            .map_err(RuntimeError::ResourceLimit)?;
+        let submission = match self.prepare_text_submission(pending, &source) {
+            Ok(Some(submission)) => submission,
+            Ok(None) => {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    "input value does not match the active wait",
+                );
+            }
+            Err(RuntimeError::ResourceLimit(message)) => {
+                return self.reject(message_id, CommandErrorCode::ResourceLimit, message);
+            }
+            Err(error) => return Err(error),
+        };
+        let replay = self.replay_step_draft(pending, &intent, &submission, self.message_skip);
         self.finish_input(submission, false)?;
         if let Some(replay) = replay {
             self.input_replay
@@ -236,18 +270,19 @@ impl RuntimeSession {
         if pending.wait.kind == WaitKind::Void {
             return self.finish_input(InputSubmission::Value(VmValue::Integer(0)), false);
         }
-        let intent = queued_text_intent(&pending.wait, segment.text);
-        let token = pending.wait.submission_token;
+        let pending = pending.clone();
         self.queued_input.pop_front();
-        let pending = self
-            .operations
-            .active_input()
-            .expect("active wait is unchanged");
-        let Some(submission) = input_value(pending, token, intent.clone(), false) else {
+        let intent = super::admission::fragment_intent(&pending, &segment);
+        let Some(submission) = self.prepare_fragment(&pending, segment) else {
             return Ok(());
         };
-        self.message_skip = segment.message_skip;
-        let replay = self.replay_step_draft(pending, &intent, &submission, segment.message_skip);
+        let replay = (self.undo_replay.is_none()
+            && !self
+                .active_input_source
+                .as_ref()
+                .is_some_and(|source| matches!(source.root, InputRoot::Sequence(_))))
+        .then(|| self.replay_step_draft(&pending, &intent, &submission, self.message_skip))
+        .flatten();
         self.finish_input(submission, false)?;
         if let Some(replay) = replay {
             self.input_replay
@@ -258,6 +293,7 @@ impl RuntimeSession {
 
     fn cancel_queued_input(&mut self) -> Result<(), RuntimeError> {
         self.queued_input.clear();
+        self.active_input_source = None;
         self.message_skip = false;
         let wait_id = self.allocate_wait();
         let submission_token = self.allocate_interaction();
@@ -286,6 +322,7 @@ impl RuntimeSession {
         {
             return self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    context: None,
                     code: "runtime.system_command_during_timed_wait".into(),
                     level: RuntimeLogLevel::Warning,
                     message: "system commands cannot be entered during a timed wait".into(),
@@ -323,6 +360,7 @@ impl RuntimeSession {
                 if !self.negotiated_features.contains(&RuntimeFeature::Storage) {
                     return self.emit(
                         RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                            context: None,
                             code: "runtime.system_output_unavailable".into(),
                             level: RuntimeLogLevel::Warning,
                             message: "@OUTPUT requires negotiated frontend storage".into(),
@@ -350,6 +388,7 @@ impl RuntimeSession {
             "CONFIG" => self.emit_effect(EffectKind::OpenConfiguration),
             "DEBUG" => self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    context: None,
                     code: "runtime.debug_command_requires_debug_channel".into(),
                     level: RuntimeLogLevel::Warning,
                     message: "@DEBUG is available only through the granted debug protocol".into(),
@@ -360,6 +399,7 @@ impl RuntimeSession {
             ),
             _ => self.emit(
                 RuntimeMessage::Diagnostic(ProtocolDiagnostic {
+                    context: None,
                     code: "runtime.debug_command_requires_debug_channel".into(),
                     level: RuntimeLogLevel::Warning,
                     message: "arbitrary input debug commands are available only through the granted debug protocol".into(),
@@ -429,6 +469,7 @@ impl RuntimeSession {
                 )
             };
             let replay = crate::input_replay::ReplayStepDraft {
+                source: self.active_input_source.clone(),
                 action: crate::input_replay::ReplayAction::Timeout,
                 wait_kind: pending.wait.kind.into(),
                 result: match &submission {
@@ -460,7 +501,7 @@ impl RuntimeSession {
         Ok(())
     }
 
-    fn replay_step_draft(
+    pub(in crate::session) fn replay_step_draft(
         &self,
         pending: &PendingInput,
         intent: &InputIntent,
@@ -495,6 +536,7 @@ impl RuntimeSession {
             _ => None,
         };
         Some(crate::input_replay::ReplayStepDraft {
+            source: self.active_input_source.clone(),
             action,
             wait_kind: pending.wait.kind.into(),
             result,
@@ -511,6 +553,35 @@ impl RuntimeSession {
         submission: InputSubmission,
         timed_out: bool,
     ) -> Result<(), RuntimeError> {
+        let wait = self
+            .operations
+            .active_input()
+            .ok_or_else(|| RuntimeError::Internal("input wait disappeared".into()))?;
+        if !wait.wait.system_input
+            && records_input_undo(wait.wait.kind)
+            && let InputSubmission::Value(value) = &submission
+        {
+            self.verify_replayed_input(value)?;
+        }
+        let sequence_trace = if self.undo_replay.is_none()
+            && self
+                .active_input_source
+                .as_ref()
+                .is_some_and(|source| matches!(source.root, InputRoot::Sequence(_)))
+        {
+            let text = match &submission {
+                InputSubmission::Value(value) => display_value(value),
+                InputSubmission::Primitive(_) => String::new(),
+            };
+            self.replay_step_draft(
+                self.operations.active_input().expect("checked wait"),
+                &InputIntent::CommitText(text),
+                &submission,
+                self.message_skip,
+            )
+        } else {
+            None
+        };
         let pending = self
             .operations
             .take_active_input()
@@ -524,7 +595,12 @@ impl RuntimeSession {
                     "system input cannot accept primitive fields".into(),
                 ));
             };
+            self.active_input_source = None;
             self.finish_system_input(pending, &value)?;
+            if let Some(trace) = sequence_trace {
+                self.input_replay
+                    .record(trace, self.options.limits.maximum_transfer_bytes);
+            }
             return self.emit_projection_state();
         }
         if records_input_undo(pending.wait.kind)
@@ -532,6 +608,7 @@ impl RuntimeSession {
         {
             self.record_input_undo_value(value)?;
         }
+        self.active_input_source = None;
         // Emuera prints and flushes a console input row after a successful integer,
         // string, or any-value wait. A visible-button submission can leave that row
         // empty, but it still counts as a physical/logical line for LINECOUNT/CLEARLINE.
@@ -623,6 +700,10 @@ impl RuntimeSession {
             }),
         )?;
         let pause_next_wait = !vm.has_runnable_fibers();
+        if let Some(trace) = sequence_trace {
+            self.input_replay
+                .record(trace, self.options.limits.maximum_transfer_bytes);
+        }
         self.close_wait(pending.wait.wait_id)?;
         if let Some(next) = self.operations.pop_queued_input() {
             self.activate_wait(next, pause_next_wait)?;

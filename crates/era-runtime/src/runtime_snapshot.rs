@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 
-use era_runtime_protocol::InteractionToken;
+use era_runtime_protocol::{InteractionToken, SqlDatabaseIdentityV1, SqlRevisionV1};
 use erabasic_bytecode::Digest;
 use erabasic_vm::VmValue;
 use serde::{Deserialize, Serialize};
@@ -12,8 +12,9 @@ use crate::operation::PendingOperations;
 use crate::presentation::PresentationModel;
 use crate::resource::ResourceGraph;
 
-pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 18;
-const LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 17;
+pub(crate) const RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 30;
+#[cfg(test)]
+const LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION: u32 = 20;
 pub(crate) const CULTURE_TABLE_VERSION: u32 = 1;
 const MAGIC: [u8; 8] = *b"RERARTS\0";
 const HEADER_BYTES: usize = 60;
@@ -72,12 +73,28 @@ pub(crate) enum RuntimeSnapshotOrigin {
     Diagnosis,
 }
 
+/// Stable SQL state carried by a runtime snapshot. Provider-native and script-reader handles are
+/// deliberately absent: restore reopens every database at the exact immutable revision before
+/// publishing the candidate VM state.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct SqlRuntimeSnapshot {
+    pub(crate) connections: Vec<SqlConnectionSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct SqlConnectionSnapshot {
+    pub(crate) logical_name: String,
+    pub(crate) identity: SqlDatabaseIdentityV1,
+    pub(crate) durable_revision: SqlRevisionV1,
+}
+
 #[derive(Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct RuntimeSnapshotPayload {
     pub(crate) format_version: u32,
     pub(crate) origin: RuntimeSnapshotOrigin,
     pub(crate) artifact_id: Digest,
+    pub(crate) compatibility: erabasic_compat::CompatibilityIdentity,
     pub(crate) project_identity: [u8; 32],
     pub(crate) resource_count: u64,
     pub(crate) resource_graph: ResourceGraph,
@@ -86,6 +103,7 @@ pub(crate) struct RuntimeSnapshotPayload {
     pub(crate) vm_snapshot: Vec<u8>,
     pub(crate) presentation: PresentationModel,
     pub(crate) operations: PendingOperations,
+    pub(crate) sql: SqlRuntimeSnapshot,
     pub(crate) controller: SystemController,
     pub(crate) logical_time_ns: u64,
     pub(crate) random_seed: Option<u64>,
@@ -98,6 +116,7 @@ pub(crate) struct RuntimeSnapshotPayload {
     pub(crate) force_kana_mode: u8,
     pub(crate) hotkey_state: Vec<i64>,
     pub(crate) key_macros: crate::key_macro::KeyMacros,
+    pub(crate) input_controller: crate::input_source::InputController,
     pub(crate) text_box: String,
     pub(crate) text_box_layout: era_runtime_protocol::TextBoxLayout,
     pub(crate) flow_input_enabled: bool,
@@ -246,10 +265,7 @@ pub(crate) fn decode(bytes: &[u8], maximum_bytes: usize) -> Result<RuntimeSnapsh
             .try_into()
             .map_err(|_| "truncated runtime snapshot version")?,
     );
-    if !matches!(
-        version,
-        LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION | RUNTIME_SNAPSHOT_FORMAT_VERSION
-    ) {
+    if version != RUNTIME_SNAPSHOT_FORMAT_VERSION {
         return Err(format!("unsupported runtime snapshot format {version}"));
     }
     let length = u64::from_le_bytes(
@@ -310,9 +326,20 @@ pub fn inspect_runtime_snapshot(
     maximum_bytes: usize,
 ) -> Result<RuntimeSnapshotInspection, RuntimeSnapshotInspectionError> {
     let snapshot = decode(bytes, maximum_bytes).map_err(inspection_error)?;
+    snapshot
+        .compatibility
+        .validate()
+        .map_err(|error| inspection_error(error.to_string()))?;
     let format_version = snapshot.format_version;
     let execution = erabasic_vm::inspect_snapshot(&snapshot.vm_snapshot, maximum_bytes)
         .map_err(|error| inspection_error(format!("invalid embedded snapshot: {error}")))?;
+    let expected = serde_json::to_value(&snapshot.compatibility)
+        .map_err(|error| inspection_error(error.to_string()))?;
+    if execution.state.get("compatibility") != Some(&expected) {
+        return Err(inspection_error(
+            "runtime and embedded snapshot compatibility differ",
+        ));
+    }
     let mut payload = serde_json::to_value(&snapshot)
         .map_err(|error| inspection_error(format!("cannot inspect runtime state: {error}")))?;
     let fields = payload
@@ -490,6 +517,19 @@ impl<R: Read> Read for CountingReader<R> {
 mod tests {
     use super::*;
 
+    fn mark_legacy_sound_slot(presentation: &mut PresentationModel) {
+        // Proves the reserved slot remains in the real format-30 MessagePack container.
+        presentation.set_transient_sound_compatibility_state_for_test(true);
+    }
+
+    fn assert_legacy_sound_slot(decoded: &RuntimeSnapshotPayload) {
+        assert!(
+            decoded
+                .presentation
+                .transient_sound_compatibility_state_for_test()
+        );
+    }
+
     #[test]
     fn checksum_rejects_mutated_payload() {
         let mut resource_graph = ResourceGraph::default();
@@ -498,6 +538,7 @@ mod tests {
             format_version: RUNTIME_SNAPSHOT_FORMAT_VERSION,
             origin: RuntimeSnapshotOrigin::Normal,
             artifact_id: Digest([1; 32]),
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_identity: [2; 32],
             resource_count: 0,
             resource_graph,
@@ -505,6 +546,7 @@ mod tests {
             vm_snapshot: vec![3],
             presentation: PresentationModel::default(),
             operations: PendingOperations::default(),
+            sql: SqlRuntimeSnapshot::default(),
             controller: SystemController::default(),
             logical_time_ns: 4,
             random_seed: Some(5),
@@ -517,6 +559,7 @@ mod tests {
             force_kana_mode: 0,
             hotkey_state: Vec::new(),
             key_macros: crate::key_macro::KeyMacros::default(),
+            input_controller: crate::input_source::InputController::default(),
             text_box: String::new(),
             text_box_layout: era_runtime_protocol::TextBoxLayout::default(),
             flow_input_enabled: false,
@@ -547,28 +590,48 @@ mod tests {
 
         payload.format_version = LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION;
         let legacy = encode_container(&payload, LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION).unwrap();
-        let decoded = decode(&legacy, usize::MAX).unwrap();
-        assert_eq!(
-            decoded.format_version,
-            LEGACY_RUNTIME_SNAPSHOT_FORMAT_VERSION
-        );
+        assert!(decode(&legacy, usize::MAX).is_err());
     }
 
     #[test]
     fn canvas_replay_state_round_trips_in_exact_runtime_snapshots() {
         let mut resource_graph = ResourceGraph::default();
         resource_graph.create_canvas(7, 20, 10).unwrap();
+        assert!(resource_graph.set_animation_timer(7));
+        let text_line_background = era_runtime_protocol::Color {
+            red: 17,
+            green: 34,
+            blue: 51,
+            alpha: 127,
+        };
+        let mut presentation = PresentationModel::default();
+        presentation.set_text_line_background(Some(text_line_background));
+        mark_legacy_sound_slot(&mut presentation);
         let payload = RuntimeSnapshotPayload {
             format_version: RUNTIME_SNAPSHOT_FORMAT_VERSION,
             origin: RuntimeSnapshotOrigin::Debug,
             artifact_id: Digest([1; 32]),
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
             project_identity: [2; 32],
             resource_count: 0,
             resource_graph,
             epoch: 3,
             vm_snapshot: vec![3],
-            presentation: PresentationModel::default(),
+            presentation,
             operations: PendingOperations::default(),
+            sql: SqlRuntimeSnapshot {
+                connections: vec![SqlConnectionSnapshot {
+                    logical_name: "main".into(),
+                    identity: SqlDatabaseIdentityV1 {
+                        source: era_runtime_protocol::SqlDatabaseSourceV1::Memory,
+                        sqlite_version: era_runtime_protocol::SQL_SQLITE_VERSION.into(),
+                        format_version: era_runtime_protocol::SQL_DATABASE_FORMAT_VERSION,
+                    },
+                    durable_revision: SqlRevisionV1 {
+                        sha256: era_protocol::ProtocolBytes::new(vec![7; 32]),
+                    },
+                }],
+            },
             controller: SystemController::default(),
             logical_time_ns: 4,
             random_seed: Some(5),
@@ -581,6 +644,7 @@ mod tests {
             force_kana_mode: 0,
             hotkey_state: Vec::new(),
             key_macros: crate::key_macro::KeyMacros::default(),
+            input_controller: crate::input_source::InputController::default(),
             text_box: String::new(),
             text_box_layout: era_runtime_protocol::TextBoxLayout::default(),
             flow_input_enabled: false,
@@ -612,12 +676,24 @@ mod tests {
         assert!(decode(&understated, uncompressed.len()).is_err());
         let decoded = decode(&encoded, uncompressed.len()).unwrap();
         assert_eq!(decoded.origin, RuntimeSnapshotOrigin::Debug);
+        assert_legacy_sound_slot(&decoded);
         assert_eq!(decoded.resource_graph.canvas_state(7), Some((20, 10)));
+        assert_eq!(decoded.resource_graph.animation_timer(), 10);
+        assert_eq!(
+            decoded
+                .presentation
+                .snapshot()
+                .settings
+                .text_line_background,
+            Some(text_line_background)
+        );
         assert_eq!(decoded.selected_locale, "ja");
         assert_eq!(decoded.culture_table_version, CULTURE_TABLE_VERSION);
         assert_eq!(decoded.force_kana_mode, 0);
         assert_eq!(decoded.system_menu, 3);
         assert_eq!(decoded.system_menu_slot, Some(17));
+        assert_eq!(decoded.sql.connections.len(), 1);
+        assert_eq!(decoded.sql.connections[0].logical_name, "main");
     }
 
     #[test]

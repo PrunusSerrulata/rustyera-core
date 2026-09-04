@@ -1,8 +1,8 @@
 use std::collections::{BTreeSet, VecDeque};
 
 use era_runtime_protocol::{
-    Color, LineAlignment, LogicalLength, PresentationSettings, ResourceReplay, TooltipFormat,
-    TooltipSettings,
+    Color, LineAlignment, LogicalLength, PresentationSettings, ResourceReplay, SceneStateV1,
+    TooltipFormat, TooltipSettings,
 };
 use erabasic_vm::CharacterWidthMode;
 
@@ -23,6 +23,7 @@ pub(super) fn model() -> PresentationModel {
         input_wait: None,
         next_line: 1,
         logical_line_count: 0,
+        canonical_document_cursor_y: LogicalLength(0),
         line_count_dirty: true,
         settings: PresentationSettings {
             drawable_width: LogicalLength(760_000),
@@ -43,6 +44,7 @@ pub(super) fn model() -> PresentationModel {
             maximum_physical_lines: 5_000,
             prevent_button_wrap: false,
             legacy_nonbutton_wrap: false,
+            text_line_background: None,
         },
         project_column_cells: true,
         project_separators: true,
@@ -57,9 +59,17 @@ pub(super) fn model() -> PresentationModel {
         button_generation: 0,
         replace_next_temporary: false,
         html_island: Vec::new(),
-        backgrounds: Vec::new(),
-        client_backgrounds: Vec::new(),
+        scene: SceneStateV1::default(),
+        scene_operations: Vec::new(),
+        background_layers: Vec::new(),
+        cbg_layers: Vec::new(),
+        cbg_button_map: None,
+        image_layers: Vec::new(),
+        next_scene_layer_id: 1,
+        next_scene_sequence: 1,
         audio: Vec::new(),
+        sound_volume_millionths: 1_000_000,
+        sound_playing: false,
         tooltip: TooltipSettings {
             foreground: rgb_color(0),
             background: rgb_color(0x00ff_ffe1),

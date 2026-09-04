@@ -20,11 +20,27 @@ impl RuntimeSession {
                 "project loading requires an idle runtime",
             );
         }
+        if self.sql.has_inflight() {
+            return self.reject(
+                message_id,
+                CommandErrorCode::InvalidState,
+                "project loading cannot cross SQL pending requests",
+            );
+        }
         if request.manifest.is_none()
             && request.compiled_cache_transfer_id.is_none()
             && let Some(manifest) = staged_manifest
         {
             request.manifest = Some(manifest);
+        }
+        if let Err(diagnostic) = validate_compatibility_load(&request, &self.service_capabilities) {
+            return self.emit(
+                RuntimeMessage::ProjectLoadReport(compatibility_load_error_report(
+                    &request.identity,
+                    *diagnostic,
+                )),
+                Some(message_id),
+            );
         }
         let cache_bytes = match request.compiled_cache_transfer_id {
             Some(transfer_id) => {
@@ -40,11 +56,13 @@ impl RuntimeSession {
             }
             None => None,
         };
+        let requested_compatibility = request.identity.compatibility.clone();
         self.set_phase(RuntimePhase::LoadingProject)?;
         let mut build =
             match self.build_project_from_cache(request, cache_bytes.as_deref(), staged_cache) {
                 Ok(build) => build,
-                Err(report) => {
+                Err(mut report) => {
+                    report.compatibility = Some(requested_compatibility);
                     self.emit(RuntimeMessage::ProjectLoadReport(*report), Some(message_id))?;
                     return self.set_phase(previous_phase);
                 }
@@ -116,6 +134,22 @@ impl RuntimeSession {
             };
             report.success = false;
             report.diagnostics.push(ProtocolDiagnostic {
+                context: Some(Box::new(
+                    era_runtime_protocol::CompatibilityDiagnosticContext {
+                        artifact: None,
+                        project_load_id: None,
+                        runtime_epoch: None,
+                        generation: None,
+                        identity: report.compatibility.clone(),
+                        stage: "service".into(),
+                        api: None,
+                        required_capability: Some(era_runtime_protocol::RequiredCapability {
+                            kind: ServiceKind::Image,
+                            operation: IMAGE_METADATA_OPERATION.into(),
+                            version: IMAGE_METADATA_OPERATION_VERSION,
+                        }),
+                    },
+                )),
                 code: "runtime.missing_image_metadata_service".into(),
                 level: RuntimeLogLevel::Error,
                 message: "resource sprites require the negotiated image_metadata service".into(),
@@ -201,10 +235,19 @@ impl RuntimeSession {
         let configuration_warning = cached
             .as_ref()
             .and_then(compiled_cache_configuration_warning);
-        let cache_compatible = configuration_warning.is_none();
+        let cache_compatible = configuration_warning.is_none()
+            && cached.as_ref().is_none_or(|cache| {
+                cache.artifact.artifact().manifest.compatibility == request.identity.compatibility
+                    && cache.snapshot.manifest.compatibility == request.identity.compatibility
+            });
         cache_warning = configuration_warning.or(cache_warning);
         let mut build = match cached {
-            Some(exact) if exact.key == expected_key && cache_compatible => {
+            Some(exact)
+                if exact.key == expected_key
+                    && cache_compatible
+                    && crate::compatibility_configuration_digest(&exact.snapshot.manifest)
+                        == request.identity.configuration_digest =>
+            {
                 exact_cached_project_with_progress(
                     exact,
                     request.identity.project_revision,
@@ -216,8 +259,7 @@ impl RuntimeSession {
                 let embedded_manifest = cached.as_ref().and_then(|value| {
                     let mut manifest = value.snapshot.manifest.as_ref().clone();
                     manifest.project_revision = request.identity.project_revision;
-                    (crate::compiled_cache::project_identity(&manifest).source_digest
-                        == request.identity.source_digest)
+                    (crate::compiled_cache::project_identity(&manifest) == request.identity)
                         .then_some(manifest)
                 });
                 let manifest = prefer_complete_manifest(request.manifest, embedded_manifest);
@@ -237,38 +279,25 @@ impl RuntimeSession {
                     }
                     return Err(Box::new(report));
                 };
-                if manifest_contains_omitted_payloads(&manifest) {
-                    return Err(Box::new(project_payload_required_report(
-                        request.identity.project_revision,
-                    )));
-                }
-                let actual_identity = crate::compiled_cache::project_identity(&manifest);
-                if actual_identity.source_digest != request.identity.source_digest {
-                    return Err(Box::new(ProjectLoadReport {
-                        project_revision: request.identity.project_revision,
-                        success: false,
-                        diagnostics: vec![crate::project::project_diagnostic(
-                            "runtime.project_identity_mismatch",
-                            RuntimeLogLevel::Error,
-                            "submitted project payload differs from its source identity",
-                            None,
-                        )],
-                        payload_required: false,
-                        configuration: None,
-                        game_information: None,
-                    }));
-                }
+                validate_cached_project_payload(&manifest, &request.identity)?;
                 let reusable_cache = cached.as_ref().filter(|_| cache_compatible);
-                let previous_incremental = reusable_cache
+                let current_artifact = self
+                    .vm
                     .as_ref()
-                    .map_or(self.incremental.as_ref(), |value| &value.incremental);
+                    .map(|vm| vm.vm().artifact())
+                    .or_else(|| self.artifact.as_ref().map(ValidatedArtifact::artifact))
+                    .filter(|artifact| {
+                        artifact.manifest.compatibility == request.identity.compatibility
+                    });
+                let previous_incremental = reusable_cache
+                    .map(|value| &value.incremental)
+                    .or_else(|| current_artifact.map(|_| self.incremental.as_ref()));
                 let previous_artifact = reusable_cache
                     .map(|value| value.artifact.artifact())
-                    .or_else(|| self.vm.as_ref().map(|vm| vm.vm().artifact()))
-                    .or_else(|| self.artifact.as_ref().map(ValidatedArtifact::artifact));
+                    .or(current_artifact);
                 build_owned_project_with_extensions_and_progress(
                     manifest,
-                    Some(previous_incremental),
+                    previous_incremental,
                     previous_artifact,
                     &self.extension_declarations,
                     self.configuration_profile,
@@ -277,6 +306,7 @@ impl RuntimeSession {
                 )
             }
         };
+        attach_build_identity(&mut build.report, &request.identity.compatibility);
         if let Some(error) = cache_warning {
             build
                 .report
@@ -327,7 +357,18 @@ impl RuntimeSession {
         message_id: u64,
         candidate: PendingColdProjectLoad,
     ) -> Result<(), RuntimeError> {
+        // A cold project commit is an ownership boundary. Provider-native state belongs to the
+        // previous project; advancing the SQL epoch prevents any late reply from reviving it.
+        self.emit_sql_cleanup_requests()?;
+        self.sql.reset_for_project_boundary();
+        let load_id = self
+            .project_load_id
+            .checked_add(1)
+            .ok_or(RuntimeError::ResourceLimit(
+                "project load identity exhausted",
+            ))?;
         let mut report = candidate.build.report;
+        self.project_load_id = load_id;
         self.compiled_project_cache = candidate.compiled_project_cache;
         self.compiled_cache_task = None;
         self.compiled_cache_failure = None;
@@ -341,11 +382,16 @@ impl RuntimeSession {
             .iter()
             .filter(|diagnostic| !diagnostic.code.starts_with("runtime.compiled_cache_"))
             .cloned()
+            .map(|mut diagnostic| {
+                crate::compatibility::clear_diagnostic_scope(&mut diagnostic);
+                diagnostic
+            })
             .collect();
         self.incremental = Arc::new(candidate.build.incremental);
         self.retained_title_program = None;
         self.artifact = candidate.build.artifact;
         self.project_snapshot = candidate.build.snapshot;
+        self.bitmap_cache_notice_emitted = false;
         self.undo_checkpoint = None;
         self.undo_replay = None;
         self.undo_token = None;
@@ -372,7 +418,8 @@ impl RuntimeSession {
             );
         }
         self.sync_resource_replay();
-        self.emit(RuntimeMessage::ProjectLoadReport(report), Some(message_id))?;
+        // A cold load has no generation, even if a faulted previous VM is still retained.
+        self.emit_committed_project_report(message_id, report, None)?;
         self.set_phase(RuntimePhase::Ready)
     }
 }
@@ -394,5 +441,108 @@ fn prefer_complete_manifest(
     match submitted {
         Some(manifest) if !manifest_contains_omitted_payloads(&manifest) => Some(manifest),
         submitted => embedded.or(submitted),
+    }
+}
+
+fn validate_compatibility_load(
+    request: &ProjectLoadRequest,
+    services: &BTreeMap<(ServiceKind, String), ProtocolVersion>,
+) -> Result<(), Box<ProtocolDiagnostic>> {
+    request.identity.compatibility.validate().map_err(|error| {
+        crate::compatibility::configuration_error(
+            "runtime.unsupported_compatibility_identity",
+            error.to_string(),
+            None,
+        )
+    })?;
+    if let Some(diagnostic) = crate::compatibility::missing_compatibility_service(
+        &request.identity.compatibility,
+        services,
+    ) {
+        return Err(diagnostic);
+    }
+    if request
+        .identity
+        .configuration_digest
+        .as_ref()
+        .is_some_and(|digest| digest.as_slice().len() != 32)
+    {
+        return Err(crate::compatibility::configuration_error(
+            "runtime.compatibility_configuration_digest_mismatch",
+            "configuration digest must contain 32 bytes",
+            None,
+        ));
+    }
+    if let Some(manifest) = &request.manifest {
+        let (resolved, digest) = crate::compatibility::resolve_manifest_compatibility(manifest)?;
+        if resolved != manifest.compatibility || resolved != request.identity.compatibility {
+            return Err(crate::compatibility::configuration_error(
+                "runtime.compatibility_identity_mismatch",
+                "request, manifest and root configuration compatibility identities must match",
+                None,
+            ));
+        }
+        if digest != request.identity.configuration_digest {
+            return Err(crate::compatibility::configuration_error(
+                "runtime.compatibility_configuration_digest_mismatch",
+                "root configuration changed after compatibility resolution",
+                None,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn compatibility_load_error_report(
+    identity: &era_runtime_protocol::ProjectIdentity,
+    mut diagnostic: ProtocolDiagnostic,
+) -> ProjectLoadReport {
+    crate::compatibility::attach_diagnostic_identity(&mut diagnostic, &identity.compatibility);
+    ProjectLoadReport {
+        project_revision: identity.project_revision,
+        success: false,
+        diagnostics: vec![diagnostic],
+        payload_required: false,
+        configuration: None,
+        game_information: None,
+        compatibility: Some(identity.compatibility.clone()),
+    }
+}
+
+fn validate_cached_project_payload(
+    manifest: &ProjectManifest,
+    identity: &era_runtime_protocol::ProjectIdentity,
+) -> Result<(), Box<ProjectLoadReport>> {
+    if manifest_contains_omitted_payloads(manifest) {
+        return Err(Box::new(project_payload_required_report(
+            identity.project_revision,
+        )));
+    }
+    if crate::compiled_cache::project_identity(manifest) != *identity {
+        return Err(Box::new(ProjectLoadReport {
+            compatibility: None,
+            project_revision: identity.project_revision,
+            success: false,
+            diagnostics: vec![crate::project::project_diagnostic(
+                "runtime.project_identity_mismatch",
+                RuntimeLogLevel::Error,
+                "submitted project payload differs from its source identity",
+                None,
+            )],
+            payload_required: false,
+            configuration: None,
+            game_information: None,
+        }));
+    }
+    Ok(())
+}
+
+fn attach_build_identity(
+    report: &mut ProjectLoadReport,
+    identity: &era_runtime_protocol::CompatibilityIdentity,
+) {
+    report.compatibility = Some(identity.clone());
+    for diagnostic in &mut report.diagnostics {
+        crate::compatibility::attach_diagnostic_identity(diagnostic, identity);
     }
 }

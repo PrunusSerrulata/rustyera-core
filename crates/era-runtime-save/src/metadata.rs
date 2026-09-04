@@ -31,6 +31,12 @@ pub fn inspect_metadata(
     if data.len() > limits.maximum_bytes {
         return Err(SaveCodecError::LimitExceeded("maximum bytes"));
     }
+    if !complete
+        && data.len() < 8
+        && (HEADER.to_le_bytes().starts_with(data) || ZIP_HEADER.to_le_bytes().starts_with(data))
+    {
+        return Ok(SaveMetadataInspection::NeedMore);
+    }
     let header = data
         .get(..8)
         .and_then(|bytes| bytes.try_into().ok())
@@ -49,7 +55,15 @@ fn inspect_text(
     limits: SaveCodecLimits,
 ) -> Result<SaveMetadataInspection, SaveCodecError> {
     let data = data.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(data);
-    let source = match std::str::from_utf8(data) {
+    // A header check must not decode any payload bytes, including a UTF-8 code point
+    // split at the read-range boundary or malformed data after the description.
+    let header_end = data
+        .iter()
+        .enumerate()
+        .filter(|(_, byte)| **byte == b'\n')
+        .nth(2)
+        .map_or(data.len(), |(index, _)| index + 1);
+    let source = match std::str::from_utf8(&data[..header_end]) {
         Ok(source) => source,
         Err(error) if !complete && error.error_len().is_none() => {
             return Ok(SaveMetadataInspection::NeedMore);
@@ -288,6 +302,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn complete_text_metadata_ignores_invalid_or_split_utf8_in_the_payload() {
+        for suffix in [&[0xe4, 0xb8][..], &[0xff][..]] {
+            let mut data = b"7\n9\nslot\n".to_vec();
+            data.extend_from_slice(suffix);
+            for complete in [false, true] {
+                assert!(
+                    matches!(inspect_metadata(&data, complete, SaveCodecLimits::default()).unwrap(),
+                    SaveMetadataInspection::Complete { metadata, .. } if metadata.description == "slot")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn binary_magic_can_cross_chunks_but_not_end_of_file() {
+        for magic in [HEADER.to_le_bytes(), ZIP_HEADER.to_le_bytes()] {
+            for length in 1..8 {
+                assert_eq!(
+                    inspect_metadata(&magic[..length], false, SaveCodecLimits::default()).unwrap(),
+                    SaveMetadataInspection::NeedMore
+                );
+                assert!(
+                    inspect_metadata(&magic[..length], true, SaveCodecLimits::default()).is_err()
+                );
+            }
+        }
+    }
     #[test]
     fn binary_and_gzip_metadata_stop_before_variable_payload() {
         for format in [SaveFormat::Binary1808, SaveFormat::Binary1808Gzip] {
