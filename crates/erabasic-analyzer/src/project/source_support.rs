@@ -312,10 +312,6 @@ pub(super) fn at_function(
     )
 }
 
-pub(super) fn key(name: &str, ignore_case: bool) -> String {
-    crate::identifiers::identifier_key(name, ignore_case)
-}
-
 fn normalize_path(path: &str) -> Option<String> {
     if path.is_empty() || path.starts_with('/') || path.starts_with('\\') {
         return None;

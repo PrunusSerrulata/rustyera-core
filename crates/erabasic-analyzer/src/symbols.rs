@@ -361,29 +361,9 @@ impl Symbols {
     }
 }
 
-pub(crate) fn semantic_type(value_type: ValueType) -> SemanticType {
+fn semantic_type(value_type: ValueType) -> SemanticType {
     match value_type {
         ValueType::Integer => SemanticType::Integer,
         ValueType::String => SemanticType::String,
     }
-}
-
-pub(crate) fn is_reserved(name: &str) -> bool {
-    matches!(
-        name.to_ascii_uppercase().as_str(),
-        "IS" | "TO"
-            | "INT"
-            | "STR"
-            | "REFFUNC"
-            | "STATIC"
-            | "DYNAMIC"
-            | "GLOBAL"
-            | "PRIVATE"
-            | "SAVEDATA"
-            | "CHARADATA"
-            | "REF"
-            | "__DEBUG__"
-            | "__SKIP__"
-            | "_"
-    )
 }

@@ -10,7 +10,8 @@ use erabasic_parser::{ParserContext, parse_expression};
 
 use crate::{
     AnalyzerDiagnostic, AnalyzerDiagnosticCode, AnalyzerDiagnosticSeverity, AnalyzerOptions,
-    expression::IndexResolver, identifiers::identifier_key, symbols::is_reserved,
+    expression::IndexResolver,
+    identifiers::{identifier_key, is_reserved},
 };
 
 mod registrations;
@@ -114,7 +115,7 @@ pub(crate) fn analyze_global_declarations(
         .values()
         .map(|schema| {
             (
-                normalize(schema.id.name(), options.ignore_case),
+                identifier_key(schema.id.name(), options.ignore_case),
                 schema.dimensions.clone(),
             )
         })
@@ -151,7 +152,7 @@ pub(crate) fn analyze_global_declarations(
             match parsed {
                 Ok(variable) => {
                     diagnostics.extend(variable.arithmetic_diagnostics.iter().cloned());
-                    let key = normalize(variable.schema.id.name(), options.ignore_case);
+                    let key = identifier_key(variable.schema.id.name(), options.ignore_case);
                     if is_reserved(variable.schema.id.name()) {
                         diagnostics.push(at_input(
                             input,
@@ -737,10 +738,6 @@ fn split_top_level_indices(source: &str, target: char) -> Vec<usize> {
         }
     }
     indices
-}
-
-fn normalize(name: &str, ignore_case: bool) -> String {
-    identifier_key(name, ignore_case)
 }
 
 fn at_input(

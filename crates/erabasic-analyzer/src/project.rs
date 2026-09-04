@@ -1,6 +1,4 @@
 use std::borrow::Cow;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use erabasic_ast::{Script, SourceKind};
 use erabasic_csv::{CsvLoadOptions, resolve_deferred_indices};
@@ -18,19 +16,24 @@ use crate::{
     context::AnalysisParserContext,
     declarations::{DeclarationInput, analyze_global_declarations},
     expression::IndexResolver,
-    symbols::{Symbols, is_reserved},
+    identifiers::{identifier_key, is_reserved},
+    symbols::Symbols,
 };
 
 mod lowering_support;
+mod path_order;
+mod progress;
 mod reachability;
 mod source_support;
 mod statement_analysis;
 
 use lowering_support::{register_function_declarations, source_file};
+pub use path_order::compare_reference_file_paths;
+pub(crate) use progress::ProgressCounter;
+pub use progress::{AnalysisProgress, AnalysisProgressCallback, AnalysisProgressStage};
 use reachability::{function_semantics, reachable_functions, report_uncalled, uncalled_function};
 use source_support::{
-    append_parser_diagnostics, at_function, index_sources, key, map_csv_diagnostic,
-    validate_extensions,
+    append_parser_diagnostics, at_function, index_sources, map_csv_diagnostic, validate_extensions,
 };
 use statement_analysis::{FunctionDefinition, analyze_function, should_analyze_function};
 
@@ -52,149 +55,6 @@ pub struct AnalysisReport {
     pub project: Option<AnalyzedProject>,
     pub diagnostics: Vec<AnalyzerDiagnostic>,
 }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AnalysisProgressStage {
-    Parsing,
-    DeclaringGlobals,
-    IndexingFunctions,
-    DeclaringLocals,
-    Analyzing,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AnalysisProgress {
-    pub stage: AnalysisProgressStage,
-    pub completed: usize,
-    pub total: usize,
-}
-
-/// Compares file paths in the order used by Emuera's recursive file loader.
-///
-/// Emuera sorts the files in the current directory first, then visits sorted
-/// child directories recursively. A flat lexical path sort does not preserve
-/// that order because it can place a child directory before a file in its
-/// parent directory.
-#[must_use]
-pub fn compare_reference_file_paths(left: &str, right: &str) -> std::cmp::Ordering {
-    let left = left.replace('\\', "/");
-    let right = right.replace('\\', "/");
-    let left = left
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    let right = right
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    let (Some((left_file, left_dirs)), Some((right_file, right_dirs))) =
-        (left.split_last(), right.split_last())
-    else {
-        return left.cmp(&right);
-    };
-
-    for (left_dir, right_dir) in left_dirs.iter().zip(right_dirs) {
-        match left_dir.cmp(right_dir) {
-            std::cmp::Ordering::Equal => {}
-            ordering => return ordering,
-        }
-    }
-    match left_dirs.len().cmp(&right_dirs.len()) {
-        std::cmp::Ordering::Equal => left_file.cmp(right_file),
-        ordering => ordering,
-    }
-}
-
-pub(crate) struct ProgressCounter<'a> {
-    stage: AnalysisProgressStage,
-    total: usize,
-    report_interval: usize,
-    completed: AtomicUsize,
-    reported_completed: AtomicUsize,
-    callback_lock: Mutex<()>,
-    callback: Option<&'a dyn AnalysisProgressCallback>,
-}
-
-impl<'a> ProgressCounter<'a> {
-    pub(crate) fn new(
-        stage: AnalysisProgressStage,
-        total: usize,
-        callback: Option<&'a dyn AnalysisProgressCallback>,
-    ) -> Self {
-        if let Some(callback) = callback {
-            callback(AnalysisProgress {
-                stage,
-                completed: 0,
-                total,
-            });
-        }
-        Self {
-            stage,
-            total,
-            report_interval: total.checked_div(64).unwrap_or(0).max(64),
-            completed: AtomicUsize::new(0),
-            reported_completed: AtomicUsize::new(0),
-            callback_lock: Mutex::new(()),
-            callback,
-        }
-    }
-
-    pub(crate) fn advance(&self) {
-        let completed = self.completed.fetch_add(1, Ordering::Relaxed) + 1;
-        let Some(callback) = self.callback else {
-            return;
-        };
-        let previous = self.reported_completed.load(Ordering::Relaxed);
-        if !self.should_report(completed, previous) {
-            return;
-        }
-        let _guard = self
-            .callback_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Observe the latest completed count under the callback lock: parallel
-        // workers must never publish an older count after a newer one.
-        let completed = self.completed.load(Ordering::Relaxed);
-        let previous = self.reported_completed.load(Ordering::Relaxed);
-        // Percentage-only reporting can hide thousands of completed functions. Keep bounded
-        // sub-percent updates without flooding browser hosts when a large project advances fast.
-        if self.should_report(completed, previous) {
-            self.reported_completed.store(completed, Ordering::Relaxed);
-            callback(AnalysisProgress {
-                stage: self.stage,
-                completed,
-                total: self.total,
-            });
-        }
-    }
-
-    fn should_report(&self, completed: usize, previous: usize) -> bool {
-        let percent = completed
-            .saturating_mul(100)
-            .checked_div(self.total)
-            .unwrap_or(100);
-        let previous_percent = previous
-            .saturating_mul(100)
-            .checked_div(self.total)
-            .unwrap_or(100);
-        completed > previous
-            && (percent > previous_percent
-                || completed - previous >= self.report_interval
-                || completed == self.total)
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub trait AnalysisProgressCallback: Fn(AnalysisProgress) + Sync {}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl<T> AnalysisProgressCallback for T where T: Fn(AnalysisProgress) + Sync {}
-
-#[cfg(target_arch = "wasm32")]
-pub trait AnalysisProgressCallback: Fn(AnalysisProgress) {}
-
-#[cfg(target_arch = "wasm32")]
-impl<T> AnalysisProgressCallback for T where T: Fn(AnalysisProgress) {}
 
 #[must_use]
 pub fn analyze_project(
@@ -290,25 +150,21 @@ fn analyze_project_inner_with_source_lifecycle(
     // ERH parsing above establishes the shared macro and variable environment.
     // ERB parsing never mutates it, so each worker receives a cheap copy-on-write
     // context and indexed collection preserves the source/diagnostic order.
+    let parse_erb_source = |source: source_support::IndexedSource| {
+        let mut local_context = context.clone();
+        let output = parse_erb(&source.text, &mut local_context);
+        parsing_progress.advance();
+        (source, output)
+    };
     #[cfg(not(target_arch = "wasm32"))]
     let erb_outputs = erb_sources
         .into_par_iter()
-        .map(|source| {
-            let mut local_context = context.clone();
-            let output = parse_erb(&source.text, &mut local_context);
-            parsing_progress.advance();
-            (source, output)
-        })
+        .map(parse_erb_source)
         .collect::<Vec<_>>();
     #[cfg(target_arch = "wasm32")]
     let erb_outputs = erb_sources
         .into_iter()
-        .map(|source| {
-            let mut local_context = context.clone();
-            let output = parse_erb(&source.text, &mut local_context);
-            parsing_progress.advance();
-            (source, output)
-        })
+        .map(parse_erb_source)
         .collect::<Vec<_>>();
     for (source, output) in erb_outputs {
         append_parser_diagnostics(
@@ -332,7 +188,6 @@ fn analyze_project_inner_with_source_lifecycle(
         input.project_data,
         Cow::Owned(parsed),
         options,
-        extensions,
         &catalog,
         &context,
         diagnostics,
@@ -377,7 +232,6 @@ pub fn analyze_parsed_project(
         project_data,
         Cow::Borrowed(sources),
         options,
-        extensions,
         &catalog,
         &context,
         diagnostics,
@@ -391,7 +245,6 @@ fn analyze_with_context(
     mut project_data: ProjectData,
     mut sources: Cow<'_, [ParsedProjectSource]>,
     options: &AnalyzerOptions,
-    _extensions: &ExtensionRegistry,
     catalog: &Catalog,
     context: &AnalysisParserContext,
     mut diagnostics: Vec<AnalyzerDiagnostic>,
@@ -488,7 +341,7 @@ fn analyze_with_context(
             }
             if catalog
                 .functions
-                .contains_key(&key(&function.name, options.ignore_case))
+                .contains_key(&identifier_key(&function.name, options.ignore_case))
                 && !options.allow_function_overloading
             {
                 diagnostics.push(at_function(
@@ -754,149 +607,4 @@ fn analyze_with_context(
 }
 
 #[cfg(test)]
-mod source_lifecycle_tests {
-    use super::*;
-    use crate::{ProjectSource, SourcePayload};
-    use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
-    use erabasic_hir::SourceId;
-
-    #[test]
-    fn large_workload_progress_reports_first_percent() {
-        let events = Mutex::new(Vec::new());
-        let callback = |event| events.lock().unwrap().push(event);
-        let progress = ProgressCounter::new(
-            AnalysisProgressStage::DeclaringLocals,
-            100_000,
-            Some(&callback),
-        );
-        for _ in 0..1_000 {
-            progress.advance();
-        }
-        let events = events.into_inner().unwrap();
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[1].completed, 1_000);
-        assert_eq!(events[1].total, 100_000);
-    }
-
-    fn input(sources: &[(&str, &str)]) -> AnalysisInput {
-        AnalysisInput {
-            project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
-                .data
-                .expect("default project data"),
-            sources: sources
-                .iter()
-                .map(|(relative_path, text)| ProjectSource {
-                    relative_path: (*relative_path).into(),
-                    payload: SourcePayload::Utf8((*text).into()),
-                })
-                .collect(),
-        }
-    }
-
-    fn assert_progressive_owned_analysis_matches_parallel(input: AnalysisInput) {
-        let options = AnalyzerOptions::analysis_mode();
-        let extensions = ExtensionRegistry::default();
-        let parallel = analyze_project_inner_with_source_lifecycle(
-            input.clone(),
-            &options,
-            &extensions,
-            None,
-            false,
-        );
-        let progressive =
-            analyze_project_inner_with_source_lifecycle(input, &options, &extensions, None, true);
-        assert_eq!(progressive, parallel);
-    }
-
-    fn parsed_sources(project_data: &ProjectData) -> Vec<ParsedProjectSource> {
-        let catalog = Catalog::build(&ExtensionRegistry::default());
-        let options = AnalyzerOptions::analysis_mode();
-        let mut context = AnalysisParserContext::new(
-            &project_data.schema,
-            &catalog,
-            std::iter::empty(),
-            &options,
-        );
-        let header_text = "#DIM CONST SIZE = 3\n";
-        let header = parse_erh(header_text, &mut context)
-            .value
-            .expect("header AST");
-        let script_text = "PRINT top level\n@SYSTEM_TITLE\nRESULT = SIZE + CLIENTWIDTH()\nRETURN\n";
-        let script = parse_erb(script_text, &mut context)
-            .value
-            .expect("script AST");
-        vec![
-            ParsedProjectSource {
-                source: source_file(SourceId(0), "vars.erh".into(), SourceKind::Erh, header_text),
-                text: header_text.into(),
-                script: header,
-            },
-            ParsedProjectSource {
-                source: source_file(SourceId(1), "main.erb".into(), SourceKind::Erb, script_text),
-                text: script_text.into(),
-                script,
-            },
-        ]
-    }
-
-    #[test]
-    fn borrowed_and_owned_preserved_ast_paths_return_identical_reports() {
-        let project_data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
-            .data
-            .expect("default project data");
-        let sources = parsed_sources(&project_data);
-        let options = AnalyzerOptions::analysis_mode();
-        let extensions = ExtensionRegistry::default();
-        let borrowed =
-            analyze_parsed_project(project_data.clone(), &sources, &options, &extensions);
-        let catalog = Catalog::build(&extensions);
-        let mut context = AnalysisParserContext::new(
-            &project_data.schema,
-            &catalog,
-            sources
-                .iter()
-                .flat_map(|source| source.script.functions.iter())
-                .map(|function| function.name.clone()),
-            &options,
-        );
-        for source in sources
-            .iter()
-            .filter(|source| source.source.kind == SourceKind::Erh)
-        {
-            let _ = parse_erh(&source.text, &mut context);
-        }
-        let owned = analyze_with_context(
-            project_data,
-            Cow::Owned(sources),
-            &options,
-            &extensions,
-            &catalog,
-            &context,
-            Vec::new(),
-            None,
-            false,
-        );
-
-        assert_eq!(owned, borrowed);
-    }
-
-    #[test]
-    fn progressive_owned_analysis_preserves_hir_and_diagnostic_order() {
-        assert_progressive_owned_analysis_matches_parallel(input(&[
-            ("変数.erh", "#DIM CONST SIZE = 3\n"),
-            (
-                "main.erb",
-                "PRINT top level\n@SYSTEM_TITLE\nRESULT = SIZE + CLIENTWIDTH()\nRETURN\n",
-            ),
-            ("unused.erb", "@UNUSED\nPRINT あいう\nRETURN\n"),
-        ]));
-    }
-
-    #[test]
-    fn progressive_owned_analysis_handles_sparse_duplicate_definitions() {
-        assert_progressive_owned_analysis_matches_parallel(input(&[
-            ("first.erb", "@SYSTEM_TITLE\nRETURN\n@SAME\nRETURN\n"),
-            ("second.erb", "@SAME\nPRINT duplicate\nRETURN\n"),
-        ]));
-    }
-}
+mod source_lifecycle_tests;

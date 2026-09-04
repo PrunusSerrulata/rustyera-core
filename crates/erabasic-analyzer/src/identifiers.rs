@@ -10,6 +10,26 @@ pub(crate) fn identifier_key(name: &str, ignore_case: bool) -> String {
     }
 }
 
+pub(crate) fn is_reserved(name: &str) -> bool {
+    matches!(
+        name.to_ascii_uppercase().as_str(),
+        "IS" | "TO"
+            | "INT"
+            | "STR"
+            | "REFFUNC"
+            | "STATIC"
+            | "DYNAMIC"
+            | "GLOBAL"
+            | "PRIVATE"
+            | "SAVEDATA"
+            | "CHARADATA"
+            | "REF"
+            | "__DEBUG__"
+            | "__SKIP__"
+            | "_"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::identifier_key;

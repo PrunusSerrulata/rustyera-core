@@ -13,13 +13,11 @@ use crate::{
         parse_scoped_declaration,
     },
     expression::{ExpressionAnalyzer, IndexResolver},
+    identifiers::identifier_key,
     symbols::Symbols,
 };
 
-use super::{
-    ParsedProjectSource,
-    source_support::{key, map_parser_diagnostic},
-};
+use super::{ParsedProjectSource, source_support::map_parser_diagnostic};
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(super) fn analyze_scoped_declaration_statement(
@@ -527,7 +525,10 @@ pub(super) fn register_function_declarations(
                         format!("#{} replaces an earlier size declaration", directive.name),
                     ));
                 }
-                variable_dimensions.insert(key(variable_name, options.ignore_case), vec![size]);
+                variable_dimensions.insert(
+                    identifier_key(variable_name, options.ignore_case),
+                    vec![size],
+                );
             } else {
                 diagnostics.push(AnalyzerDiagnostic::at(
                     AnalyzerDiagnosticCode::InvalidDeclaration,
@@ -576,7 +577,7 @@ pub(super) fn register_function_declarations(
                         ),
                     ));
                 } else {
-                    let key = key(declaration.schema.id.name(), options.ignore_case);
+                    let key = identifier_key(declaration.schema.id.name(), options.ignore_case);
                     variable_dimensions.insert(key.clone(), declaration.schema.dimensions.clone());
                     if declaration.schema.storage == erabasic_data::StorageScope::Constant
                         && let Some(value) = declaration.initial_values.first()
@@ -618,7 +619,7 @@ pub(super) fn register_function_declarations(
                 // function-local name and permits later declaration statements
                 // to reinitialize that same scalar.
                 if symbols.register_private(function_id, &declaration).is_ok() {
-                    let key = key(declaration.schema.id.name(), options.ignore_case);
+                    let key = identifier_key(declaration.schema.id.name(), options.ignore_case);
                     variable_dimensions.insert(key, declaration.schema.dimensions.clone());
                 }
             }

@@ -1,10 +1,12 @@
 use super::{
     AnalyzerOptions, BinaryOp, ConstantValue, DeclarationLookup, DimError, Expr, ExprKind,
-    FormPart, FormattedString, IndexResolver, ParserContext, UnaryOp, normalize, parse_expression,
+    FormPart, FormattedString, IndexResolver, ParserContext, UnaryOp, parse_expression,
 };
 use std::cell::RefCell;
 
 use erabasic_compat::{IntegerArithmeticPolicy, IntegerArithmeticWarning, IntegerOperation};
+
+use crate::identifiers::identifier_key;
 
 pub(crate) type ConstantWarnings = Vec<(IntegerArithmeticWarning, String)>;
 
@@ -65,7 +67,7 @@ fn evaluate_constant(
         ExprKind::String(value) => Ok(ConstantValue::String(value.clone())),
         ExprKind::Identifier(name) => evaluation
             .constants
-            .get(&normalize(name, evaluation.options.ignore_case))
+            .get(&identifier_key(name, evaluation.options.ignore_case))
             .cloned()
             .or_else(|| {
                 evaluation
@@ -333,7 +335,10 @@ fn evaluate_varsize(
     };
     let dimensions = evaluation
         .variable_dimensions
-        .get(&normalize(&variable_name, evaluation.options.ignore_case))
+        .get(&identifier_key(
+            &variable_name,
+            evaluation.options.ignore_case,
+        ))
         .ok_or_else(|| DimError::UnknownConstant(variable_name.clone()))?;
     let mut dimension = if let Some(argument) = arguments.get(1) {
         let argument = argument
@@ -377,7 +382,7 @@ fn evaluate_getnum(
         .ok_or_else(|| DimError::Invalid("GETNUM argument 1 must be a variable name".into()))?;
     if !evaluation
         .variable_dimensions
-        .contains_key(&normalize(variable, evaluation.options.ignore_case))
+        .contains_key(&identifier_key(variable, evaluation.options.ignore_case))
     {
         return Err(DimError::UnknownConstant(variable.into()));
     }
