@@ -1,0 +1,557 @@
+#[test]
+fn checked_runtime_schema_covers_lifecycle_control_messages() {
+    let schema = include_str!("../../schema/runtime.cddl");
+    for expected in [
+        "[22, exit-requested]",
+        "[93, sequence-acknowledgement]",
+        "[94, resynchronize-request]",
+        "[96, runtime-resynchronized]",
+    ] {
+        assert!(
+            schema.contains(expected),
+            "runtime CDDL is missing {expected}"
+        );
+    }
+}
+
+#[test]
+fn protocol_23_carries_compiled_cache_loads_and_in_session_title_returns() {
+    let load = RuntimeMessage::ProjectLoad(ProjectLoadRequest {
+        identity: era_runtime_protocol::ProjectIdentity {
+            compatibility: erabasic_compat::CompatibilityIdentity::default(),
+            configuration_digest: None,
+            project_revision: 7,
+            source_digest: ProtocolBytes::new(vec![1; 32]),
+        },
+        manifest: Some(ProjectManifest {
+            compatibility: erabasic_compat::CompatibilityIdentity::default(),
+            project_revision: 7,
+            files: Vec::new(),
+        }),
+        compiled_cache_transfer_id: Some(9),
+    });
+    assert_eq!(load.tag(), 19);
+    assert_eq!(
+        RuntimeMessage::decode_payload(19, &load.encode_payload().unwrap()).unwrap(),
+        load
+    );
+    assert_eq!(
+        RuntimeMessage::ReturnToTitle(ReturnToTitleRequest {}).tag(),
+        23
+    );
+    assert_eq!(StateExportKind::CompiledProjectCache as u8, 2);
+    assert_eq!(StateExportKind::FullProjectFile as u8, 3);
+}
+
+#[test]
+fn protocol_33_round_trips_configuration_and_client_preference_transactions() {
+    assert_eq!(
+        decode_canonical::<ConfigurationClientProfile>(
+            &encode_canonical(&ConfigurationClientProfile::Tui).unwrap()
+        ),
+        Ok(ConfigurationClientProfile::Tui)
+    );
+    let digest = ProtocolBytes::new(vec![7; 32]);
+    let prepare = RuntimeMessage::PrepareConfigurationUpdate(PrepareConfigurationUpdate {
+        project_revision: 9,
+        expected_source_digest: digest.clone(),
+        changes: vec![ConfigurationChange {
+            code: "MaxLog".into(),
+            value: "1200".into(),
+        }],
+    });
+    assert_eq!(prepare.tag(), 24);
+    assert_eq!(
+        RuntimeMessage::decode_payload(24, &prepare.encode_payload().unwrap()),
+        Ok(prepare)
+    );
+
+    let finalize = RuntimeMessage::FinalizeConfigurationUpdate(FinalizeConfigurationUpdate {
+        preparation_message_id: 10,
+        outcome: ConfigurationUpdateOutcome::Commit,
+    });
+    assert_eq!(finalize.tag(), 26);
+    assert_eq!(
+        RuntimeMessage::decode_payload(26, &finalize.encode_payload().unwrap()),
+        Ok(finalize)
+    );
+
+    let committed = RuntimeMessage::ConfigurationUpdateCommitted(ConfigurationUpdateCommitted {
+        configuration: ProjectConfigurationSnapshot {
+            compatibility: erabasic_compat::CompatibilityIdentity::default(),
+            project_revision: 9,
+            source_digest: digest,
+            entries: vec![ProjectConfigurationEntry {
+                code: "MaxLog".into(),
+                japanese: "履歴ログの行数".into(),
+                english: "Maximum log lines".into(),
+                value: "1200".into(),
+                kind: ConfigurationValueKind::Integer,
+                allowed: Vec::new(),
+                fixed: false,
+                applicability: 3,
+                default_value: "1000".into(),
+                effective_value: "1200".into(),
+                application: ConfigurationApplication::Hot,
+                preference_eligible: false,
+                client_effective_value: "1200".into(),
+            }],
+            restart_pending: false,
+            generated_source: Some("[meta]\nschema_version = 2\n".into()),
+        },
+    });
+    let json = serde_json::to_string(&committed).unwrap();
+    assert_eq!(
+        serde_json::from_str::<RuntimeMessage>(&json).unwrap(),
+        committed
+    );
+    assert_eq!(committed.tag(), 27);
+    assert_eq!(
+        RuntimeMessage::decode_payload(27, &committed.encode_payload().unwrap()),
+        Ok(committed)
+    );
+
+    let preferences = RuntimeMessage::ApplyClientPreferences(ClientPreferenceLayers {
+        project_revision: 9,
+        global: vec![ConfigurationChange {
+            code: "UseMouse".into(),
+            value: "NO".into(),
+        }],
+        project: vec![ConfigurationChange {
+            code: "FontSize".into(),
+            value: "22".into(),
+        }],
+    });
+    assert_eq!(preferences.tag(), 28);
+    assert_eq!(
+        RuntimeMessage::decode_payload(28, &preferences.encode_payload().unwrap()),
+        Ok(preferences)
+    );
+}
+
+#[test]
+fn protocol_23_retains_analysis_key_macros_and_extension_registration() {
+    let macro_command = RuntimeMessage::KeyMacroCommand(KeyMacroCommand::Store {
+        group: 2,
+        slot: 3,
+        text: "abc".into(),
+    });
+    assert_eq!(macro_command.tag(), 16);
+    assert_eq!(
+        RuntimeMessage::decode_payload(16, &macro_command.encode_payload().unwrap()).unwrap(),
+        macro_command
+    );
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
+}
+
+#[test]
+fn protocol_21_publishes_semantic_history_redraw_and_textbox_layout() {
+    use era_runtime_protocol::{
+        PresentationHistory, PresentationSettings, RationalOpacity, RedrawState, TextBoxLayout,
+    };
+
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
+    let opacity = RationalOpacity {
+        numerator: 128,
+        denominator: 255,
+    };
+    assert_eq!(opacity.denominator, 255);
+    let history = PresentationHistory {
+        logical_lines: Vec::new(),
+        operations: Vec::new(),
+    };
+    assert!(history.logical_lines.is_empty());
+    assert!(!RedrawState { enabled: false }.enabled);
+    assert_eq!(
+        TextBoxLayout {
+            x: 10,
+            y: 20,
+            width: 30,
+        }
+        .width,
+        30
+    );
+    let _ = std::mem::size_of::<PresentationSettings>();
+}
+
+#[test]
+fn input_undo_is_a_tokenized_semantic_protocol_operation() {
+    let token = InteractionToken { epoch: 7, id: 9 };
+    let request = RuntimeMessage::InputUndoRequest(InputUndoRequest { token });
+    assert_eq!(request.tag(), 37);
+    let encoded = request.encode_payload().unwrap();
+    assert_eq!(RuntimeMessage::decode_payload(37, &encoded), Ok(request));
+
+    let state = RuntimeMessage::InputUndoStateChanged(InputUndoState {
+        enabled: true,
+        available_steps: 2,
+        in_progress: false,
+        runtime_revision: 11,
+        token: Some(token),
+    });
+    assert_eq!(state.tag(), 38);
+    let encoded = state.encode_payload().unwrap();
+    assert_eq!(RuntimeMessage::decode_payload(38, &encoded), Ok(state));
+}
+
+#[test]
+fn projection_observations_and_pointer_results_bind_presentation_revisions() {
+    let message = RuntimeMessage::ProjectionObservation(ProjectionObservation {
+        environment_revision: 7,
+        presentation_revision: 9,
+        client_size: ProjectionSize {
+            width: ProjectionLength(800),
+            height: ProjectionLength(600),
+        },
+        projection_space_revision: 3,
+        line_columns: 80,
+        text_box: "typed".into(),
+        transform: ProjectionTransform {
+            x_numerator: 1,
+            x_denominator: 1_000,
+            y_numerator: 1,
+            y_denominator: 1_000,
+            origin_x: ProjectionLength(0),
+            origin_y: ProjectionLength(0),
+        },
+    });
+    assert_eq!(message.tag(), 35);
+    assert_eq!(
+        RuntimeMessage::decode_payload(message.tag(), &message.encode_payload().unwrap()).unwrap(),
+        message
+    );
+    assert_eq!(POINTER_STATE_OPERATION, "pointer_state");
+    assert_eq!(POINTER_STATE_OPERATION_VERSION, ProtocolVersion::new(1, 0));
+    let request = PointerStateRequest {
+        presentation_revision: 9,
+        environment_revision: 7,
+        projection_space_revision: 3,
+    };
+    let response = PointerStateResponse {
+        x: ProjectionLength(10),
+        y: ProjectionLength(20),
+        button_value: "3".into(),
+        presentation_revision: 9,
+        environment_revision: 7,
+        projection_space_revision: 3,
+    };
+    assert_eq!(
+        decode_canonical::<PointerStateRequest>(&encode_canonical(&request).unwrap()).unwrap(),
+        request
+    );
+    assert_eq!(
+        decode_canonical::<PointerStateResponse>(&encode_canonical(&response).unwrap()).unwrap(),
+        response
+    );
+}
+
+#[test]
+fn exit_intent_is_a_persistent_versioned_runtime_message() {
+    let exit = ExitRequested {
+        reason: ExitReason::Restart,
+        force: true,
+        runtime_revision: 17,
+    };
+    let message = RuntimeMessage::ExitRequested(exit);
+    let encoded = message.encode_payload().expect("encode exit intent");
+    assert_eq!(
+        RuntimeMessage::decode_payload(22, &encoded),
+        Ok(RuntimeMessage::ExitRequested(exit))
+    );
+}
+
+#[test]
+fn input_carries_interaction_token_and_monotonic_time() {
+    let input = FrontendInput {
+        wait_id: 7,
+        token: InteractionToken { epoch: 2, id: 3 },
+        monotonic_time_ns: 99,
+        intent: InputIntent::CommitText("2".into()),
+        message_skip: false,
+    };
+    let message = RuntimeMessage::Input(input.clone());
+    let encoded = message.encode_payload().expect("encode input");
+    assert_eq!(
+        RuntimeMessage::decode_payload(message.tag(), &encoded),
+        Ok(RuntimeMessage::Input(input))
+    );
+}
+
+#[test]
+fn primitive_input_carries_device_fields_but_not_result_five() {
+    let selection = InteractionToken { epoch: 2, id: 8 };
+    let intent = InputIntent::Primitive(PrimitiveInput {
+        input_type: 1,
+        result_1: 10,
+        result_2: 20,
+        result_3: 1,
+        result_4: 3,
+        selection_token: Some(selection),
+    });
+    let bytes = encode_canonical(&intent).expect("encode primitive intent");
+    assert_eq!(decode_canonical::<InputIntent>(&bytes), Ok(intent));
+}
+
+#[test]
+fn storage_write_is_correlated_and_idempotent() {
+    let request = StorageRequest {
+        request_id: 10,
+        namespace: StorageNamespace::Save,
+        relative_path: "save/save00.sav".into(),
+        operation: StorageOperation::Write {
+            data: ProtocolBytes::new([1, 2, 3]),
+            atomic_replace: true,
+            precondition: era_runtime_protocol::StoragePrecondition::Revision("old".into()),
+        },
+        idempotency_key: "session-1/save-10".into(),
+        deadline_ns: None,
+    };
+    let message = RuntimeMessage::StorageRequest(request);
+    let encoded = message.encode_payload().expect("encode storage request");
+    assert_eq!(
+        RuntimeMessage::decode_payload(message.tag(), &encoded),
+        Ok(message)
+    );
+}
+
+#[test]
+fn protocol_46_storage_namespace_wire_values_remain_stable() {
+    for (namespace, wire) in [
+        (StorageNamespace::Project, 0),
+        (StorageNamespace::Save, 1),
+        (StorageNamespace::GlobalSave, 2),
+        (StorageNamespace::Data, 3),
+        (StorageNamespace::Log, 4),
+        (StorageNamespace::Resource, 5),
+    ] {
+        assert_eq!(encode_canonical(&namespace).unwrap(), vec![wire]);
+    }
+}
+
+#[test]
+fn storage_contract_expresses_create_only_stat_and_recursive_listing() {
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
+    assert_eq!(
+        StorageOperation::Write {
+            data: ProtocolBytes::new(vec![1]),
+            atomic_replace: true,
+            precondition: era_runtime_protocol::StoragePrecondition::Missing,
+        },
+        StorageOperation::Write {
+            data: ProtocolBytes::new(vec![1]),
+            atomic_replace: true,
+            precondition: era_runtime_protocol::StoragePrecondition::Missing,
+        }
+    );
+    assert_eq!(StorageOperation::Stat, StorageOperation::Stat);
+    assert_eq!(
+        StorageOperation::List {
+            pattern: Some("*.dat".into()),
+            recursive: true,
+        },
+        StorageOperation::List {
+            pattern: Some("*.dat".into()),
+            recursive: true,
+        }
+    );
+}
+
+#[test]
+fn paths_are_platform_independent_and_cannot_escape() {
+    assert_eq!(
+        validate_relative_path("erb\\sub/./test.erb"),
+        Ok("erb/sub/test.erb".into())
+    );
+    assert!(validate_relative_path("../secret").is_err());
+    assert!(validate_relative_path("C:\\game\\file").is_err());
+    assert!(validate_relative_path("/absolute").is_err());
+}
+
+#[test]
+fn protocol_version_is_independent_from_wire_version() {
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
+    assert_eq!(StateExportKind::InputReplay as u8, 4);
+}
+
+#[test]
+fn protocol_21_round_trips_complete_presentation_deltas() {
+    let message = RuntimeMessage::PresentationDelta(PresentationDelta {
+        base_revision: 7,
+        new_revision: 9,
+        operations: vec![
+            PresentationOperation::SetRedraw {
+                redraw: RedrawState { enabled: false },
+            },
+            PresentationOperation::SetButtonGeneration { generation: 4 },
+        ],
+    });
+    let encoded = message.encode_payload().expect("encode presentation delta");
+    assert_eq!(RuntimeMessage::decode_payload(41, &encoded), Ok(message));
+
+    let schema = include_str!("../../schema/runtime.cddl");
+    for tag in 0..=14 {
+        assert!(
+            schema.contains(&format!("[{tag}")),
+            "runtime CDDL is missing presentation operation {tag}"
+        );
+    }
+}
+
+#[test]
+fn state_transfers_are_versioned_and_chunked() {
+    let request = RuntimeMessage::StateExportRequest(StateExportRequest {
+        kind: StateExportKind::VmSnapshot,
+        snapshot_purpose: SnapshotExportPurpose::Diagnosis,
+    });
+    let encoded = request.encode_payload().expect("encode state export");
+    assert_eq!(RuntimeMessage::decode_payload(60, &encoded), Ok(request));
+
+    let replay = RuntimeMessage::StateExportRequest(StateExportRequest {
+        kind: StateExportKind::InputReplay,
+        snapshot_purpose: SnapshotExportPurpose::Normal,
+    });
+    let encoded = replay.encode_payload().expect("encode input replay export");
+    assert_eq!(RuntimeMessage::decode_payload(60, &encoded), Ok(replay));
+
+    let begin = RuntimeMessage::StateImportBegin(StateImportBegin {
+        kind: StateExportKind::TraditionalSave,
+        total_bytes: 4096,
+        digest: Some(ProtocolBytes::new([7; 32])),
+        artifact_id: None,
+    });
+    let encoded = begin.encode_payload().expect("encode state import");
+    assert_eq!(RuntimeMessage::decode_payload(62, &encoded), Ok(begin));
+
+    let streamed_begin = RuntimeMessage::StateImportBegin(StateImportBegin {
+        kind: StateExportKind::FullProjectManifest,
+        total_bytes: 8192,
+        digest: None,
+        artifact_id: None,
+    });
+    let encoded = streamed_begin
+        .encode_payload()
+        .expect("encode streamed import");
+    assert_eq!(
+        RuntimeMessage::decode_payload(62, &encoded),
+        Ok(streamed_begin)
+    );
+    let commit = RuntimeMessage::StateImportCommit(StateImportCommit {
+        transfer_id: 9,
+        digest: Some(ProtocolBytes::new([8; 32])),
+    });
+    let encoded = commit
+        .encode_payload()
+        .expect("encode streamed import commit");
+    assert_eq!(RuntimeMessage::decode_payload(65, &encoded), Ok(commit));
+
+    let read = RuntimeMessage::StateExportChunkRequest(StateExportChunkRequest {
+        transfer_id: 9,
+        offset: 1024,
+        maximum_bytes: 1024,
+    });
+    let encoded = read.encode_payload().expect("encode export chunk request");
+    assert_eq!(RuntimeMessage::decode_payload(67, &encoded), Ok(read));
+
+    let manifest = RuntimeMessage::FullProjectManifest(FullProjectManifest {
+        manifest: ProjectManifest {
+            compatibility: erabasic_compat::CompatibilityIdentity::default(),
+            project_revision: 1,
+            files: Vec::new(),
+        },
+    });
+    let encoded = manifest
+        .encode_payload()
+        .expect("encode full project manifest");
+    assert_eq!(RuntimeMessage::decode_payload(70, &encoded), Ok(manifest));
+
+    let cancel = RuntimeMessage::StateExportCancel(StateExportCancel {
+        kind: StateExportKind::FullProjectFile,
+    });
+    let encoded = cancel
+        .encode_payload()
+        .expect("encode state export cancellation");
+    assert_eq!(RuntimeMessage::decode_payload(71, &encoded), Ok(cancel));
+
+    let schema = include_str!("../../schema/runtime.cddl");
+    assert!(schema.contains("state-export-kind = 0..5"));
+    assert!(schema.contains("state-import-begin = { 0: state-export-kind"));
+}
+
+#[test]
+fn getkey_uses_a_fresh_typed_input_state_service() {
+    let request_payload = GetKeyStateRequest { key_code: 65 };
+    let payload = encode_canonical(&request_payload).expect("encode GETKEY request");
+    let request = ServiceRequest {
+        request_id: 9,
+        kind: ServiceKind::InputState,
+        operation: GET_KEY_STATE_OPERATION.into(),
+        operation_version: GET_KEY_STATE_OPERATION_VERSION,
+        payload: ProtocolBytes::new(payload.clone()),
+        deadline_ns: None,
+    };
+    assert_eq!(request.kind, ServiceKind::InputState);
+    assert_eq!(
+        decode_canonical::<GetKeyStateRequest>(&payload),
+        Ok(request_payload)
+    );
+
+    let response = GetKeyStateResponse {
+        frontend_active: true,
+        pressed: true,
+        toggle_state: false,
+    };
+    let encoded = encode_canonical(&response).expect("encode GETKEY response");
+    assert_eq!(
+        decode_canonical::<GetKeyStateResponse>(&encoded),
+        Ok(response)
+    );
+}
+
+#[test]
+fn runtime_decoder_rejects_the_debug_channel() {
+    let message = RuntimeMessage::AdvanceTime(AdvanceTime {
+        monotonic_time_ns: 1,
+    });
+    let mut envelope = message
+        .envelope(Some(SessionId { high: 1, low: 1 }), None, 1, 1, None)
+        .expect("wrap message");
+    envelope.channel = Channel::Debug;
+    assert_eq!(
+        RuntimeMessage::from_envelope(&envelope)
+            .expect_err("channel isolation must be enforced")
+            .code,
+        ProtocolErrorCode::ChannelMismatch
+    );
+}
+
+#[test]
+fn transient_effects_have_an_independent_idempotent_stream() {
+    let message = RuntimeMessage::EffectBatch(EffectBatch {
+        effects: vec![EffectEvent {
+            effect_id: 4,
+            kind: EffectKind::Audio(AudioEffect {
+                channel: AudioChannelV1::Sound(0),
+                action: AudioEffectAction::Play,
+                resource_id: Some("click".into()),
+                repeat_count: 1,
+                volume_millionths: 1_000_000,
+                revision: 9,
+                rate_millionths: 1_000_000,
+                preserve_pitch: true,
+            }),
+        }],
+    });
+    let encoded = message.encode_payload().expect("encode effect batch");
+    assert_eq!(RuntimeMessage::decode_payload(42, &encoded), Ok(message));
+
+    let acknowledgement = EffectAcknowledgement {
+        outcomes: vec![EffectOutcome {
+            effect_id: 4,
+            status: EffectOutcomeStatus::Failed,
+            message: Some("device unavailable".into()),
+        }],
+    };
+    let encoded = encode_canonical(&acknowledgement).expect("encode effect outcome");
+    assert_eq!(decode_canonical(&encoded), Ok(acknowledgement));
+}
+
