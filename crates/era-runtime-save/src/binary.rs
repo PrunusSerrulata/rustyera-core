@@ -12,6 +12,7 @@ pub use encode::{encode_binary, encode_save_extension};
 use encode::{write_integer_array, write_string_array};
 
 use crate::format::{HEADER, VERSION, ZIP_HEADER};
+use crate::model::decode_file_kind;
 use crate::{
     OpaqueSaveExtension, SaveCodecError, SaveCodecLimits, SaveDocument, SaveExtension,
     SaveFileKind, SaveFormat, SaveMetadata,
@@ -35,7 +36,6 @@ pub(crate) fn is_binary(data: &[u8]) -> bool {
 /// # Errors
 ///
 /// Returns an error for malformed, unsupported, compressed, or oversized input.
-#[allow(clippy::too_many_lines)]
 pub fn decode_binary(data: &[u8], limits: SaveCodecLimits) -> Result<SaveDocument, SaveCodecError> {
     decode_binary_with_array_mode(data, limits, false)
 }
@@ -101,17 +101,7 @@ fn decode_binary_with_array_mode(
     } else {
         Cursor::new(body.as_ref(), limits)
     };
-    let kind = match reader.u8()? {
-        0 => SaveFileKind::Normal,
-        1 => SaveFileKind::Global,
-        2 => SaveFileKind::Variable,
-        3 => SaveFileKind::Character,
-        _ => {
-            return Err(SaveCodecError::InvalidFormat(
-                "unknown save file kind".into(),
-            ));
-        }
-    };
+    let kind = decode_file_kind(reader.u8()?)?;
     let metadata = SaveMetadata {
         unique_code: reader.i64()?,
         version: reader.i64()?,

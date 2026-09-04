@@ -386,20 +386,12 @@ fn write_zero_run(output: &mut Vec<u8>, tag: u8, count: usize) {
 fn write_packed_integer(output: &mut Vec<u8>, value: i64) {
     if (0..=0xCF).contains(&value) {
         output.push(u8::try_from(value).expect("packed byte range checked"));
-    } else if i16::try_from(value).is_ok() {
+    } else if let Ok(value) = i16::try_from(value) {
         output.push(0xD0);
-        output.extend(
-            i16::try_from(value)
-                .expect("i16 range checked")
-                .to_le_bytes(),
-        );
-    } else if i32::try_from(value).is_ok() {
+        output.extend(value.to_le_bytes());
+    } else if let Ok(value) = i32::try_from(value) {
         output.push(0xD1);
-        output.extend(
-            i32::try_from(value)
-                .expect("i32 range checked")
-                .to_le_bytes(),
-        );
+        output.extend(value.to_le_bytes());
     } else {
         output.push(0xD2);
         output.extend(value.to_le_bytes());
@@ -411,12 +403,16 @@ fn write_string(
     value: &str,
     limits: SaveCodecLimits,
 ) -> Result<(), SaveCodecError> {
-    let bytes: Vec<u8> = value.encode_utf16().flat_map(u16::to_le_bytes).collect();
-    if bytes.len() > limits.maximum_string_bytes {
+    let byte_count = value
+        .encode_utf16()
+        .count()
+        .checked_mul(2)
+        .ok_or(SaveCodecError::LimitExceeded("string bytes"))?;
+    if byte_count > limits.maximum_string_bytes {
         return Err(SaveCodecError::LimitExceeded("string bytes"));
     }
-    write_7bit(output, bytes.len());
-    output.extend(bytes);
+    write_7bit(output, byte_count);
+    output.extend(value.encode_utf16().flat_map(u16::to_le_bytes));
     Ok(())
 }
 

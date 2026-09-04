@@ -16,6 +16,18 @@ pub enum SaveFileKind {
     Character = 3,
 }
 
+pub(crate) fn decode_file_kind(value: u8) -> Result<SaveFileKind, SaveCodecError> {
+    match value {
+        0 => Ok(SaveFileKind::Normal),
+        1 => Ok(SaveFileKind::Global),
+        2 => Ok(SaveFileKind::Variable),
+        3 => Ok(SaveFileKind::Character),
+        _ => Err(SaveCodecError::InvalidFormat(
+            "unknown save file kind".into(),
+        )),
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SaveMetadata {
     pub unique_code: i64,

@@ -36,14 +36,10 @@ pub fn decode_text(data: &[u8], limits: SaveCodecLimits) -> Result<SaveDocument,
     let data = data.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(data);
     let source = std::str::from_utf8(data)
         .map_err(|_| SaveCodecError::InvalidFormat("text save is not UTF-8".into()))?;
-    let mut lines = source.lines();
-    let unique_code = parse_integer(lines.next(), "unique code")?;
-    let version = parse_integer(lines.next(), "script version")?;
-    let description = lines
-        .next()
-        .ok_or_else(|| SaveCodecError::InvalidFormat("text save lacks a description".into()))?
-        .trim_end_matches('\r')
-        .to_owned();
+    let mut reader = TextReader::new(source);
+    let unique_code = reader.integer("unique code")?;
+    let version = reader.integer("script version")?;
+    let description = reader.line("a description")?.to_owned();
     Ok(SaveDocument {
         format: SaveFormat::Text1808,
         kind: SaveFileKind::Normal,
@@ -87,13 +83,6 @@ pub fn encode_text(
         ));
     }
     Ok(payload.clone())
-}
-
-fn parse_integer(line: Option<&str>, field: &str) -> Result<i64, SaveCodecError> {
-    line.ok_or_else(|| SaveCodecError::InvalidFormat(format!("text save lacks {field}")))?
-        .trim_end_matches('\r')
-        .parse()
-        .map_err(|_| SaveCodecError::InvalidFormat(format!("text save has invalid {field}")))
 }
 
 /// Decode a current UTF-8 text save using the active project's positional schema.
@@ -144,9 +133,11 @@ pub fn decode_text_with_layout(
         return finish_text_document(
             data,
             layout.kind,
-            unique_code,
-            version,
-            description,
+            SaveMetadata {
+                unique_code,
+                version,
+                description,
+            },
             characters,
             variables,
             limits,
@@ -194,22 +185,21 @@ pub fn decode_text_with_layout(
     finish_text_document(
         data,
         layout.kind,
-        unique_code,
-        version,
-        description,
+        SaveMetadata {
+            unique_code,
+            version,
+            description,
+        },
         characters,
         variables,
         limits,
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn finish_text_document(
     data: &[u8],
     kind: SaveFileKind,
-    unique_code: i64,
-    version: i64,
-    description: String,
+    metadata: SaveMetadata,
     characters: Vec<Vec<SaveEntry>>,
     variables: Vec<SaveEntry>,
     limits: SaveCodecLimits,
@@ -220,11 +210,7 @@ fn finish_text_document(
     Ok(SaveDocument {
         format: SaveFormat::Text1808,
         kind,
-        metadata: SaveMetadata {
-            unique_code,
-            version,
-            description,
-        },
+        metadata,
         character_user_defined_starts: vec![None; characters.len()],
         characters,
         variables,
@@ -382,13 +368,7 @@ fn read_base_array(
         return Err(SaveCodecError::LimitExceeded("maximum elements"));
     }
     strings.truncate(length);
-    strings.resize(
-        length,
-        match variable.value_type {
-            Text1808ValueType::Integer => "0".into(),
-            Text1808ValueType::String => String::new(),
-        },
-    );
+    strings.resize(length, default_text(variable.value_type).to_owned());
     strings_to_value(variable, strings)
 }
 
@@ -434,8 +414,7 @@ fn read_extended_groups(
             }
             if unsupported_groups
                 .get(group_index)
-                .copied()
-                .unwrap_or(false)
+                .is_some_and(|unsupported| *unsupported)
             {
                 return Err(SaveCodecError::InvalidFormat(
                     "unsupported Float value in text save".into(),
@@ -469,16 +448,7 @@ fn read_extended_groups(
                 continue;
             } else {
                 let Some(descriptor) = find_layout(group, line) else {
-                    let mut ignored = 0usize;
-                    loop {
-                        if reader.line("unknown extended array")? == FINISHER {
-                            break;
-                        }
-                        ignored += 1;
-                        if ignored > limits.maximum_elements {
-                            return Err(SaveCodecError::LimitExceeded("maximum elements"));
-                        }
-                    }
+                    skip_extended_array(reader, limits)?;
                     continue;
                 };
                 descriptor
@@ -536,14 +506,7 @@ fn read_extended_array(
             if line == FINISHER {
                 break;
             }
-            let mut row = if line.is_empty() {
-                Vec::new()
-            } else {
-                line.split(',').map(str::to_owned).collect()
-            };
-            row.truncate(*width);
-            row.resize(*width, "0".into());
-            flattened.extend(row);
+            flattened.extend(padded_row(line, *width));
         },
         [_, rows, width] => loop {
             let line = reader.line(&variable.name)?;
@@ -562,14 +525,7 @@ fn read_extended_array(
                     break;
                 }
                 if row_count < *rows {
-                    let mut values = if row.is_empty() {
-                        Vec::new()
-                    } else {
-                        row.split(',').map(str::to_owned).collect()
-                    };
-                    values.truncate(*width);
-                    values.resize(*width, "0".into());
-                    flattened.extend(values);
+                    flattened.extend(padded_row(row, *width));
                 }
                 row_count += 1;
             }
@@ -604,10 +560,7 @@ fn write_base_entries(
     for descriptor in layout {
         let Some(value) = find_entry(entries, &descriptor.name).map(|entry| &entry.value) else {
             if descriptor.dimensions.is_empty() {
-                writer.line(match descriptor.value_type {
-                    Text1808ValueType::Integer => "0",
-                    Text1808ValueType::String => "",
-                })?;
+                writer.line(default_text(descriptor.value_type))?;
             } else {
                 writer.line(FINISHER)?;
             }
@@ -620,6 +573,40 @@ fn write_base_entries(
         }
     }
     Ok(())
+}
+
+fn default_text(value_type: Text1808ValueType) -> &'static str {
+    match value_type {
+        Text1808ValueType::Integer => "0",
+        Text1808ValueType::String => "",
+    }
+}
+
+fn padded_row(line: &str, width: usize) -> Vec<String> {
+    let mut values = if line.is_empty() {
+        Vec::new()
+    } else {
+        line.split(',').map(str::to_owned).collect()
+    };
+    values.truncate(width);
+    values.resize(width, "0".into());
+    values
+}
+
+fn skip_extended_array(
+    reader: &mut TextReader<'_>,
+    limits: SaveCodecLimits,
+) -> Result<(), SaveCodecError> {
+    let mut ignored = 0usize;
+    loop {
+        if reader.line("unknown extended array")? == FINISHER {
+            return Ok(());
+        }
+        ignored += 1;
+        if ignored > limits.maximum_elements {
+            return Err(SaveCodecError::LimitExceeded("maximum elements"));
+        }
+    }
 }
 
 fn write_extended_groups(

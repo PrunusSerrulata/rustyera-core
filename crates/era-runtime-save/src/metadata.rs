@@ -3,6 +3,7 @@ use std::io::Read;
 use flate2::read::GzDecoder;
 
 use crate::format::{HEADER, VERSION, ZIP_HEADER};
+use crate::model::decode_file_kind;
 use crate::{SaveCodecError, SaveCodecLimits, SaveFileKind, SaveFormat, SaveMetadata};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -197,17 +198,7 @@ fn inspect_binary_body(
     let Some(kind) = body.first().copied() else {
         return incomplete_or(complete, SaveCodecError::InvalidHeader);
     };
-    let kind = match kind {
-        0 => SaveFileKind::Normal,
-        1 => SaveFileKind::Global,
-        2 => SaveFileKind::Variable,
-        3 => SaveFileKind::Character,
-        _ => {
-            return Err(SaveCodecError::InvalidFormat(
-                "unknown save file kind".into(),
-            ));
-        }
-    };
+    let kind = decode_file_kind(kind)?;
     let Some(unique_code) = read_i64(body, 1) else {
         return incomplete_or(complete, SaveCodecError::InvalidHeader);
     };

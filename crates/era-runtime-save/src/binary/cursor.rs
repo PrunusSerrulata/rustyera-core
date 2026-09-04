@@ -246,10 +246,7 @@ impl<'a> Cursor<'a> {
                     index = align_to_next_boundary(index, row);
                 }
                 0xE1 => {
-                    let plane = dimensions.iter().skip(1).fold(1usize, |value, dimension| {
-                        value.saturating_mul(*dimension as usize)
-                    });
-                    index = align_to_next_boundary(index, plane);
+                    index = align_to_next_boundary(index, plane_length(dimensions));
                 }
                 0xF0 => {
                     let zeroes = usize::try_from(self.packed_integer(None)?)
@@ -266,10 +263,7 @@ impl<'a> Cursor<'a> {
                 0xF2 => {
                     let planes = usize::try_from(self.packed_integer(None)?)
                         .map_err(|_| SaveCodecError::InvalidFormat("negative plane run".into()))?;
-                    let plane = dimensions.iter().skip(1).fold(1usize, |value, dimension| {
-                        value.saturating_mul(*dimension as usize)
-                    });
-                    index = index.saturating_add(planes.saturating_mul(plane));
+                    index = index.saturating_add(planes.saturating_mul(plane_length(dimensions)));
                 }
                 tag => {
                     if index >= count {
@@ -291,6 +285,12 @@ impl<'a> Cursor<'a> {
         }
         Ok(())
     }
+}
+
+fn plane_length(dimensions: &[u32]) -> usize {
+    dimensions.iter().skip(1).fold(1usize, |length, dimension| {
+        length.saturating_mul(*dimension as usize)
+    })
 }
 
 fn align_to_next_boundary(index: usize, boundary: usize) -> usize {
