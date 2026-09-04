@@ -18,9 +18,7 @@ impl Lexer<'_> {
         let mut closed = false;
         while let Some(ch) = self.current() {
             if end.matches(self) {
-                if !text.is_empty() {
-                    parts.push(FormattedTokenPart::Text(std::mem::take(&mut text)));
-                }
+                flush_text(&mut parts, &mut text);
                 end.consume(self);
                 closed = true;
                 break;
@@ -33,9 +31,7 @@ impl Lexer<'_> {
                 && self.source[self.pos..].chars().take(3).all(|c| c == ch)
                 && self.source[self.pos..].chars().take(3).count() == 3
             {
-                if !text.is_empty() {
-                    parts.push(FormattedTokenPart::Text(std::mem::take(&mut text)));
-                }
+                flush_text(&mut parts, &mut text);
                 let item_start = self.pos;
                 for _ in 0..3 {
                     self.bump();
@@ -47,9 +43,7 @@ impl Lexer<'_> {
                 continue;
             }
             if ch == '%' {
-                if !text.is_empty() {
-                    parts.push(FormattedTokenPart::Text(std::mem::take(&mut text)));
-                }
+                flush_text(&mut parts, &mut text);
                 let item_start = self.pos;
                 self.bump();
                 let nested = self.lex_nested(LexEnd::Percent);
@@ -65,9 +59,7 @@ impl Lexer<'_> {
                 continue;
             }
             if ch == '{' {
-                if !text.is_empty() {
-                    parts.push(FormattedTokenPart::Text(std::mem::take(&mut text)));
-                }
+                flush_text(&mut parts, &mut text);
                 let item_start = self.pos;
                 self.bump();
                 let nested = self.lex_nested(LexEnd::RightCurlyBrace);
@@ -83,9 +75,7 @@ impl Lexer<'_> {
                 continue;
             }
             if ch == '\\' && self.peek() == Some('@') {
-                if !text.is_empty() {
-                    parts.push(FormattedTokenPart::Text(std::mem::take(&mut text)));
-                }
+                flush_text(&mut parts, &mut text);
                 parts.push(self.read_conditional_form());
                 continue;
             }
@@ -122,9 +112,7 @@ impl Lexer<'_> {
                 self.bump();
             }
         }
-        if !text.is_empty() {
-            parts.push(FormattedTokenPart::Text(text));
-        }
+        flush_text(&mut parts, &mut text);
         if !closed && !matches!(end, FormEnd::EndOfLine | FormEnd::Comma) {
             self.unterminated_form(start, "unterminated formatted string");
         }
@@ -189,6 +177,12 @@ impl Lexer<'_> {
             Span::new(start, self.pos),
             message,
         ));
+    }
+}
+
+fn flush_text(parts: &mut Vec<FormattedTokenPart>, text: &mut String) {
+    if !text.is_empty() {
+        parts.push(FormattedTokenPart::Text(std::mem::take(text)));
     }
 }
 

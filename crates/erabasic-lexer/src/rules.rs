@@ -1,9 +1,5 @@
 use crate::Operator;
 
-pub(crate) fn is_identifier_start(ch: char) -> bool {
-    !is_identifier_delimiter(ch)
-}
-
 pub(crate) fn is_identifier_delimiter(ch: char) -> bool {
     matches!(
         ch,

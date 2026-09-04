@@ -6,7 +6,7 @@
 //! visible and keeps error spans exact. This is why the crate does not use
 //! `logos` for the stateful outer loop.
 
-use crate::rules::{is_identifier_delimiter, is_identifier_start, operator_at};
+use crate::rules::{is_identifier_delimiter, operator_at};
 use crate::{
     FormattedToken, LexEnd, LexFlags, LexOutput, LexerConfig, MacroTable, Operator, Token,
     TokenKind,
@@ -113,9 +113,9 @@ impl<'a> Lexer<'a> {
             let start = self.pos;
             match ch {
                 '0'..='9' => self.read_integer(),
-                '"' => self.read_string('"', false),
+                '"' => self.read_string('"'),
                 '\'' if self.flags.contains(LexFlags::ALLOW_SINGLE_QUOTED_STRING) => {
-                    self.read_string('\'', false);
+                    self.read_string('\'');
                 }
                 '\'' if self.flags.contains(LexFlags::ANALYZE_PRINT_V) => {
                     self.read_print_v_string();
@@ -134,7 +134,7 @@ impl<'a> Lexer<'a> {
                         self.pos,
                     );
                 }
-                c if is_identifier_start(c) => self.read_identifier(),
+                c if !is_identifier_delimiter(c) => self.read_identifier(),
                 '[' if self.peek() == Some('[') => self.read_rename_symbol(),
                 '(' | '[' => {
                     if ch == '(' {
@@ -414,7 +414,7 @@ impl<'a> Lexer<'a> {
         ));
     }
 
-    fn read_string(&mut self, quote: char, stop_at_comma: bool) {
+    fn read_string(&mut self, quote: char) {
         let start = self.pos;
         self.bump();
         let mut value = String::new();
@@ -422,10 +422,6 @@ impl<'a> Lexer<'a> {
         while let Some(ch) = self.current() {
             if ch == quote {
                 self.bump();
-                closed = true;
-                break;
-            }
-            if stop_at_comma && ch == ',' {
                 closed = true;
                 break;
             }
