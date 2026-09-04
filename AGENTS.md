@@ -63,7 +63,7 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言和运行环境。发生�
 
 ## 蛇版适配计划与实施记录
 
-本仓库的蛇版开发使用 `codex/snake-compatibility` 分支及专用 worktree；其兄弟
+本仓库的蛇版开发使用 `feature/snake-compatibility` 分支及专用 worktree；其兄弟
 `../rustyera-tui`、`../rustyera-web` 必须是同组 worktree，不得误用原 master 工作区。
 开工先核对分支、工作树和实际 Cargo patch/target 来源；具体位置与隔离要求见主工作区
 规范。此分支仍同时维护 `emuera.em` 与 `emuera.skia.snake` 的明确兼容边界，不能用
