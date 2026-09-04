@@ -1,0 +1,422 @@
+pub(crate) struct FullProjectEncodingPlan {
+    pub(crate) manifest: Arc<ProjectManifest>,
+    pub(crate) extensions: Vec<ExtensionDeclaration>,
+    pub(crate) artifact: ValidatedArtifact,
+    pub(crate) incremental: Arc<IncrementalState>,
+    pub(crate) snapshot: CompiledSnapshotMetadata,
+    pub(crate) diagnostics: Vec<ProtocolDiagnostic>,
+    pub(crate) configuration_journal: Vec<u8>,
+}
+
+/// Incremental cache encoder used by single-threaded hosts such as WebAssembly workers.
+///
+/// The canonical layout is planned once, manifest payloads and final assembly are byte-quantized,
+/// and every encoded section is appended and released before the next one starts. Hosts call one
+/// step per event-loop turn so cache work begins immediately without monopolizing later input.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) struct CooperativeCompiledCacheEncoder {
+    kind: ProjectContainerKind,
+    manifest: Arc<ProjectManifest>,
+    extensions: Vec<ExtensionDeclaration>,
+    artifact: ValidatedArtifact,
+    snapshot: CompiledSnapshotMetadata,
+    diagnostics: Vec<ProtocolDiagnostic>,
+    cancelled: Option<Arc<AtomicBool>>,
+    progress: Option<crate::ProjectProgressReporter>,
+    planner: Option<CacheLayoutPlanner>,
+    plan: Option<CacheLayoutPlan>,
+    next_section: usize,
+    manifest_encoder: Option<ManifestSectionEncoder>,
+    manifest_hash_offset: Option<usize>,
+    pending_section: Option<(Vec<u8>, usize)>,
+    output: Option<(ContainerBytes, blake3::Hasher)>,
+    trailing_data: Vec<u8>,
+    progress_completed: u64,
+    progress_total: u64,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+struct CooperativeEncoderInput {
+    kind: ProjectContainerKind,
+    manifest: Arc<ProjectManifest>,
+    extensions: Vec<ExtensionDeclaration>,
+    artifact: ValidatedArtifact,
+    cache_keys: CacheKeyPlanner,
+    snapshot: CompiledSnapshotMetadata,
+    diagnostics: Vec<ProtocolDiagnostic>,
+    cancelled: Option<Arc<AtomicBool>>,
+    progress: Option<crate::ProjectProgressReporter>,
+    trailing_data: Vec<u8>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+struct CacheLayoutPlan {
+    identity: ProjectIdentity,
+    cache_keys: Vec<Digest>,
+    function_indices: std::collections::BTreeMap<SymbolKey, usize>,
+    function_ranges: Vec<Range<usize>>,
+    source_ranges: Vec<Range<usize>>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl CacheLayoutPlan {
+    fn section_count(&self) -> usize {
+        9 + self.function_ranges.len() + self.source_ranges.len()
+    }
+}
+
+#[derive(Clone, Copy)]
+#[cfg(any(target_arch = "wasm32", test))]
+enum CacheLayoutPlanningStage {
+    Identity,
+    FunctionIndices,
+    FunctionRanges,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+struct CacheLayoutPlanner {
+    stage: CacheLayoutPlanningStage,
+    identity_planner: ProjectIdentityPlanner,
+    identity: Option<ProjectIdentity>,
+    function_indices: std::collections::BTreeMap<SymbolKey, usize>,
+    function_ranges: Vec<Range<usize>>,
+    cursor: usize,
+    total_weight: usize,
+    target_weight: usize,
+    range_start: usize,
+    range_weight: usize,
+    cache_keys: CacheKeyPlanner,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl CacheLayoutPlanner {
+    fn new(cache_keys: CacheKeyPlanner) -> Self {
+        Self {
+            stage: CacheLayoutPlanningStage::Identity,
+            identity_planner: ProjectIdentityPlanner::new(),
+            identity: None,
+            function_indices: std::collections::BTreeMap::new(),
+            function_ranges: Vec::new(),
+            cursor: 0,
+            total_weight: 0,
+            target_weight: 0,
+            range_start: 0,
+            range_weight: 0,
+            cache_keys,
+        }
+    }
+
+    fn step(
+        &mut self,
+        manifest: &ProjectManifest,
+        artifact: &ValidatedArtifact,
+    ) -> Result<Option<CacheLayoutPlan>, String> {
+        let functions = &artifact.artifact().functions;
+        match self.stage {
+            CacheLayoutPlanningStage::Identity => {
+                let Some(identity) = self.identity_planner.step(manifest) else {
+                    return Ok(None);
+                };
+                self.identity = Some(identity);
+                self.cache_keys.validate(artifact.artifact())?;
+                self.stage = CacheLayoutPlanningStage::FunctionIndices;
+            }
+            CacheLayoutPlanningStage::FunctionIndices => {
+                let end = self
+                    .cursor
+                    .saturating_add(COOPERATIVE_ITEM_QUANTUM)
+                    .min(functions.len());
+                for (index, function) in functions.iter().enumerate().take(end).skip(self.cursor) {
+                    self.function_indices.insert(function.key, index);
+                    self.cache_keys.push(function)?;
+                    self.total_weight =
+                        self.total_weight.saturating_add(function.code.len().max(1));
+                }
+                self.cursor = end;
+                if end == functions.len() {
+                    self.target_weight =
+                        self.total_weight.div_ceil(TARGET_PARALLEL_SECTIONS).max(1);
+                    self.cursor = 0;
+                    self.stage = CacheLayoutPlanningStage::FunctionRanges;
+                }
+            }
+            CacheLayoutPlanningStage::FunctionRanges => {
+                let end = self
+                    .cursor
+                    .saturating_add(COOPERATIVE_ITEM_QUANTUM)
+                    .min(functions.len());
+                for (index, function) in functions.iter().enumerate().take(end).skip(self.cursor) {
+                    self.range_weight =
+                        self.range_weight.saturating_add(function.code.len().max(1));
+                    if self.range_weight >= self.target_weight
+                        && self.function_ranges.len() + 1 < TARGET_PARALLEL_SECTIONS
+                    {
+                        self.function_ranges.push(self.range_start..index + 1);
+                        self.range_start = index + 1;
+                        self.range_weight = 0;
+                    }
+                }
+                self.cursor = end;
+                if end == functions.len() {
+                    if self.range_start < functions.len() {
+                        self.function_ranges.push(self.range_start..functions.len());
+                    }
+                    return Ok(Some(CacheLayoutPlan {
+                        identity: self.identity.take().expect("cache identity was planned"),
+                        cache_keys: self.cache_keys.finish(),
+                        function_indices: std::mem::take(&mut self.function_indices),
+                        function_ranges: std::mem::take(&mut self.function_ranges),
+                        source_ranges: equal_ranges(artifact.artifact().source_map.entries.len()),
+                    }));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+#[derive(Clone, Copy)]
+#[cfg(any(target_arch = "wasm32", test))]
+enum ProjectIdentityPlanningStage {
+    Collect,
+    Hash,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+type OrderedManifestFiles = std::collections::btree_map::IntoValues<(String, String, usize), usize>;
+
+#[cfg(any(target_arch = "wasm32", test))]
+struct PendingIdentityPayload {
+    file_index: usize,
+    offset: usize,
+    hasher: blake3::Hasher,
+    content_hash: bool,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+struct ProjectIdentityPlanner {
+    stage: ProjectIdentityPlanningStage,
+    cursor: usize,
+    ordered: std::collections::BTreeMap<(String, String, usize), usize>,
+    files: Option<OrderedManifestFiles>,
+    hasher: blake3::Hasher,
+    pending: Option<PendingIdentityPayload>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl ProjectIdentityPlanner {
+    fn new() -> Self {
+        Self {
+            stage: ProjectIdentityPlanningStage::Collect,
+            cursor: 0,
+            ordered: std::collections::BTreeMap::new(),
+            files: None,
+            hasher: blake3::Hasher::new_derive_key("rustyera.project-source-identity.v1"),
+            pending: None,
+        }
+    }
+
+    fn step(&mut self, manifest: &ProjectManifest) -> Option<ProjectIdentity> {
+        if let Some(pending) = self.pending.as_mut() {
+            let file = &manifest.files[pending.file_index];
+            let bytes = if pending.content_hash {
+                file.content_hash
+                    .as_ref()
+                    .expect("pending content hash exists")
+                    .as_slice()
+            } else {
+                identity_payload(file)
+            };
+            let end = pending
+                .offset
+                .saturating_add(COOPERATIVE_MANIFEST_CHUNK_BYTES)
+                .min(bytes.len());
+            pending.hasher.update(&bytes[pending.offset..end]);
+            pending.offset = end;
+            if end == bytes.len() {
+                self.hasher.update(pending.hasher.finalize().as_bytes());
+                self.pending = None;
+            }
+            return None;
+        }
+        match self.stage {
+            ProjectIdentityPlanningStage::Collect => {
+                let end = self
+                    .cursor
+                    .saturating_add(COOPERATIVE_ITEM_QUANTUM)
+                    .min(manifest.files.len());
+                for (index, file) in manifest
+                    .files
+                    .iter()
+                    .enumerate()
+                    .take(end)
+                    .skip(self.cursor)
+                {
+                    self.ordered.insert(
+                        (
+                            file.relative_path.to_lowercase(),
+                            file.relative_path.clone(),
+                            index,
+                        ),
+                        index,
+                    );
+                }
+                self.cursor = end;
+                if end == manifest.files.len() {
+                    self.files = Some(std::mem::take(&mut self.ordered).into_values());
+                    self.stage = ProjectIdentityPlanningStage::Hash;
+                }
+            }
+            ProjectIdentityPlanningStage::Hash => {
+                for _ in 0..COOPERATIVE_ITEM_QUANTUM {
+                    let Some(file_index) = self
+                        .files
+                        .as_mut()
+                        .expect("ordered manifest files exist")
+                        .next()
+                    else {
+                        return Some(ProjectIdentity {
+                            project_revision: manifest.project_revision,
+                            compatibility: manifest.compatibility.clone(),
+                            configuration_digest: crate::compatibility_configuration_digest(
+                                manifest,
+                            ),
+                            source_digest: ProtocolBytes::new(
+                                self.hasher.finalize().as_bytes().to_vec(),
+                            ),
+                        });
+                    };
+                    let file = &manifest.files[file_index];
+                    let path = file.relative_path.as_bytes();
+                    self.hasher.update(&(path.len() as u64).to_le_bytes());
+                    self.hasher.update(path);
+                    self.hasher.update(&[file.category as u8]);
+                    if let Some(content_hash) = &file.content_hash
+                        && content_hash.as_slice().len() == blake3::OUT_LEN
+                    {
+                        self.hasher.update(content_hash.as_slice());
+                        continue;
+                    }
+                    self.pending = Some(PendingIdentityPayload {
+                        file_index,
+                        offset: 0,
+                        hasher: blake3::Hasher::new(),
+                        content_hash: file.content_hash.is_some(),
+                    });
+                    return None;
+                }
+            }
+        }
+        None
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn identity_payload(file: &SubmittedFile) -> &[u8] {
+    match &file.payload {
+        FilePayload::Utf8(text) => text.as_bytes(),
+        FilePayload::Bytes(bytes) => bytes.as_slice(),
+        FilePayload::ExternalResource(_) => &[],
+        FilePayload::IoError(error) => error.message.as_bytes(),
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+enum CacheKeyPlanner {
+    #[cfg(test)]
+    Ready(Option<Vec<Digest>>),
+    Incremental {
+        state: Arc<IncrementalState>,
+        keys: Vec<Digest>,
+    },
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl CacheKeyPlanner {
+    fn validate(&self, artifact: &BytecodeArtifact) -> Result<(), String> {
+        match self {
+            #[cfg(test)]
+            Self::Ready(_) => Ok(()),
+            Self::Incremental { state, .. } => state.validate_compact_cache_artifact(artifact),
+        }
+    }
+
+    fn push(&mut self, function: &BytecodeFunction) -> Result<(), String> {
+        match self {
+            #[cfg(test)]
+            Self::Ready(_) => {}
+            Self::Incremental { state, keys } => {
+                keys.push(state.compact_cache_key(function)?);
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Vec<Digest> {
+        match self {
+            #[cfg(test)]
+            Self::Ready(keys) => keys.take().expect("cache keys were planned"),
+            Self::Incremental { keys, .. } => std::mem::take(keys),
+        }
+    }
+}
+
+struct DecodedCacheParts {
+    metadata: CompiledCacheMetadata,
+    globals: Vec<BytecodeGlobal>,
+    incremental_cache_keys: Vec<Digest>,
+    project_data: erabasic_data::ProjectData,
+    sources: Vec<SourceRecord>,
+    fingerprints: Vec<Digest>,
+    snapshot: NormalizedProjectSnapshot,
+    diagnostics: Vec<ProtocolDiagnostic>,
+    functions: Vec<BytecodeFunction>,
+    source_entries: Vec<SourceMapEntry>,
+}
+
+pub(crate) struct DecodedCompiledCache {
+    pub(crate) key: [u8; 32],
+    pub(crate) artifact: ValidatedArtifact,
+    pub(crate) incremental: IncrementalState,
+    pub(crate) snapshot: NormalizedProjectSnapshot,
+    pub(crate) diagnostics: Vec<ProtocolDiagnostic>,
+}
+
+/// Error returned when a `RustyEra` project file cannot be decoded.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProjectFileError {
+    message: String,
+}
+
+impl fmt::Display for ProjectFileError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ProjectFileError {}
+
+impl From<String> for ProjectFileError {
+    fn from(message: String) -> Self {
+        Self { message }
+    }
+}
+
+/// Frontend-facing data embedded in a self-contained `RustyEra` project file.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DecodedProjectFile {
+    pub identity: ProjectIdentity,
+    pub manifest: ProjectManifest,
+}
+
+/// A compact append-only update for the `reraconfig.toml` embedded in a project file.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProjectConfigurationUpdate {
+    /// Byte offset at which an interrupted trailing update must be truncated before appending.
+    pub truncate_to: u64,
+    /// Complete journal record to append. Empty when the requested source is already current.
+    pub append: Vec<u8>,
+    /// Project identity after applying this update.
+    pub identity: ProjectIdentity,
+}
+

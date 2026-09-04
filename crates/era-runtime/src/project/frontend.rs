@@ -132,7 +132,7 @@ fn analyzer_error_kind(kind: FrontendIoErrorKind) -> SourceIoErrorKind {
     }
 }
 
-pub(super) fn payload_hash(payload: &FilePayload) -> Option<blake3::Hash> {
+pub(crate) fn payload_hash(payload: &FilePayload) -> Option<blake3::Hash> {
     match payload {
         FilePayload::Utf8(value) => Some(blake3::hash(value.as_bytes())),
         FilePayload::Bytes(value) => Some(blake3::hash(value.as_slice())),

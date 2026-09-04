@@ -609,12 +609,7 @@ impl RuntimeSession {
     }
 
     pub(in super::super) fn allocate_interaction(&mut self) -> InteractionToken {
-        let token = InteractionToken {
-            epoch: self.epoch.0,
-            id: self.next_interaction_id,
-        };
-        self.next_interaction_id = self.next_interaction_id.saturating_add(1);
-        token
+        next_interaction_token(self.epoch.0, &mut self.next_interaction_id)
     }
 
     pub(in super::super) fn advance_epoch(&mut self) {

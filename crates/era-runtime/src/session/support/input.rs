@@ -13,6 +13,18 @@ pub(in super::super) struct PrimitiveResult {
     pub(in super::super) selection: Option<VmValue>,
 }
 
+pub(in super::super) fn next_interaction_token(
+    epoch: u64,
+    next_interaction_id: &mut u64,
+) -> InteractionToken {
+    let token = InteractionToken {
+        epoch,
+        id: *next_interaction_id,
+    };
+    *next_interaction_id = (*next_interaction_id).saturating_add(1);
+    token
+}
+
 pub(in super::super) fn input_value(
     pending: &PendingInput,
     token: InteractionToken,

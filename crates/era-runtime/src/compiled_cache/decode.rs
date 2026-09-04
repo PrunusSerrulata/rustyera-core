@@ -150,15 +150,8 @@ fn ensure_manifest_hashes(manifest: &mut ProjectManifest) {
         if file.content_hash.is_some() {
             continue;
         }
-        file.content_hash = match &file.payload {
-            FilePayload::Utf8(value) => Some(ProtocolBytes::new(
-                blake3::hash(value.as_bytes()).as_bytes().to_vec(),
-            )),
-            FilePayload::Bytes(value) => Some(ProtocolBytes::new(
-                blake3::hash(value.as_slice()).as_bytes().to_vec(),
-            )),
-            FilePayload::IoError(_) | FilePayload::ExternalResource(_) => None,
-        };
+        file.content_hash = crate::project::payload_hash(&file.payload)
+            .map(|hash| ProtocolBytes::new(hash.as_bytes().to_vec()));
     }
 }
 

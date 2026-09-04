@@ -191,6 +191,16 @@ pub(in super::super) fn protocol_to_vm(value: &era_runtime_protocol::ProtocolVal
     }
 }
 
+pub(in super::super) fn materialized_protocol_value(
+    value: &VmValue,
+) -> Option<era_runtime_protocol::ProtocolValue> {
+    match value {
+        VmValue::Integer(value) => Some(era_runtime_protocol::ProtocolValue::Integer(*value)),
+        VmValue::String(value) => Some(era_runtime_protocol::ProtocolValue::String(value.clone())),
+        VmValue::IntegerPlace(_) | VmValue::StringPlace(_) => None,
+    }
+}
+
 pub(in super::super) fn extension_protocol_value(
     value: era_runtime_protocol::ProtocolValue,
 ) -> Option<VmValue> {

@@ -1,0 +1,459 @@
+use std::fmt::Write as _;
+
+use era_runtime_protocol::{
+    ConfigurationClientProfile, ExternalResource, FileCategory, FilePayload, SubmittedFile,
+};
+
+use super::*;
+
+fn manifest(source: &str, revision: u64) -> ProjectManifest {
+    ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+        project_revision: revision,
+        files: vec![SubmittedFile {
+            relative_path: "main.erb".into(),
+            category: FileCategory::Erb,
+            payload: FilePayload::Utf8(source.into()),
+            content_hash: None,
+        }],
+    }
+}
+
+#[test]
+fn project_identity_matches_the_cross_host_fixed_vector() {
+    let file = |path: &str, category: FileCategory, digest: Vec<u8>| SubmittedFile {
+        relative_path: path.into(),
+        category,
+        payload: FilePayload::Utf8("@TEST\nRETURN".into()),
+        content_hash: Some(ProtocolBytes::new(digest)),
+    };
+    let left = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+        project_revision: 1,
+        files: vec![
+            file("ERB/a.erb", FileCategory::Erb, vec![1; 32]),
+            file("ERB/A.erb", FileCategory::Erh, vec![2; 32]),
+            file("CSV/config.csv", FileCategory::Csv, (0_u8..32).collect()),
+            file("resources/icon.png", FileCategory::Resource, vec![255; 32]),
+        ],
+    };
+    let right = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+        project_revision: 1,
+        files: vec![
+            file("resources/icon.png", FileCategory::Resource, vec![255; 32]),
+            file("CSV/config.csv", FileCategory::Csv, (0_u8..32).collect()),
+            file("ERB/A.erb", FileCategory::Erh, vec![2; 32]),
+            file("ERB/a.erb", FileCategory::Erb, vec![1; 32]),
+        ],
+    };
+
+    assert_eq!(project_identity(&left), project_identity(&right));
+    assert_eq!(
+        project_identity(&left).source_digest.as_slice(),
+        &[
+            0x15, 0xd7, 0x21, 0x99, 0xf2, 0xe3, 0x3c, 0x42, 0x9e, 0x0b, 0xd4, 0x18, 0x5e, 0x34,
+            0x41, 0xa2, 0x3c, 0x06, 0x50, 0xc1, 0x42, 0x78, 0xd5, 0x76, 0x0c, 0x51, 0x27, 0xd1,
+            0xa7, 0x0e, 0x07, 0xec,
+        ]
+    );
+}
+
+#[test]
+fn cooperative_planning_bounds_manifest_and_function_traversal() {
+    let files = (0..=COOPERATIVE_ITEM_QUANTUM * 2)
+        .map(|index| SubmittedFile {
+            relative_path: format!("resources/{index:04}.bin"),
+            category: FileCategory::Resource,
+            payload: FilePayload::Bytes(ProtocolBytes::new(index.to_le_bytes().to_vec())),
+            content_hash: Some(ProtocolBytes::new(
+                blake3::hash(&index.to_le_bytes()).as_bytes().to_vec(),
+            )),
+        })
+        .collect();
+    let resource_manifest = ProjectManifest {
+        compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+        project_revision: 7,
+        files,
+    };
+    let mut identity = ProjectIdentityPlanner::new();
+    assert!(identity.step(&resource_manifest).is_none());
+    assert_eq!(identity.cursor, COOPERATIVE_ITEM_QUANTUM);
+    assert!(identity.step(&resource_manifest).is_none());
+    assert_eq!(identity.cursor, COOPERATIVE_ITEM_QUANTUM * 2);
+    let planned_identity = loop {
+        if let Some(value) = identity.step(&resource_manifest) {
+            break value;
+        }
+    };
+    assert_eq!(planned_identity, project_identity(&resource_manifest));
+
+    let mut source = "@SYSTEM_TITLE\nRETURN\n".to_owned();
+    for index in 0..=COOPERATIVE_ITEM_QUANTUM * 2 {
+        writeln!(source, "@CACHE_PLAN_{index}\nRETURN").unwrap();
+    }
+    let project = manifest(&source, 1);
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    let artifact = build.artifact.unwrap();
+    let mut planner = CacheLayoutPlanner::new(CacheKeyPlanner::Incremental {
+        state: Arc::new(build.incremental),
+        keys: Vec::new(),
+    });
+    while planner.identity.is_none() {
+        assert!(planner.step(&project, &artifact).unwrap().is_none());
+    }
+    assert!(planner.step(&project, &artifact).unwrap().is_none());
+    assert_eq!(planner.cursor, COOPERATIVE_ITEM_QUANTUM);
+    let CacheKeyPlanner::Incremental { keys, .. } = &planner.cache_keys else {
+        panic!("incremental cache-key planner changed variant");
+    };
+    assert_eq!(keys.len(), COOPERATIVE_ITEM_QUANTUM);
+    let plan = loop {
+        if let Some(plan) = planner.step(&project, &artifact).unwrap() {
+            break plan;
+        }
+    };
+    assert!(plan.function_ranges.len() > 32);
+    assert!(plan.function_ranges.len() <= TARGET_PARALLEL_SECTIONS);
+}
+
+#[test]
+fn compiled_project_cache_round_trips_and_keys_source_content() {
+    let mut project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
+    project.files.push(SubmittedFile {
+        relative_path: "reraconfig.toml".into(),
+        category: FileCategory::Configuration,
+        payload: FilePayload::Utf8("[meta]\nschema_version = 3\n\n[text]\nfont_size = 21\n".into()),
+        content_hash: None,
+    });
+    for (path, category, text) in [
+        ("ERB/indices.erh", FileCategory::Erh, "#DIM CACHEINDEX,32\n"),
+        ("ERB/CACHEINDEX.erd", FileCategory::Erd, "10,main\n"),
+        ("ERB/CACHEINDEX.als", FileCategory::Als, "10,alias\n"),
+    ] {
+        project.files.push(SubmittedFile {
+            relative_path: path.into(),
+            category,
+            payload: FilePayload::Utf8(text.into()),
+            content_hash: None,
+        });
+    }
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    let bytes = encode_full_project_for_test(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+    let decoded = decode(&bytes, 64 * 1024 * 1024).unwrap();
+    let decoded_file = decode_project_file(&bytes, 64 * 1024 * 1024).unwrap();
+
+    assert_eq!(&bytes[..8], b"RERAPROJ");
+    assert_eq!(bytes[8], VERSION);
+    assert_eq!(decoded.key, project_key(&project_identity(&project), &[]));
+    assert_eq!(decoded_file.identity, project_identity(&project));
+    assert_eq!(decoded_file.manifest, project);
+    assert!(
+        decoded
+            .snapshot
+            .editable_configuration
+            .is_specified("FontSize")
+    );
+    assert_eq!(
+        decoded.snapshot.client_configuration.get_code("FontSize"),
+        decoded.snapshot.configuration.get_code("FontSize")
+    );
+    assert_eq!(decoded.diagnostics, build.report.diagnostics);
+    assert_eq!(decoded.incremental, build.incremental);
+    assert_eq!(
+        decoded.artifact.artifact(),
+        build.artifact.as_ref().unwrap().artifact()
+    );
+    assert_eq!(
+        decoded.artifact.artifact().manifest.artifact_id,
+        build.artifact.unwrap().artifact().manifest.artifact_id
+    );
+    assert!(
+        decoded
+            .artifact
+            .artifact()
+            .source_map
+            .statement_fingerprints
+            .iter()
+            .all(|fingerprint| fingerprint.0[16..] == [0; 16])
+    );
+    let mut revised = project.clone();
+    revised.project_revision = 9;
+    assert_eq!(
+        project_key(&project_identity(&project), &[]),
+        project_key(&project_identity(&revised), &[])
+    );
+    let mut changed = project.clone();
+    changed.files[0].payload = FilePayload::Utf8("@SYSTEM_TITLE\nPRINTL changed\nRETURN\n".into());
+    assert_ne!(
+        project_key(&project_identity(&project), &[]),
+        project_key(&project_identity(&changed), &[])
+    );
+    for category in [FileCategory::Als, FileCategory::Erd] {
+        let mut changed = project.clone();
+        changed
+            .files
+            .iter_mut()
+            .find(|file| file.category == category)
+            .unwrap()
+            .payload = FilePayload::Utf8("11,changed\n".into());
+        assert_ne!(
+            project_key(&project_identity(&project), &[]),
+            project_key(&project_identity(&changed), &[])
+        );
+        changed.files.retain(|file| file.category != category);
+        assert_ne!(
+            project_key(&project_identity(&project), &[]),
+            project_key(&project_identity(&changed), &[])
+        );
+    }
+}
+
+fn small_compiled_cache() -> Vec<u8> {
+    let project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
+    let mut build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    build.incremental.compact();
+    encode_compiled_cache_for_test(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap()
+}
+
+#[test]
+fn parallel_cache_decode_reports_failures_in_dependency_order() {
+    static INVALID_SECTION: [u8; 1] = [0xff];
+    let bytes = small_compiled_cache();
+    let invalid = || EncodedSectionRef {
+        decoded_length: 1,
+        compressed: &INVALID_SECTION,
+    };
+
+    for _ in 0..16 {
+        let mut sections = parse_cache_sections(&bytes, bytes.len()).unwrap();
+        sections.manifest = invalid();
+        sections.metadata = invalid();
+        let Err(error) = decode_cache_parts(&sections) else {
+            panic!("corrupt manifest unexpectedly decoded");
+        };
+        assert!(
+            error.starts_with("manifest section:"),
+            "manifest dependency must win independently of task completion order"
+        );
+
+        let mut sections = parse_cache_sections(&bytes, bytes.len()).unwrap();
+        sections.sources = invalid();
+        sections.metadata = invalid();
+        let Err(error) = decode_cache_parts(&sections) else {
+            panic!("corrupt source records unexpectedly decoded");
+        };
+        assert!(
+            error.starts_with("source-record section:"),
+            "source records must win over independent sections"
+        );
+
+        let mut sections = parse_cache_sections(&bytes, bytes.len()).unwrap();
+        assert!(!sections.functions.is_empty());
+        sections.functions[0] = invalid();
+        sections.metadata = invalid();
+        let Err(error) = decode_cache_parts(&sections) else {
+            panic!("corrupt function section unexpectedly decoded");
+        };
+        assert!(
+            error.starts_with("function section 0:"),
+            "function dependencies must win over independent sections"
+        );
+    }
+}
+
+#[test]
+fn source_sections_decode_without_an_independent_section_barrier() {
+    let bytes = small_compiled_cache();
+    let sections = parse_cache_sections(&bytes, bytes.len()).unwrap();
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(3)
+        .build()
+        .unwrap();
+    let started = std::time::Instant::now();
+    pool.install(|| {
+        decode_cache_parts_with_delays(
+            &sections,
+            CacheDecodeDelays {
+                source_records: std::time::Duration::from_millis(500),
+                source_entries: std::time::Duration::from_millis(500),
+                independent: std::time::Duration::from_millis(500),
+            },
+        )
+        .unwrap();
+    });
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(850),
+        "source decoding waited for the independent section group"
+    );
+}
+
+#[test]
+fn cache_decode_reports_structured_stage_boundaries() {
+    let bytes = small_compiled_cache();
+    let reports = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = Arc::clone(&reports);
+    let reporter = crate::ProjectProgressReporter::new(move |progress| {
+        observed.lock().unwrap().push(progress);
+    });
+
+    decode_with_progress(&bytes, bytes.len(), Some(&reporter)).unwrap();
+
+    let reports = reports.lock().unwrap();
+    let expected = [
+        crate::ProjectProgressStage::CacheParsing,
+        crate::ProjectProgressStage::CacheDecoding,
+        crate::ProjectProgressStage::CacheValidating,
+    ];
+    for stage in expected {
+        let stage_reports = reports
+            .iter()
+            .filter(|progress| progress.stage == stage)
+            .collect::<Vec<_>>();
+        assert_eq!(stage_reports.len(), 2, "{stage:?}");
+        assert_eq!(stage_reports[0].completed, 0);
+        assert_eq!(stage_reports[1].completed, 1);
+        assert_eq!(stage_reports[1].total, 1);
+    }
+}
+
+#[test]
+fn native_tui_and_cooperative_browser_caches_are_byte_identical() {
+    let mut initial = manifest("@SYSTEM_TITLE\nPRINTL cache v1\nRETURN\n", 1);
+    initial.files.push(SubmittedFile {
+        relative_path: "reraconfig.toml".into(),
+        category: FileCategory::Configuration,
+        payload: FilePayload::Utf8("[meta]\nschema_version = 3\n[text]\nfont_size = 20\n".into()),
+        content_hash: None,
+    });
+    let first = crate::project::build_project_with_extensions_and_progress(
+        &initial,
+        None,
+        None,
+        &[],
+        ConfigurationClientProfile::Tui,
+        None,
+    );
+    assert!(first.report.success, "{:?}", first.report.diagnostics);
+
+    let mut reloaded = initial.clone();
+    reloaded.project_revision = 2;
+    reloaded.files[0].payload =
+        FilePayload::Utf8("@SYSTEM_TITLE\nPRINTL cache v2\nRETURN\n".into());
+    let mut browser_cold = reloaded.clone();
+    // A browser can reach the same source generation through a different number of reloads.
+    browser_cold.project_revision = 9;
+    let mut tui = crate::project::build_project_with_extensions_and_progress(
+        &reloaded,
+        Some(&first.incremental),
+        first.artifact.as_ref().map(ValidatedArtifact::artifact),
+        &[],
+        ConfigurationClientProfile::Tui,
+        None,
+    );
+    let mut browser = crate::project::build_project_with_extensions_and_progress(
+        &browser_cold,
+        None,
+        None,
+        &[],
+        ConfigurationClientProfile::Browser,
+        None,
+    );
+    assert!(tui.report.success, "{:?}", tui.report.diagnostics);
+    assert!(browser.report.success, "{:?}", browser.report.diagnostics);
+    tui.incremental.compact();
+    browser.incremental.compact();
+
+    let tui_snapshot = tui.snapshot.as_ref().unwrap();
+    let native = encode_cancellable(
+        Arc::clone(&tui_snapshot.manifest),
+        Vec::new(),
+        tui.artifact.unwrap(),
+        Arc::new(tui.incremental),
+        CompiledSnapshotMetadata::from(tui_snapshot),
+        tui.report.diagnostics,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap();
+    let browser_snapshot = browser.snapshot.as_ref().unwrap();
+    let cooperative = encode_compiled_cache_for_test(
+        &browser_snapshot.manifest,
+        &[],
+        browser.artifact.as_ref().unwrap(),
+        &browser.incremental,
+        browser_snapshot,
+        &browser.report.diagnostics,
+    )
+    .unwrap();
+
+    assert_eq!(native, cooperative);
+    let decoded = decode(&native, native.len()).unwrap();
+    assert_eq!(
+        decoded.snapshot.configuration_profile,
+        ConfigurationClientProfile::Reference
+    );
+    assert_eq!(
+        decoded.snapshot.manifest.project_revision,
+        COMPILED_CACHE_PROJECT_REVISION
+    );
+}
+
+#[test]
+fn single_and_multi_threaded_builds_are_byte_identical() {
+    let mut source = "@SYSTEM_TITLE\nRETURN\n".to_owned();
+    for index in 0..256 {
+        writeln!(source, "@IDENTITY_{index}\nPRINTL {index}\nRETURN").unwrap();
+    }
+    let project = manifest(&source, 1);
+    let build = |threads| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut build = crate::project::build_project(&project, None);
+                assert!(build.report.success, "{:?}", build.report.diagnostics);
+                build.incremental.compact();
+                let artifact = build.artifact.as_ref().unwrap();
+                let bytes = encode_compiled_cache_for_test(
+                    &project,
+                    &[],
+                    artifact,
+                    &build.incremental,
+                    build.snapshot.as_ref().unwrap(),
+                    &build.report.diagnostics,
+                )
+                .unwrap();
+                (
+                    artifact.artifact().manifest.program_version.execution_id,
+                    artifact.artifact().manifest.artifact_id,
+                    artifact.artifact().source_map.clone(),
+                    build.report.diagnostics,
+                    bytes,
+                )
+            })
+    };
+
+    assert_eq!(build(1), build(4));
+}
