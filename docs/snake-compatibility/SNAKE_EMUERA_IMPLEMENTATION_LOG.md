@@ -1141,6 +1141,73 @@ HTML_PRINT 流程构造 41 个槽位。Web/Tauri 使用 HTML 版本；TUI 的存
   `CHANGELOG_PENDING.md` 分项登记本批行为修复。任务测试进程已结束，暂停续做材料按规则
   保留在 W 和已记录的专属游戏副本中，不删除用户数据或为文档/提交调整重跑产品。
 
+### 2026-09-04 蛇版 Web 历史图像图层定位修复验收
+
+本次是批次 4 完成后的单一 Web 修复批次，处理三个互相关联但分项提交的显示错误：颜绘
+附加层被横向排开、Canvas 颜绘面部落在左上角、跨历史行组合图层逐层下移。没有修改 core、
+协议、存档格式、游戏脚本或参考实现；Web/WASM/Tauri 继续绑定 core
+`e13d1582d238cd3e3fc244844ccad7922743fd71`。用户明确免除 60 分钟测试时限，其他静态先行、
+唯一重构审查、首次全量一次及 5 秒完整 DOM/runtime 看门狗规则保持不变。
+
+#### 脚本、现有投影与蛇版响应审阅
+
+- `QOL_IMAGE.ERB` 的 `ASSEMBLE_HTML_IMAGE_LAYERS` 在底图后为每个附加层输出负图片宽度的
+  `shape space`；蛇版 renderer 保留有符号 inline advance。Web 原实现把负宽 clamp 为零，
+  因而红晕等附加层从底图右侧开始。本次以零宽 CSS box 加负 `margin-left` 表示负 advance，
+  同时对测量资源限额检查其绝对值；非负 space 路径不变。
+- 稳定快照中的 `別顔_服_パジャマ_笑顔_30` 是 270×270 的 Canvas sprite；其
+  `30_FACEPARTS_01` 源矩形 `[470,55,77,51]`、静态 frame offset `[99,76]`。core 已按蛇版
+  资源响应同时投影 sprite position 和 frame offset，Web Canvas replay 过去只使用命令
+  destination。本次按 sprite 基准尺寸投影两种偏移及缩放，零有效偏移仍原样使用既有目标矩形。
+- 裙子场景脚本经图形库输出连续三组“单独零宽 space 行 → 单独 relative image 行”，图片
+  y 为 `0/-100/-200`，规范历史仍保留六行。Web 虚拟列表过去把每个图片行的物理行高再次
+  叠加到 visual y。本次只识别至少两组、首层 y=0、后层同单位严格负向递进且无文本、交互
+  或额外 wrapper 的完整签名；历史行不删除，仅把各 visual 平移回共同原点。孤立、被普通行
+  打断、非递进、交互及普通图片均有不命中回归。
+
+#### 分项提交与回归
+
+| 修复点 | Web commit | 产品与回归范围 |
+|---|---|---|
+| 负宽 space | `d796d99fdd1ec6ce035c0fcdde55182073a4fcb0` | 有符号 advance、CSS 负 margin、测量限额；普通正宽 space 保持原样 |
+| Canvas frame offset | `161d10f375766d34f67c1c8454d63c3832bbf63a` | position + frame offset 及缩放目标；零偏移路径保持原样 |
+| 跨行组合图层 | `5771bf160117d1ef8de4861409969ac32c52c1d7` | 严格组合识别、保留历史行、共享 visual 原点；稳定快照 scenario 与只读 replay 观察 |
+
+- 唯一重构审查在首条测试前完成。其要求均在测试前落实：收紧完整组合签名、补日记面部
+  replay 几何、断言恰好三条组合行、合并严格 AST 分类器、恢复测试行高并覆盖缩放公式。
+- 最小 Vitest 首轮 **5 files / 133 passed**；首次且唯一完整 Vitest
+  **112 files / 1561 passed**。TypeScript 初次发现 `advance` 的 unknown narrowing，修正后
+  定向 **1 file / 14 passed** 且 typecheck 通过；Prettier 初次指出三个本批文件，格式化后
+  定向 **2 files / 46 passed**、定向 ESLint 与完整 format check 通过。完整 ESLint 最终
+  exit 0，保留 6 条既有 Vue prop 警告；Web build 与独立 `build:wasm` 通过。首次完整 suite
+  未重跑，失败后的检查只复验直接受影响集合。
+- `public/.wasm-build-D76iVx` 是本批开始前已有的忽略目录，首次宽 lint 会扫描其生成代码；
+  它被可恢复地移出后 lint 通过，收尾恢复原处，不把生成代码或用户 `Cargo.lock` 修改纳入提交。
+
+#### 稳定快照、真实客户端与边界
+
+主要输入只使用用户指定的
+`runtime_20260904-005227.snapshot`（SHA-256
+`147a02b51bce643a073aefa92e97ab9283f698df3a24485921a714558dd6d6ff`），直接验证其既有历史；
+未重放可能被映姬早晨侍奉随机事件打断的操作序列，也没有断言随机对白文字。
+
+| 客户端 / 证据 | 结果与实际断言 |
+|---|---|
+| Tauri WebDriver 定向 | exit 0，**1 passing / 11s**；真实 Tauri bridge 恢复快照后恰有 3 条组合行，三层 top 为 `549.59375/550.59375/551.59375`，后续文字 gap 5px，face offset `[99,76]`，`waiting_input`、canInteract=true、fault=null。证据 `.rustyera/test-runs/tauri-snapshots/2026-09-03T18-15-40.320Z-rustyera-snake-image-layout.spec.mjs.jsonl` |
+| Chromium 151 完整历史捕获 | 快照已恢复并生成完整 DOM；line 379 与 431 各两层的 visual left/top 相同，负 space 为 width 0 + margin-left -180px。该 scenario 随后在 144 MiB compiled-cache 导出期间触发 5 秒静止看门狗，故保留基础设施失败 verdict，不宣称整条 Chromium scenario 通过。证据 `.rustyera/test-runs/snake-image-layer-layout-20260903174728495-68214/trace.ndjson` |
+| Firefox 155 / Gecko 0.37.1 | 完整兼容回归 exit 0；17 文件 fixture 冷启动、显示偏好、交互辅助、真实输入一步及存档往返通过，无 fault。证据 `.rustyera/test-runs/browser-compat-firefox-1788459408446/snapshots.ndjson` |
+| Safari 26.6.2 WebDriver | 首次在任何产品断言前因 automation window 不在前台失败；未使用 Computer Use。按 runner 正式 `--startup-only --background-dom` 定向复验 exit 0，真实 Safari 完成 OPFS 冷重置、fixture 导入、Vue/WASM 编译与运行输出。该结果明确不覆盖原生前台/可信指针、音频或交互回放。证据 `.rustyera/test-runs/browser-compat-safari-1788481249902/snapshots.ndjson` |
+
+最终 WASM SHA-256 为
+`c51d9870f7eac4f1547a930058a675825cf7322dc4d01f354ab44b9b1eadc18d`，Tauri debug binary
+SHA-256 为 `4d2514364a6e7ed25a39148de1c30a5dfeac742740f2d29ee92b5f169ce07f15`；
+WASM revision `6342873e6836a27e7cf017546378814420ce021fa942b83114f9340bf65b8b99`。
+Web 发布 pin 未变，core worktree 后续 `02f8cf76` 仅含文档，不改变上述产品源码身份。
+根 `CHANGELOG_PENDING.md` 已由 `f79465f` 分别登记三个产品修复。未修改、合并或推送 master
+组件分支；Chromium compiled-cache 导出停顿和 Safari 原生前台输入覆盖按原 verdict 保留，
+不影响已由组件测试、完整历史 DOM、真实 Tauri 几何及两种原生浏览器启动/兼容断面覆盖的
+共享图像投影结论。
+
 <a id="batch-6"></a>
 
 ## 批次 6：完整蛇版语言
