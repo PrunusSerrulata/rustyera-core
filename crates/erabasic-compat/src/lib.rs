@@ -179,6 +179,10 @@ impl CompatibilityIdentity {
         matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake)
     }
 
+    const fn supports_snake_policy(&self, minimum_version: u32) -> bool {
+        self.is_experimental() && self.policy_version >= minimum_version
+    }
+
     /// Arithmetic selected by this identity; callers validate identities before use.
     #[must_use]
     pub const fn integer_arithmetic_policy(&self) -> IntegerArithmeticPolicy {
@@ -191,13 +195,13 @@ impl CompatibilityIdentity {
     /// Snake policy v3 returns zero when TOINT's integer reader fails.
     #[must_use]
     pub const fn uses_snake_numeric_read_fallback(&self) -> bool {
-        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 3
+        self.supports_snake_policy(3)
     }
 
     /// Complete call text and checked forms share the v4 execution contract.
     #[must_use]
     pub const fn supports_call_text(&self) -> bool {
-        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 4
+        self.supports_snake_policy(4)
     }
 
     #[must_use]
@@ -213,7 +217,7 @@ impl CompatibilityIdentity {
     /// Deterministic data extensions share the v6 execution contract.
     #[must_use]
     pub const fn supports_snake_data_apis(&self) -> bool {
-        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 6
+        self.supports_snake_policy(6)
     }
 
     #[must_use]
@@ -224,48 +228,47 @@ impl CompatibilityIdentity {
     /// Final script-fault hooks are part of the v7 snake execution policy.
     #[must_use]
     pub const fn supports_fault_hooks(&self) -> bool {
-        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 7
+        self.supports_snake_policy(7)
     }
 
     /// Normalized history display state and logical animation timers are part of policy v8.
     #[must_use]
     pub const fn supports_snake_display_state(&self) -> bool {
-        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 8
+        self.supports_snake_policy(8)
     }
 
     /// Runtime-owned input control, device latches, and environment queries are policy v9.
     #[must_use]
     pub const fn supports_snake_input(&self) -> bool {
-        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 9
+        self.supports_snake_policy(9)
     }
 
     /// Safe SQL catalog and service identity are part of snake policy v10.
     #[must_use]
     pub const fn supports_safe_sql(&self) -> bool {
-        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 10
+        self.supports_snake_policy(10)
     }
 
     /// Whole-project snake source convergence semantics are fixed by policy v11.
     #[must_use]
     pub const fn supports_snake_compile_convergence(&self) -> bool {
-        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 11
+        self.supports_snake_policy(11)
     }
 
     /// Policy for non-variadic user calls; builtin signatures remain exact.
     #[must_use]
     pub const fn user_call_argument_policy(&self, strict: bool) -> UserCallArgumentPolicy {
-        match self.profile {
-            CompatibilityProfileId::EmueraSkiaSnake if self.policy_version >= 4 && !strict => {
-                UserCallArgumentPolicy::WarnAndIgnoreExcess
-            }
-            _ => UserCallArgumentPolicy::RejectExcess,
+        if self.supports_snake_policy(4) && !strict {
+            UserCallArgumentPolicy::WarnAndIgnoreExcess
+        } else {
+            UserCallArgumentPolicy::RejectExcess
         }
     }
 
     /// User ERD aliases and the snake built-in alias recovery rules arrived in policy v2.
     #[must_use]
     pub const fn uses_snake_alias_rules(&self) -> bool {
-        matches!(self.profile, CompatibilityProfileId::EmueraSkiaSnake) && self.policy_version >= 2
+        self.supports_snake_policy(2)
     }
 
     /// Validate the complete policy, including semantic service versions.
