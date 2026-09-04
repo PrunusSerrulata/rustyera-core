@@ -7,7 +7,6 @@ pub(super) fn register_hosts(
     names: &[&str],
     namespace: &str,
     capability: HostCapability,
-    _may_suspend: bool,
 ) {
     for name in names {
         let contract = host_contract(namespace, name);
@@ -27,7 +26,7 @@ pub(super) fn register_hosts(
 }
 
 pub(super) fn register_sql(registry: &mut HostRegistry) {
-    register_hosts(registry, SQL, "rustyera.sql", HostCapability::Sql, true);
+    register_hosts(registry, SQL, "rustyera.sql", HostCapability::Sql);
     for (name, capability, reason) in SQL_DEFERRED {
         registry.register_execution(
             *name,

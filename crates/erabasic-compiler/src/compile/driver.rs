@@ -1,186 +1,13 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
-#[must_use]
-#[allow(clippy::too_many_lines)]
-/// Compile one analyzed, in-memory project into a self-contained artifact.
-///
-/// # Panics
-///
-/// Panics only if the crate's own fixed, Serde-derived identity tuples stop being
-/// serializable. User-provided source and project values are reported as diagnostics.
-pub fn compile_project(
-    project: &AnalyzedProject,
-    options: &CompilerOptions,
-    host_registry: &HostRegistry,
-    previous: Option<&IncrementalState>,
-) -> CompileReport {
-    compile_project_inner(
-        ProjectInput::Borrowed(project),
-        options,
-        host_registry,
-        previous,
-        None,
-        CompilePolicy {
-            compact_cache: false,
-            consume_owned_hir: false,
-        },
-        None,
-    )
-    .report
-    .into()
-}
+mod api;
 
-/// Compile with an exact previous artifact backing a compact incremental cache.
-///
-/// Runtime owners use this entry point because they already retain the executable
-/// artifact. The returned cache is compact and therefore must again be paired with
-/// its exact artifact on the next incremental build.
-#[must_use]
-pub fn compile_project_with_artifact(
-    project: &AnalyzedProject,
-    options: &CompilerOptions,
-    host_registry: &HostRegistry,
-    previous: Option<&IncrementalState>,
-    previous_artifact: Option<&BytecodeArtifact>,
-) -> CompileReport {
-    compile_project_inner(
-        ProjectInput::Borrowed(project),
-        options,
-        host_registry,
-        previous,
-        previous_artifact,
-        CompilePolicy {
-            compact_cache: true,
-            consume_owned_hir: false,
-        },
-        None,
-    )
-    .report
-    .into()
-}
-
-#[must_use]
-pub fn compile_project_with_artifact_and_progress(
-    project: &AnalyzedProject,
-    options: &CompilerOptions,
-    host_registry: &HostRegistry,
-    previous: Option<&IncrementalState>,
-    previous_artifact: Option<&BytecodeArtifact>,
-    progress: &dyn CompileProgressCallback,
-) -> CompileReport {
-    compile_project_inner(
-        ProjectInput::Borrowed(project),
-        options,
-        host_registry,
-        previous,
-        previous_artifact,
-        CompilePolicy {
-            compact_cache: true,
-            consume_owned_hir: false,
-        },
-        Some(progress),
-    )
-    .report
-    .into()
-}
-
-/// Compile for a runtime that must preserve the compiler's validation provenance.
-#[must_use]
-pub fn compile_validated_project_with_artifact(
-    project: &AnalyzedProject,
-    options: &CompilerOptions,
-    host_registry: &HostRegistry,
-    previous: Option<&IncrementalState>,
-    previous_artifact: Option<&BytecodeArtifact>,
-) -> ValidatedCompileReport {
-    compile_project_inner(
-        ProjectInput::Borrowed(project),
-        options,
-        host_registry,
-        previous,
-        previous_artifact,
-        CompilePolicy {
-            compact_cache: true,
-            consume_owned_hir: false,
-        },
-        None,
-    )
-    .report
-}
-
-/// Compile with progress while preserving validator provenance for the runtime.
-#[must_use]
-pub fn compile_validated_project_with_artifact_and_progress(
-    project: &AnalyzedProject,
-    options: &CompilerOptions,
-    host_registry: &HostRegistry,
-    previous: Option<&IncrementalState>,
-    previous_artifact: Option<&BytecodeArtifact>,
-    progress: &dyn CompileProgressCallback,
-) -> ValidatedCompileReport {
-    compile_project_inner(
-        ProjectInput::Borrowed(project),
-        options,
-        host_registry,
-        previous,
-        previous_artifact,
-        CompilePolicy {
-            compact_cache: true,
-            consume_owned_hir: false,
-        },
-        Some(progress),
-    )
-    .report
-}
-
-/// Compile an owned analyzed project while moving its large data tables into the artifact.
-///
-/// Runtime cold loads use this path after analyzer diagnostics no longer need the HIR owner.
-#[must_use]
-pub fn compile_owned_validated_project_with_artifact(
-    project: AnalyzedProject,
-    options: &CompilerOptions,
-    host_registry: &HostRegistry,
-    previous: Option<&IncrementalState>,
-    previous_artifact: Option<&BytecodeArtifact>,
-) -> OwnedValidatedCompileReport {
-    compile_project_inner(
-        ProjectInput::Owned(Box::new(project)),
-        options,
-        host_registry,
-        previous,
-        previous_artifact,
-        CompilePolicy {
-            compact_cache: true,
-            consume_owned_hir: cfg!(target_arch = "wasm32"),
-        },
-        None,
-    )
-}
-
-/// Compile an owned analyzed project with progress and without cloning artifact-owned tables.
-#[must_use]
-pub fn compile_owned_validated_project_with_artifact_and_progress(
-    project: AnalyzedProject,
-    options: &CompilerOptions,
-    host_registry: &HostRegistry,
-    previous: Option<&IncrementalState>,
-    previous_artifact: Option<&BytecodeArtifact>,
-    progress: &dyn CompileProgressCallback,
-) -> OwnedValidatedCompileReport {
-    compile_project_inner(
-        ProjectInput::Owned(Box::new(project)),
-        options,
-        host_registry,
-        previous,
-        previous_artifact,
-        CompilePolicy {
-            compact_cache: true,
-            consume_owned_hir: cfg!(target_arch = "wasm32"),
-        },
-        Some(progress),
-    )
-}
+pub use api::{
+    compile_owned_validated_project_with_artifact,
+    compile_owned_validated_project_with_artifact_and_progress, compile_project,
+    compile_project_with_artifact, compile_project_with_artifact_and_progress,
+    compile_validated_project_with_artifact, compile_validated_project_with_artifact_and_progress,
+};
 
 enum ProjectInput<'a> {
     Borrowed(&'a AnalyzedProject),
@@ -191,6 +18,25 @@ enum ProjectInput<'a> {
 struct CompilePolicy {
     compact_cache: bool,
     consume_owned_hir: bool,
+}
+
+impl CompilePolicy {
+    const RETAINED_INCREMENTAL: Self = Self {
+        compact_cache: false,
+        consume_owned_hir: false,
+    };
+
+    const COMPACT_INCREMENTAL: Self = Self {
+        compact_cache: true,
+        consume_owned_hir: false,
+    };
+
+    const fn compact_owned() -> Self {
+        Self {
+            compact_cache: true,
+            consume_owned_hir: cfg!(target_arch = "wasm32"),
+        }
+    }
 }
 
 impl ProjectInput<'_> {
@@ -903,110 +749,4 @@ fn compile_project_inner(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::default_host_registry;
-    use erabasic_analyzer::{
-        AnalysisInput, AnalyzerOptions, ExtensionRegistry, ProjectSource, SourcePayload,
-        analyze_project,
-    };
-    use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
-
-    fn analyzed(source: &str) -> AnalyzedProject {
-        let project_data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
-            .data
-            .expect("default project data");
-        let report = analyze_project(
-            AnalysisInput {
-                project_data,
-                sources: vec![ProjectSource {
-                    relative_path: "main.erb".into(),
-                    payload: SourcePayload::Utf8(source.into()),
-                }],
-            },
-            &AnalyzerOptions::analysis_mode(),
-            &ExtensionRegistry::default(),
-        );
-        assert!(report.project.is_some(), "{:#?}", report.diagnostics);
-        report.project.expect("analyzed project")
-    }
-
-    #[test]
-    fn consumed_owned_hir_matches_the_borrowed_compile() {
-        let source = "@SYSTEM_TITLE\nCALL HELPER\nRETURN\n\
-                      @HELPER(ARG = 2)\nRESULT = ARG\nRETURN\n";
-        let borrowed_project = analyzed(source);
-        let expected = compile_validated_project_with_artifact(
-            &borrowed_project,
-            &CompilerOptions::default(),
-            &default_host_registry(),
-            None,
-            None,
-        );
-        let consumed = compile_project_inner(
-            ProjectInput::Owned(Box::new(analyzed(source))),
-            &CompilerOptions::default(),
-            &default_host_registry(),
-            None,
-            None,
-            CompilePolicy {
-                compact_cache: true,
-                consume_owned_hir: true,
-            },
-            None,
-        );
-
-        assert_eq!(consumed.report, expected);
-        assert_eq!(consumed.source_ids, [SourceId(0)]);
-        assert!(consumed.diagnostic_sources.is_empty());
-    }
-
-    #[test]
-    fn compilation_preparation_reports_intermediate_work() {
-        let events = std::sync::Mutex::new(Vec::new());
-        let callback = |progress| events.lock().unwrap().push(progress);
-        let project = analyzed("@SYSTEM_TITLE\nCALL HELPER\nRETURN\n@HELPER\nRETURN\n");
-        let expected_work = project
-            .program
-            .functions
-            .len()
-            .saturating_mul(5)
-            .saturating_add(project.program.variables.len().saturating_mul(2))
-            .saturating_add(project.program.sources.len());
-        let report = compile_project_inner(
-            ProjectInput::Owned(Box::new(project)),
-            &CompilerOptions::default(),
-            &default_host_registry(),
-            None,
-            None,
-            CompilePolicy {
-                compact_cache: true,
-                consume_owned_hir: true,
-            },
-            Some(&callback),
-        );
-
-        assert!(
-            report.report.artifact.is_some(),
-            "{:#?}",
-            report.report.diagnostics
-        );
-        let events = events.into_inner().unwrap();
-        let compiling = events
-            .iter()
-            .filter(|progress| progress.stage == CompileProgressStage::Compiling)
-            .collect::<Vec<_>>();
-        assert_eq!(compiling.first().unwrap().completed, 0);
-        assert_eq!(compiling.last().unwrap().total, expected_work);
-        assert_eq!(
-            compiling.last().unwrap().completed,
-            compiling.last().unwrap().total
-        );
-        assert!(
-            compiling
-                .iter()
-                .any(|progress| progress.completed > 0 && progress.completed < progress.total),
-            "compilation preparation did not expose intermediate progress: {compiling:?}"
-        );
-    }
-}
+mod tests;

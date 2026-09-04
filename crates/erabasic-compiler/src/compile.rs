@@ -493,20 +493,6 @@ pub fn runtime_native_validation_context(
             .into_iter()
             .map(|family| (family.key, family))
             .collect();
-    context.runtime_host_authorizations = runtime_symbols::runtime_host_authorizations(
-        &symbols,
-        registry,
-        &artifact.manifest.compatibility,
-    )
-    .into_iter()
-    .map(|family| (family.key, family))
-    .collect();
-    context.host_capabilities.extend(
-        context
-            .runtime_host_authorizations
-            .values()
-            .map(|family| family.prototype.capability),
-    );
     context.runtime_staged_authorizations =
         runtime_symbols::runtime_staged_authorizations(&symbols, registry)
             .into_iter()

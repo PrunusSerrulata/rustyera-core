@@ -6,7 +6,7 @@ use std::{
 
 use erabasic_bytecode::{
     BytecodeConstant, BytecodeEventEntry, BytecodeEventGroup, BytecodeGlobal, BytecodePersistence,
-    BytecodeStorage, BytecodeType, Digest, SymbolKey,
+    BytecodeStorage, Digest, SymbolKey,
 };
 use erabasic_data::{Persistence, StorageScope};
 use erabasic_hir::{ConstantValue, Function, FunctionKind, SemanticType, Variable, VariableScope};
@@ -279,14 +279,5 @@ const fn semantic_type_tag(value_type: SemanticType) -> u8 {
         SemanticType::String => 1,
         SemanticType::Void => 2,
         SemanticType::Error => 3,
-    }
-}
-
-#[allow(dead_code)]
-const fn type_for_semantic(value_type: SemanticType) -> Option<BytecodeType> {
-    match value_type {
-        SemanticType::Integer => Some(BytecodeType::Integer),
-        SemanticType::String => Some(BytecodeType::String),
-        SemanticType::Void | SemanticType::Error => None,
     }
 }

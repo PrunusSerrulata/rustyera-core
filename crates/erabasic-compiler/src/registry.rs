@@ -162,56 +162,43 @@ pub fn default_host_registry() -> HostRegistry {
         INPUT,
         "rustyera.input",
         HostCapability::Input,
-        true,
     );
-    register_hosts(
-        &mut registry,
-        TEXT,
-        "rustyera.text",
-        HostCapability::Text,
-        false,
-    );
+    register_hosts(&mut registry, TEXT, "rustyera.text", HostCapability::Text);
     register_hosts(
         &mut registry,
         CLOCK,
         "rustyera.clock",
         HostCapability::Clock,
-        true,
     );
     register_hosts(
         &mut registry,
         GRAPHICS,
         "rustyera.graphics",
         HostCapability::Graphics,
-        true,
     );
     register_hosts(
         &mut registry,
         AUDIO,
         "rustyera.audio",
         HostCapability::Audio,
-        true,
     );
     register_hosts(
         &mut registry,
         STORAGE,
         "rustyera.storage",
         HostCapability::Storage,
-        true,
     );
     register_hosts(
         &mut registry,
         SYSTEM,
         "rustyera.system",
         HostCapability::System,
-        true,
     );
     register_hosts(
         &mut registry,
         NETWORK,
         "rustyera.network",
         HostCapability::Network,
-        true,
     );
     register_sql(&mut registry);
     // Preserve CALLSHARP as an external extension intent without embedding the
