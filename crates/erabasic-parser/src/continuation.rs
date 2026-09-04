@@ -1,7 +1,9 @@
 use erabasic_ast::{
-    Argument, Diagnostic, Directive, Expr, ExprKind, FormPart, FormattedString, Function,
-    ParseOutput, Span, Statement, StatementKind, VariableRef,
+    Argument, Diagnostic, Directive, Function, ParseOutput, Span, Statement, StatementKind,
+    VariableRef,
 };
+
+use crate::util::{map_expression_spans, map_formatted_spans};
 
 #[derive(Clone, Copy)]
 enum ContinuationSegmentKind {
@@ -147,7 +149,7 @@ pub(crate) fn remap_function_output(
                 remap_variable(target, source_map, logical_start);
             }
             if let Some(default) = &mut parameter.default {
-                remap_expression(default, source_map, logical_start);
+                map_expression_spans(default, &|span| source_map.map_span(span, logical_start));
             }
         }
     }
@@ -182,9 +184,9 @@ fn remap_statement(
             ..
         } => {
             remap_variable(target, source_map, logical_start);
-            remap_expression(value, source_map, logical_start);
+            map_expression_spans(value, &|span| source_map.map_span(span, logical_start));
             for value in additional_values {
-                remap_expression(value, source_map, logical_start);
+                map_expression_spans(value, &|span| source_map.map_span(span, logical_start));
             }
         }
         StatementKind::Directive(directive) => {
@@ -212,10 +214,10 @@ fn remap_argument(
 ) {
     match argument {
         Argument::Expression(expression) | Argument::MixedExpression { expression, .. } => {
-            remap_expression(expression, source_map, logical_start);
+            map_expression_spans(expression, &|span| source_map.map_span(span, logical_start));
         }
         Argument::Formatted(formatted) => {
-            remap_formatted(formatted, source_map, logical_start);
+            map_formatted_spans(formatted, &|span| source_map.map_span(span, logical_start));
         }
         Argument::Omitted(span) => {
             *span = source_map.map_span(*span, logical_start);
@@ -231,95 +233,6 @@ fn remap_variable(
 ) {
     variable.span = source_map.map_span(variable.span, logical_start);
     for index in &mut variable.indices {
-        remap_expression(index, source_map, logical_start);
-    }
-}
-
-fn remap_expression(
-    expression: &mut Expr,
-    source_map: &ContinuationSourceMap,
-    logical_start: usize,
-) {
-    expression.span = source_map.map_span(expression.span, logical_start);
-    match &mut expression.kind {
-        ExprKind::Variable { indices, .. } => {
-            for index in indices {
-                remap_expression(index, source_map, logical_start);
-            }
-        }
-        ExprKind::Call { args, .. } => {
-            for argument in args.iter_mut().flatten() {
-                remap_expression(argument, source_map, logical_start);
-            }
-        }
-        ExprKind::Unary { operand, .. }
-        | ExprKind::Postfix { operand, .. }
-        | ExprKind::Group(operand) => {
-            remap_expression(operand, source_map, logical_start);
-        }
-        ExprKind::Binary { left, right, .. } => {
-            remap_expression(left, source_map, logical_start);
-            remap_expression(right, source_map, logical_start);
-        }
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            remap_expression(condition, source_map, logical_start);
-            remap_expression(then_expr, source_map, logical_start);
-            remap_expression(else_expr, source_map, logical_start);
-        }
-        ExprKind::Formatted(formatted) => {
-            remap_formatted(formatted, source_map, logical_start);
-        }
-        ExprKind::Integer(_) | ExprKind::String(_) | ExprKind::Identifier(_) | ExprKind::Error => {}
-    }
-}
-
-fn remap_formatted(
-    formatted: &mut FormattedString,
-    source_map: &ContinuationSourceMap,
-    logical_start: usize,
-) {
-    formatted.span = source_map.map_span(formatted.span, logical_start);
-    for part in &mut formatted.parts {
-        match part {
-            FormPart::StringInterpolation {
-                expression,
-                width,
-                span,
-                ..
-            }
-            | FormPart::IntegerInterpolation {
-                expression,
-                width,
-                span,
-                ..
-            } => {
-                *span = source_map.map_span(*span, logical_start);
-                remap_expression(expression, source_map, logical_start);
-                if let Some(width) = width {
-                    remap_expression(width, source_map, logical_start);
-                }
-            }
-            FormPart::Conditional {
-                condition,
-                then_value,
-                else_value,
-                span,
-            } => {
-                *span = source_map.map_span(*span, logical_start);
-                remap_expression(condition, source_map, logical_start);
-                remap_formatted(then_value, source_map, logical_start);
-                if let Some(else_value) = else_value {
-                    remap_formatted(else_value, source_map, logical_start);
-                }
-            }
-            FormPart::Triple { span, .. } => {
-                *span = source_map.map_span(*span, logical_start);
-            }
-            FormPart::Text(_) => {}
-        }
+        map_expression_spans(index, &|span| source_map.map_span(span, logical_start));
     }
 }

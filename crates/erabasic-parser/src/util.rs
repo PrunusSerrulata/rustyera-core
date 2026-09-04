@@ -3,7 +3,10 @@ use erabasic_lexer::{Operator, Token, TokenKind};
 
 mod spans;
 
-pub(crate) use spans::{lines_with_offsets, shift_diagnostics, shift_tokens, shifted};
+pub(crate) use spans::{
+    lines_with_offsets, map_expression_spans, map_formatted_spans, shift_diagnostics, shift_tokens,
+    shifted,
+};
 
 pub(crate) fn trim_line_start(source: &str, allow_full_width_space: bool) -> &str {
     source.trim_start_matches(|character| {

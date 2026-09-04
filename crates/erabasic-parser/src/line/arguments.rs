@@ -174,16 +174,13 @@ pub(super) fn parse_assignment_right(
     if right_source.starts_with('%') {
         // String assignments use FORM interpolation syntax even though '%' is
         // the modulo operator in ordinary expressions.
-        let (form, lex_diagnostics) =
-            lex_formatted(right_source, context.lexer_config(), context.macros());
-        let mut output = lower_formatted(&form);
-        output.diagnostics.splice(0..0, lex_diagnostics);
-        shift_formatted(&mut output, right_base);
-        diagnostics.append(&mut output.diagnostics);
-        return output.value.map(|value| Expr {
-            kind: ExprKind::Formatted(value),
-            span: Span::new(right_base, line_base + line.len()),
-        });
+        return parse_formatted_expression(
+            right_source,
+            right_base,
+            line_base + line.len(),
+            context,
+            diagnostics,
+        );
     }
     let tokens = if matches!(
         operator.kind,
@@ -216,32 +213,34 @@ pub(super) fn parse_assignment_right(
         // String SET accepts unquoted FORM text (`LOCALS = HP(%NAME%)`). Try the
         // ordinary expression grammar first so integer modulo remains unambiguous,
         // then recover through FORM only when that grammar cannot consume the RHS.
-        let (form, lex_diagnostics) =
-            lex_formatted(right_source, context.lexer_config(), context.macros());
-        let mut output = lower_formatted(&form);
-        output.diagnostics.splice(0..0, lex_diagnostics);
-        shift_formatted(&mut output, right_base);
-        diagnostics.append(&mut output.diagnostics);
-        return output.value.map(|value| Expr {
-            kind: ExprKind::Formatted(value),
-            span: Span::new(right_base, line_base + line.len()),
-        });
+        return parse_formatted_expression(
+            right_source,
+            right_base,
+            line_base + line.len(),
+            context,
+            diagnostics,
+        );
     }
     diagnostics.append(&mut parser.diagnostics);
     right
 }
 
-pub(super) trait OutputMap<T> {
-    fn map<U>(self, f: impl FnOnce(T) -> U) -> ParseOutput<U>;
-}
-
-impl<T> OutputMap<T> for ParseOutput<T> {
-    fn map<U>(self, f: impl FnOnce(T) -> U) -> ParseOutput<U> {
-        ParseOutput {
-            value: self.value.map(f),
-            diagnostics: self.diagnostics,
-        }
-    }
+fn parse_formatted_expression(
+    source: &str,
+    base: usize,
+    end: usize,
+    context: &dyn ParserContext,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Expr> {
+    let (form, lex_diagnostics) = lex_formatted(source, context.lexer_config(), context.macros());
+    let mut output = lower_formatted(&form);
+    output.diagnostics.splice(0..0, lex_diagnostics);
+    shift_formatted(&mut output, base);
+    diagnostics.append(&mut output.diagnostics);
+    output.value.map(|value| Expr {
+        kind: ExprKind::Formatted(value),
+        span: Span::new(base, end),
+    })
 }
 
 pub(super) fn parse_arguments(
@@ -403,30 +402,6 @@ fn parse_formatted_first_arguments(
         value: Some(arguments),
         diagnostics,
     }
-}
-
-/// Parses generic comma-separated expressions at an existing source offset.
-///
-/// Plain `=` delays this pass until semantic analysis knows whether its
-/// destination is numeric (a SET list) or string (one FORM value with commas).
-pub(super) fn parse_expression_list_at_impl(
-    source: &str,
-    base: usize,
-    context: &dyn ParserContext,
-) -> ParseOutput<Vec<Expr>> {
-    parse_arguments(source, base, ArgumentStyle::Expressions, context).map(|arguments| {
-        arguments
-            .into_iter()
-            .map(|argument| match argument {
-                Argument::Expression(expression) => expression,
-                Argument::Omitted(span) => Expr {
-                    kind: ExprKind::Error,
-                    span,
-                },
-                _ => unreachable!("expression grammar produced a non-expression argument"),
-            })
-            .collect()
-    })
 }
 
 fn parse_times_arguments(

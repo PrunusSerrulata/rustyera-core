@@ -1,6 +1,6 @@
 //! Byte-offset helpers shared by nested parser entry points.
 
-use erabasic_ast::{Diagnostic, Span};
+use erabasic_ast::{Diagnostic, Expr, ExprKind, FormPart, FormattedString, Span};
 use erabasic_lexer::Token;
 
 pub(crate) fn shifted(span: Span, base: usize) -> Span {
@@ -25,6 +25,81 @@ pub(crate) fn shift_diagnostics(diagnostics: Vec<Diagnostic>, base: usize) -> Ve
             diagnostic
         })
         .collect()
+}
+
+pub(crate) fn map_expression_spans(expression: &mut Expr, map: &impl Fn(Span) -> Span) {
+    expression.span = map(expression.span);
+    match &mut expression.kind {
+        ExprKind::Variable { indices, .. } => {
+            for index in indices {
+                map_expression_spans(index, map);
+            }
+        }
+        ExprKind::Call { args, .. } => {
+            for argument in args.iter_mut().flatten() {
+                map_expression_spans(argument, map);
+            }
+        }
+        ExprKind::Unary { operand, .. }
+        | ExprKind::Postfix { operand, .. }
+        | ExprKind::Group(operand) => map_expression_spans(operand, map),
+        ExprKind::Binary { left, right, .. } => {
+            map_expression_spans(left, map);
+            map_expression_spans(right, map);
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            map_expression_spans(condition, map);
+            map_expression_spans(then_expr, map);
+            map_expression_spans(else_expr, map);
+        }
+        ExprKind::Formatted(formatted) => map_formatted_spans(formatted, map),
+        ExprKind::Integer(_) | ExprKind::String(_) | ExprKind::Identifier(_) | ExprKind::Error => {}
+    }
+}
+
+pub(crate) fn map_formatted_spans(formatted: &mut FormattedString, map: &impl Fn(Span) -> Span) {
+    formatted.span = map(formatted.span);
+    for part in &mut formatted.parts {
+        match part {
+            FormPart::StringInterpolation {
+                expression,
+                width,
+                span,
+                ..
+            }
+            | FormPart::IntegerInterpolation {
+                expression,
+                width,
+                span,
+                ..
+            } => {
+                *span = map(*span);
+                map_expression_spans(expression, map);
+                if let Some(width) = width {
+                    map_expression_spans(width, map);
+                }
+            }
+            FormPart::Conditional {
+                condition,
+                then_value,
+                else_value,
+                span,
+            } => {
+                *span = map(*span);
+                map_expression_spans(condition, map);
+                map_formatted_spans(then_value, map);
+                if let Some(else_value) = else_value {
+                    map_formatted_spans(else_value, map);
+                }
+            }
+            FormPart::Triple { span, .. } => *span = map(*span),
+            FormPart::Text(_) => {}
+        }
+    }
 }
 
 pub(crate) fn lines_with_offsets(source: &str) -> impl Iterator<Item = (usize, &str)> {

@@ -15,7 +15,7 @@ use crate::util::{
 };
 
 use arguments::{
-    OutputMap, parse_arguments, parse_assignment_right, parse_column_options, parse_mixed_arguments,
+    parse_arguments, parse_assignment_right, parse_column_options, parse_mixed_arguments,
 };
 
 pub fn parse_line(source: &str, context: &dyn ParserContext) -> ParseOutput<Statement> {
@@ -31,7 +31,23 @@ pub fn parse_expression_list_at(
     base: usize,
     context: &dyn ParserContext,
 ) -> ParseOutput<Vec<Expr>> {
-    arguments::parse_expression_list_at_impl(source, base, context)
+    let output = parse_arguments(source, base, ArgumentStyle::Expressions, context);
+    ParseOutput {
+        value: output.value.map(|arguments| {
+            arguments
+                .into_iter()
+                .map(|argument| match argument {
+                    Argument::Expression(expression) => expression,
+                    Argument::Omitted(span) => Expr {
+                        kind: ExprKind::Error,
+                        span,
+                    },
+                    _ => unreachable!("expression grammar produced a non-expression argument"),
+                })
+                .collect()
+        }),
+        diagnostics: output.diagnostics,
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -62,10 +78,13 @@ pub(crate) fn parse_line_at(
     }
     if line.starts_with('#') {
         let directive = parse_directive(line, line_base, context);
-        return directive.map(|d| Statement {
-            span: d.span,
-            kind: StatementKind::Directive(d),
-        });
+        return ParseOutput {
+            value: directive.value.map(|directive| Statement {
+                span: directive.span,
+                kind: StatementKind::Directive(directive),
+            }),
+            diagnostics: directive.diagnostics,
+        };
     }
 
     let lexed = lex_with(
