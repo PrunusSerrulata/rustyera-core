@@ -47,21 +47,19 @@ impl ConfigStore {
     /// Construct the catalog with Textual-specific defaults before project files apply.
     #[must_use]
     pub fn with_tui_defaults() -> Self {
-        let mut store = Self::default();
-        for spec in catalog() {
-            if let Some(value) = tui_default(spec.code) {
-                store.values.insert(spec.code.to_ascii_uppercase(), value);
-            }
-        }
-        store
+        Self::with_client_defaults(tui_default)
     }
 
     /// Construct the catalog with browser/Tauri defaults before project files apply.
     #[must_use]
     pub fn with_web_defaults() -> Self {
+        Self::with_client_defaults(web_default)
+    }
+
+    fn with_client_defaults(default_for: fn(&str) -> Option<ConfigValue>) -> Self {
         let mut store = Self::default();
         for spec in catalog() {
-            if let Some(value) = web_default(spec.code) {
+            if let Some(value) = default_for(spec.code) {
                 store.values.insert(spec.code.to_ascii_uppercase(), value);
             }
         }
@@ -83,8 +81,7 @@ impl ConfigStore {
     pub fn is_fixed(&self, code: &str) -> bool {
         self.fixed
             .get(&code.to_ascii_uppercase())
-            .copied()
-            .unwrap_or(false)
+            .is_some_and(|fixed| *fixed)
     }
 
     /// Whether a project configuration source explicitly assigned this catalog entry.
@@ -104,8 +101,7 @@ impl ConfigStore {
         if self.fixed.get(&code).copied().unwrap_or(false) {
             return Ok(());
         }
-        let current = self.values.get(&code).ok_or(ConfigParseError::UnknownKey)?;
-        let parsed = parse_like(&code, current, raw)?;
+        let parsed = self.parse_code_value(&code, raw)?;
         self.values.insert(code.clone(), parsed);
         self.specified.insert(code.clone());
         if fixed {
@@ -122,8 +118,7 @@ impl ConfigStore {
     /// Returns [`ConfigParseError`] for an unknown setting or invalid value.
     pub fn apply_client_override(&mut self, name: &str, raw: &str) -> Result<(), ConfigParseError> {
         let code = resolve_code(name).ok_or(ConfigParseError::UnknownKey)?;
-        let current = self.values.get(&code).ok_or(ConfigParseError::UnknownKey)?;
-        let parsed = parse_like(&code, current, raw)?;
+        let parsed = self.parse_code_value(&code, raw)?;
         self.values.insert(code, parsed);
         Ok(())
     }
@@ -150,6 +145,11 @@ impl ConfigStore {
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &ConfigValue)> {
         self.values.iter().map(|(key, value)| (key.as_str(), value))
+    }
+
+    fn parse_code_value(&self, code: &str, raw: &str) -> Result<ConfigValue, ConfigParseError> {
+        let current = self.values.get(code).ok_or(ConfigParseError::UnknownKey)?;
+        parse_like(code, current, raw)
     }
 }
 

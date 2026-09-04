@@ -216,15 +216,13 @@ pub fn tauri_configurable(code: &str) -> bool {
 
 /// Textual frontend defaults applied before project configuration files.
 #[must_use]
-pub fn tui_default(code: &str) -> Option<ConfigValue> {
-    let _ = code;
+pub fn tui_default(_code: &str) -> Option<ConfigValue> {
     None
 }
 
 /// Browser and Tauri defaults applied before project configuration files.
 #[must_use]
-pub fn web_default(code: &str) -> Option<ConfigValue> {
-    let _ = code;
+pub fn web_default(_code: &str) -> Option<ConfigValue> {
     None
 }
 
@@ -245,35 +243,7 @@ pub fn tui_application(code: &str) -> Option<ConfigApplication> {
         | "FocusColor"
         | "ReplaceFullWidthSpaces"
         | "CharacterWidthMode" => Some(ConfigApplication::Hot),
-        "UseRenameFile"
-        | "UseReplaceFile"
-        | "SearchSubdirectory"
-        | "SortWithFilename"
-        | "CompatiCALLNAME"
-        | "CompatiSPChara"
-        | "UseERD"
-        | "VarsizeDimConfig"
-        | "SystemAllowFullSpace"
-        | "useLanguage"
-        | "ReplaceContinuationBR"
-        | "IgnoreCase"
-        | "IgnoreUncalledFunction"
-        | "AllowFunctionOverloading"
-        | "WarnFunctionOverloading"
-        | "DisplayWarningLevel"
-        | "StrictUserCallArguments"
-        | "DisableBeforeErrorThrow"
-        | "FunctionNotFoundWarning"
-        | "FunctionNotCalledWarning"
-        | "CompatiCallEvent"
-        | "CompatiFuncArgOptional"
-        | "CompatiFuncArgAutoConvert"
-        | "SystemIgnoreTripleSymbol"
-        | "AutoSave"
-        | "SaveDataNos"
-        | "SystemSaveInBinary"
-        | "ZipSaveData" => Some(ConfigApplication::Restart),
-        _ => None,
+        _ => shared_restart_application(code),
     }
 }
 
@@ -300,6 +270,12 @@ pub fn browser_application(code: &str) -> Option<ConfigApplication> {
         "AudioVolume" | "ReplaceFullWidthSpaces" | "CharacterWidthMode" => {
             Some(ConfigApplication::Hot)
         }
+        _ => shared_restart_application(code),
+    }
+}
+
+fn shared_restart_application(code: &str) -> Option<ConfigApplication> {
+    match code {
         "UseRenameFile"
         | "UseReplaceFile"
         | "SearchSubdirectory"

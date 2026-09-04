@@ -90,7 +90,7 @@ impl ReraConfigDocument {
                 locked_codes.push(spec.code.to_owned());
             }
         }
-        document.set_locked_codes_unchecked(locked_codes)?;
+        document.set_locked_codes(locked_codes)?;
         if values.compatibility_profile() != erabasic_compat::CompatibilityProfileId::EmueraEm {
             ensure_table(&mut document.document, "compatibility")
                 .insert("profile", value(values.compatibility_profile().as_str()));
@@ -142,15 +142,14 @@ impl ReraConfigDocument {
             ));
         }
         let mut document = document.into_mut();
-        let retired_codes = if source_version == 1 {
+        if source_version <= 2 {
             validate_previous_meta(&document, source_offset, &source_spans)?;
+        }
+        let retired_codes = if source_version == 1 {
             upgrade_v1_document(&mut document)
         } else {
             Vec::new()
         };
-        if source_version == 2 {
-            validate_previous_meta(&document, source_offset, &source_spans)?;
-        }
         if source_version < 3 {
             upgrade_v2_document(&mut document);
         }
@@ -333,13 +332,6 @@ impl ReraConfigDocument {
         self.set_code_impl(code, setting, false)
     }
 
-    pub(super) fn set_locked_codes_unchecked(
-        &mut self,
-        codes: impl IntoIterator<Item = String>,
-    ) -> Result<(), ReraConfigError> {
-        self.set_locked_codes(codes)
-    }
-
     fn set_code_impl(
         &mut self,
         code: &str,
@@ -402,20 +394,12 @@ impl ReraConfigDocument {
     }
 
     fn set_locked_paths(&mut self, paths: BTreeSet<&'static str>) {
-        let mut replacement = Value::Array(Array::new());
-        if let Value::Array(array) = &mut replacement {
-            for path in paths {
-                array.push(path);
-            }
+        let mut array = Array::new();
+        for path in paths {
+            array.push(path);
         }
-        if !self.document.as_table().contains_key("meta") {
-            self.document["meta"] = Item::Table(Table::new());
-        }
-        let meta = self
-            .document
-            .get_mut("meta")
-            .and_then(Item::as_table_mut)
-            .expect("validated or newly created reraconfig meta is a table");
+        let mut replacement = Value::Array(array);
+        let meta = ensure_table(&mut self.document, "meta");
         if let Some(existing) = meta.get_mut("locked_settings") {
             if let Some(value) = existing.as_value() {
                 replacement.decor_mut().clone_from(value.decor());
@@ -450,25 +434,9 @@ fn validate_meta(
     source_offset: usize,
     source_spans: &BTreeMap<String, ByteSpan>,
 ) -> Result<(), ReraConfigError> {
-    let Some(meta) = document.get("meta") else {
+    let Some(table) = meta_table(document, source_offset, source_spans)? else {
         return Ok(());
     };
-    let table = meta.as_table().ok_or_else(|| {
-        error_at(
-            ReraConfigErrorKind::UnsupportedStructure,
-            Some("meta"),
-            available_span(meta, "meta", source_offset, source_spans),
-            "meta 必须是普通 TOML 表",
-        )
-    })?;
-    if table.is_dotted() {
-        return Err(error_at(
-            ReraConfigErrorKind::UnsupportedStructure,
-            Some("meta"),
-            available_span(meta, "meta", source_offset, source_spans),
-            "meta 不支持 dotted table",
-        ));
-    }
     for (key, item) in table {
         match key {
             "schema_version" => {
@@ -548,25 +516,9 @@ fn validate_previous_meta(
     source_offset: usize,
     source_spans: &BTreeMap<String, ByteSpan>,
 ) -> Result<(), ReraConfigError> {
-    let Some(meta) = document.get("meta") else {
+    let Some(table) = meta_table(document, source_offset, source_spans)? else {
         return Ok(());
     };
-    let table = meta.as_table().ok_or_else(|| {
-        error_at(
-            ReraConfigErrorKind::UnsupportedStructure,
-            Some("meta"),
-            available_span(meta, "meta", source_offset, source_spans),
-            "meta 必须是普通 TOML 表",
-        )
-    })?;
-    if table.is_dotted() {
-        return Err(error_at(
-            ReraConfigErrorKind::UnsupportedStructure,
-            Some("meta"),
-            available_span(meta, "meta", source_offset, source_spans),
-            "meta 不支持 dotted table",
-        ));
-    }
     for (key, item) in table {
         match key {
             "schema_version" => {}
@@ -584,6 +536,33 @@ fn validate_previous_meta(
         }
     }
     Ok(())
+}
+
+fn meta_table<'a>(
+    document: &'a DocumentMut,
+    source_offset: usize,
+    source_spans: &BTreeMap<String, ByteSpan>,
+) -> Result<Option<&'a Table>, ReraConfigError> {
+    let Some(meta) = document.get("meta") else {
+        return Ok(None);
+    };
+    let table = meta.as_table().ok_or_else(|| {
+        error_at(
+            ReraConfigErrorKind::UnsupportedStructure,
+            Some("meta"),
+            available_span(meta, "meta", source_offset, source_spans),
+            "meta 必须是普通 TOML 表",
+        )
+    })?;
+    if table.is_dotted() {
+        return Err(error_at(
+            ReraConfigErrorKind::UnsupportedStructure,
+            Some("meta"),
+            available_span(meta, "meta", source_offset, source_spans),
+            "meta 不支持 dotted table",
+        ));
+    }
+    Ok(Some(table))
 }
 
 fn upgrade_v1_document(document: &mut DocumentMut) -> Vec<&'static str> {
@@ -683,9 +662,10 @@ fn upgrade_v2_document(document: &mut DocumentMut) {
         interface.insert("menu_mode", Item::Value(menu_mode));
     }
 
-    let meta = ensure_table(document, "meta");
-    meta.insert("schema_version", value(RERACONFIG_SCHEMA_VERSION));
-    if let Some(locked) = meta.get_mut("locked_settings").and_then(Item::as_array_mut) {
+    if let Some(locked) = ensure_table(document, "meta")
+        .get_mut("locked_settings")
+        .and_then(Item::as_array_mut)
+    {
         for path in locked.iter_mut() {
             if path.as_str() != Some(OLD_MENU_PATH) {
                 continue;

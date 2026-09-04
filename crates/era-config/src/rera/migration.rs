@@ -119,7 +119,7 @@ pub fn migrate_legacy_configuration(sources: &[LegacyConfigSource<'_>]) -> Legac
         }
     }
     document
-        .set_locked_codes_unchecked(
+        .set_locked_codes(
             rera_catalog()
                 .into_iter()
                 .filter(|spec| values.is_fixed(spec.code))
@@ -165,15 +165,16 @@ fn migrate_colon_config(
             continue;
         };
         let name = content[..delimiter].trim();
+        let remainder = &content[delimiter + 1..];
+        let raw_value = remainder
+            .split_once(':')
+            .map_or(remainder, |(value, _)| value)
+            .trim();
         if resolve_retired_code(name) == Some("CompatiDRAWLINE") {
             if matches!(kind, LegacyColonKind::Debug) {
                 retired_codes.insert("CompatiDRAWLINE");
                 continue;
             }
-            let raw_value = content[delimiter + 1..]
-                .split_once(':')
-                .map_or(&content[delimiter + 1..], |(value, _)| value)
-                .trim();
             if values
                 .apply(
                     "CompatiLinefeedAs1739",
@@ -219,11 +220,6 @@ fn migrate_colon_config(
         }
 
         let fixed = matches!(kind, LegacyColonKind::Fixed);
-        let remainder = &content[delimiter + 1..];
-        let raw_value = remainder
-            .split_once(':')
-            .map_or(remainder, |(value, _)| value)
-            .trim();
         if values.apply(&code, raw_value, fixed).is_err() {
             diagnostics.push(diagnostic(
                 source,
@@ -345,13 +341,11 @@ fn named_source<'a>(
     sources: &'a [LegacyConfigSource<'a>],
     name: &str,
 ) -> Option<LegacyConfigSource<'a>> {
-    let mut matches = sources
+    sources
         .iter()
         .copied()
         .filter(|source| basename(source.relative_path).eq_ignore_ascii_case(name))
-        .collect::<Vec<_>>();
-    matches.sort_by_key(|source| source.relative_path.to_ascii_lowercase());
-    matches.into_iter().next()
+        .min_by_key(|source| source.relative_path.to_ascii_lowercase())
 }
 
 fn preferred_source<'a>(
