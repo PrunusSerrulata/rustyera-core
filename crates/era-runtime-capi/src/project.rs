@@ -21,13 +21,9 @@ pub(super) extern "C" fn session_stage_project_manifest(
             }
             return EraStatus::ResourceLimit;
         }
-        let bytes = if input.len == 0 {
-            &[]
-        } else {
-            // SAFETY: the pointer/length pair was validated and is borrowed only while this
-            // synchronous entry point decodes the manifest.
-            unsafe { std::slice::from_raw_parts(input.data, input.len) }
-        };
+        // SAFETY: the pointer/length pair was validated and is borrowed only while this
+        // synchronous entry point decodes the manifest.
+        let bytes = unsafe { borrow_byte_slice(&input) };
         let manifest = match decode_canonical(bytes) {
             Ok(manifest) => manifest,
             Err(error) => {
@@ -63,10 +59,7 @@ pub(super) extern "C" fn session_stage_compiled_cache(
     out_transfer_id: *mut u64,
 ) -> EraStatus {
     ffi_status(|| {
-        if !valid_header::<u64>(header)
-            || out_transfer_id.is_null()
-            || (input.data.is_null() && input.len != 0)
-        {
+        if !valid_header::<u64>(header) || out_transfer_id.is_null() || invalid_byte_slice(input) {
             return EraStatus::InvalidArgument;
         }
         let mut registry = lock_registry();
@@ -83,11 +76,9 @@ pub(super) extern "C" fn session_stage_compiled_cache(
             record.last_error = "cannot allocate the compiled project cache staging buffer".into();
             return EraStatus::ResourceLimit;
         }
-        if input.len != 0 {
-            // SAFETY: the non-empty pointer/length pair was validated and is copied into the
-            // reserved owned buffer before the call returns. No frontend memory is retained.
-            bytes.extend_from_slice(unsafe { std::slice::from_raw_parts(input.data, input.len) });
-        }
+        // SAFETY: the pointer/length pair was validated and is copied into the reserved
+        // owned buffer before the call returns. No frontend memory is retained.
+        bytes.extend_from_slice(unsafe { borrow_byte_slice(&input) });
         stage_owned_compiled_cache(record, bytes, out_transfer_id)
     })
 }
@@ -204,17 +195,12 @@ fn decode_project_file_buffer(
     ffi_status(|| {
         if !valid_header::<EraOwnedBuffer>(header)
             || out_buffer.is_null()
-            || (input.data.is_null() && input.len != 0)
+            || invalid_byte_slice(input)
         {
             return EraStatus::InvalidArgument;
         }
-        let bytes = if input.len == 0 {
-            &[]
-        } else {
-            // SAFETY: the non-empty pointer/length pair was validated and is borrowed only
-            // for this call.
-            unsafe { std::slice::from_raw_parts(input.data, input.len) }
-        };
+        // SAFETY: the pointer/length pair was validated and is borrowed only for this call.
+        let bytes = unsafe { borrow_byte_slice(&input) };
         {
             let registry = lock_registry();
             if !registry.sessions.contains_key(&handle.value) {
@@ -288,22 +274,12 @@ pub(super) extern "C" fn prepare_project_configuration_update(
         }
         // SAFETY: all pointer/length pairs were validated and each borrow remains scoped to this
         // synchronous ABI call.
-        let project_file = if project_file.len == 0 {
-            &[]
-        } else {
-            unsafe { std::slice::from_raw_parts(project_file.data, project_file.len) }
-        };
-        // SAFETY: same argument validation and call-scoped lifetime as above.
-        let expected_digest = if expected_digest.len == 0 {
-            &[]
-        } else {
-            unsafe { std::slice::from_raw_parts(expected_digest.data, expected_digest.len) }
-        };
-        // SAFETY: same argument validation and call-scoped lifetime as above.
-        let contents = if contents.len == 0 {
-            &[]
-        } else {
-            unsafe { std::slice::from_raw_parts(contents.data, contents.len) }
+        let (project_file, expected_digest, contents) = unsafe {
+            (
+                borrow_byte_slice(&project_file),
+                borrow_byte_slice(&expected_digest),
+                borrow_byte_slice(&contents),
+            )
         };
         let contents = match std::str::from_utf8(contents) {
             Ok(contents) => contents,
@@ -334,10 +310,6 @@ pub(super) extern "C" fn prepare_project_configuration_update(
         }
         write_owned_buffer(&mut registry, encoded, out_buffer)
     })
-}
-
-const fn invalid_byte_slice(value: EraByteSlice) -> bool {
-    value.data.is_null() && value.len != 0
 }
 
 type ProjectProgressCallback = extern "C" fn(*mut c_void, EraProjectProgress);

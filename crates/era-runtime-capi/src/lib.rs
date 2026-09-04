@@ -48,15 +48,16 @@ pub unsafe extern "C" fn era_runtime_get_api(
         if requested.major != ERA_RUNTIME_ABI_VERSION.major || out_api.is_null() {
             return EraStatus::AbiMismatch;
         }
-        let mut reserved = [std::ptr::null_mut(); 8];
-        reserved[0] = session_set_project_progress as *const () as *mut c_void;
-        reserved[1] = session_decode_project_file as *const () as *mut c_void;
-        reserved[2] = session_decode_project_file_frontend as *const () as *mut c_void;
-        reserved[3] = session_stage_compiled_cache as *const () as *mut c_void;
-        reserved[4] = session_allocate_compiled_cache as *const () as *mut c_void;
-        reserved[5] = session_commit_compiled_cache as *const () as *mut c_void;
-        reserved[6] = prepare_project_configuration_update as *const () as *mut c_void;
-        reserved[7] = session_stage_project_manifest as *const () as *mut c_void;
+        let reserved = [
+            session_set_project_progress as *const () as *mut c_void,
+            session_decode_project_file as *const () as *mut c_void,
+            session_decode_project_file_frontend as *const () as *mut c_void,
+            session_stage_compiled_cache as *const () as *mut c_void,
+            session_allocate_compiled_cache as *const () as *mut c_void,
+            session_commit_compiled_cache as *const () as *mut c_void,
+            prepare_project_configuration_update as *const () as *mut c_void,
+            session_stage_project_manifest as *const () as *mut c_void,
+        ];
         let api = EraRuntimeApi {
             struct_size: u32::try_from(std::mem::size_of::<EraRuntimeApi>()).unwrap_or(u32::MAX),
             abi_version: ERA_RUNTIME_ABI_VERSION,
@@ -76,6 +77,25 @@ pub unsafe extern "C" fn era_runtime_get_api(
         unsafe { out_api.write(api) };
         EraStatus::Ok
     })
+}
+
+const fn invalid_byte_slice(value: EraByteSlice) -> bool {
+    value.data.is_null() && value.len != 0
+}
+
+/// Borrow a byte slice after [`invalid_byte_slice`] has rejected a non-empty null pointer.
+///
+/// # Safety
+///
+/// For a non-empty value, `data` must remain readable for `len` bytes without concurrent
+/// mutation for the lifetime of the returned slice.
+unsafe fn borrow_byte_slice(value: &EraByteSlice) -> &[u8] {
+    if value.len == 0 {
+        &[]
+    } else {
+        // SAFETY: the caller establishes the pointer validity documented above.
+        unsafe { std::slice::from_raw_parts(value.data, value.len) }
+    }
 }
 
 #[cfg(test)]

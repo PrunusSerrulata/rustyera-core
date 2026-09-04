@@ -47,21 +47,16 @@ pub(super) extern "C" fn session_submit(
     input: EraByteSlice,
 ) -> EraStatus {
     ffi_status(|| {
-        if !valid_header::<EraCallHeader>(header) || (input.data.is_null() && input.len != 0) {
+        if !valid_header::<EraCallHeader>(header) || invalid_byte_slice(input) {
             return EraStatus::InvalidArgument;
         }
         let mut registry = lock_registry();
         let Some(record) = registry.sessions.get_mut(&handle.value) else {
             return EraStatus::InvalidHandle;
         };
-        // SAFETY: the null/length pair was validated. The bytes are copied by the
-        // runtime decoder before this function returns.
-        let bytes = if input.len == 0 {
-            &[]
-        } else {
-            // SAFETY: a non-empty slice has a non-null pointer by validation above.
-            unsafe { std::slice::from_raw_parts(input.data, input.len) }
-        };
+        // SAFETY: the pointer/length pair was validated and the runtime decoder does not
+        // retain the call-scoped borrow.
+        let bytes = unsafe { borrow_byte_slice(&input) };
         match record.runtime.submit_envelope(bytes) {
             Ok(()) => EraStatus::Ok,
             Err(error) => {
