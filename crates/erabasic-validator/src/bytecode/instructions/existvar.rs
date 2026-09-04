@@ -1,13 +1,7 @@
 //! A probe catch landing has exactly one exceptional predecessor.
-use super::{StackValue, expect_payload, pop_type, read_u32};
-use crate::ValidationCode;
+use super::{InstructionError, StackValue, expect_payload, invalid, pop_type, read_u32};
 use erabasic_bytecode::{BytecodeFunction, BytecodeType, Opcode};
 use std::collections::BTreeMap;
-type Error = (ValidationCode, String);
-fn invalid(message: &str) -> Error {
-    (ValidationCode::InvalidOperand, message.into())
-}
-
 /// Constructed once per function, before the existing CFG stack traversal.
 /// None records duplicate success landings without retaining an unbounded list.
 #[derive(Default)]
@@ -18,7 +12,9 @@ pub(in crate::bytecode) struct ProbeIndex {
 }
 
 impl ProbeIndex {
-    pub(in crate::bytecode) fn new(function: &BytecodeFunction) -> Result<Self, (usize, Error)> {
+    pub(in crate::bytecode) fn new(
+        function: &BytecodeFunction,
+    ) -> Result<Self, (usize, InstructionError)> {
         let mut result = Self::default();
         for index in 0..function.code.len() {
             #[cfg(test)]
@@ -45,7 +41,7 @@ pub(super) fn apply(
     opcode: Opcode,
     stack: &mut Vec<StackValue>,
     probes: &ProbeIndex,
-) -> Result<Vec<usize>, Error> {
+) -> Result<Vec<usize>, InstructionError> {
     let payload = &function.code[index].payload;
     match opcode {
         Opcode::ProbeVariableName => {
@@ -109,7 +105,7 @@ pub(super) fn validate_edge(
     function: &BytecodeFunction,
     from: usize,
     to: usize,
-) -> Result<(), Error> {
+) -> Result<(), InstructionError> {
     if let Some((begin, true)) = finish_origin(function, to)?
         && (from != begin as usize
             || Opcode::try_from(function.code[from].opcode) != Ok(Opcode::BeginExistVarProbe)
@@ -122,7 +118,10 @@ pub(super) fn validate_edge(
     Ok(())
 }
 
-fn finish_origin(function: &BytecodeFunction, index: usize) -> Result<Option<(u32, bool)>, Error> {
+fn finish_origin(
+    function: &BytecodeFunction,
+    index: usize,
+) -> Result<Option<(u32, bool)>, InstructionError> {
     let Some(instruction) = function.code.get(index) else {
         return Ok(None);
     };

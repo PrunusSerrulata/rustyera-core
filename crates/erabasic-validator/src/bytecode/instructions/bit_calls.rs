@@ -1,22 +1,17 @@
 //! Opaque BIT stack provenance uses the existing CFG, never a second simulator.
-use super::{StackValue, expect_payload, pop_type, read_u32};
-use crate::ValidationCode;
+use super::{InstructionError, StackValue, expect_payload, invalid, pop_type, read_u32};
 use erabasic_bytecode::{
     BitCallSpec, BytecodeFunction, BytecodeGlobal, BytecodeStorage, BytecodeType, Opcode,
     RuntimeExpressionShape, RuntimeStagedAuthorization, RuntimeStagedKind, SymbolKey,
 };
 use std::collections::BTreeMap;
-type Error = (ValidationCode, String);
-fn invalid(message: &str) -> Error {
-    (ValidationCode::InvalidOperand, message.into())
-}
 
 fn authorize(
     spec: BitCallSpec,
     input: &BytecodeGlobal,
     staged: &BTreeMap<SymbolKey, &RuntimeStagedAuthorization>,
     trusted_staged: &BTreeMap<SymbolKey, RuntimeStagedAuthorization>,
-) -> Result<(), Error> {
+) -> Result<(), InstructionError> {
     let mut shapes = Vec::with_capacity(usize::from(spec.tail_count) + 1);
     shapes.push(Some(RuntimeExpressionShape {
         value_type: input.value_type,
@@ -53,7 +48,7 @@ pub(super) fn spec(
     globals: &BTreeMap<SymbolKey, &BytecodeGlobal>,
     staged: &BTreeMap<SymbolKey, &RuntimeStagedAuthorization>,
     trusted_staged: &BTreeMap<SymbolKey, RuntimeStagedAuthorization>,
-) -> Result<BitCallSpec, Error> {
+) -> Result<BitCallSpec, InstructionError> {
     let opening = function
         .code
         .get(begin)
@@ -61,8 +56,7 @@ pub(super) fn spec(
     if Opcode::try_from(opening.opcode) != Ok(Opcode::BeginBitCall) {
         return Err(invalid("BIT origin is not an opener"));
     }
-    let spec = BitCallSpec::decode(&opening.payload)
-        .map_err(|message| (ValidationCode::InvalidOperand, message))?;
+    let spec = BitCallSpec::decode(&opening.payload).map_err(invalid)?;
     let input = globals
         .get(&spec.input)
         .copied()
@@ -93,7 +87,7 @@ pub(super) fn apply(
     globals: &BTreeMap<SymbolKey, &BytecodeGlobal>,
     staged: &BTreeMap<SymbolKey, &RuntimeStagedAuthorization>,
     trusted_staged: &BTreeMap<SymbolKey, RuntimeStagedAuthorization>,
-) -> Result<(), Error> {
+) -> Result<(), InstructionError> {
     if opcode == Opcode::BeginBitCall {
         spec(function, index, globals, staged, trusted_staged)?;
         let begin = u32::try_from(index)

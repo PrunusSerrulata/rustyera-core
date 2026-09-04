@@ -1,3 +1,4 @@
+mod context;
 mod host_authorization;
 mod instructions;
 mod native_authorization;
@@ -6,123 +7,20 @@ mod runtime_symbols;
 mod source_map;
 mod staged_authorization;
 
+pub use context::ValidationContext;
 pub use provenance::{ValidatedOperandStacks, ValidatedStackState, ValidatedStackToken};
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use erabasic_bytecode::{
-    BytecodeArtifact, BytecodeConstant, BytecodeFunction, BytecodeStorage, BytecodeType,
-    COMPILER_ABI_VERSION, CONTAINER_VERSION, FormatVersion, HOST_ABI_VERSION, HostCapability,
-    HostImport, ISA_VERSION, NATIVE_ABI_VERSION, NativeImport, SymbolKey, UnvalidatedArtifact,
-    VM_ABI_VERSION,
+    BytecodeArtifact, BytecodeConstant, BytecodeFunction, BytecodeStorage, BytecodeType, SymbolKey,
+    UnvalidatedArtifact,
 };
 use rayon::prelude::*;
 
-use crate::{ValidationCode, ValidationDiagnostic, ValidationLimits, ValidationReport};
+use crate::{ValidationCode, ValidationDiagnostic, ValidationReport};
 use source_map::validate_source_map;
-
-#[derive(Clone, Debug)]
-pub struct ValidationContext {
-    pub container_version: FormatVersion,
-    pub isa_version: FormatVersion,
-    pub compiler_abi: u32,
-    pub native_abi: u32,
-    pub host_abi: u32,
-    pub vm_abi: u32,
-    pub supported_features: BTreeSet<String>,
-    pub native_imports: BTreeMap<SymbolKey, NativeImport>,
-    pub runtime_native_authorizations:
-        BTreeMap<SymbolKey, erabasic_bytecode::RuntimeNativeAuthorization>,
-    pub runtime_host_authorizations:
-        BTreeMap<SymbolKey, erabasic_bytecode::RuntimeHostAuthorization>,
-    pub runtime_staged_authorizations:
-        BTreeMap<SymbolKey, erabasic_bytecode::RuntimeStagedAuthorization>,
-    pub host_imports: BTreeMap<SymbolKey, HostImport>,
-    pub host_capabilities: BTreeSet<HostCapability>,
-    pub limits: ValidationLimits,
-}
-
-impl Default for ValidationContext {
-    fn default() -> Self {
-        Self {
-            container_version: CONTAINER_VERSION,
-            isa_version: ISA_VERSION,
-            compiler_abi: COMPILER_ABI_VERSION,
-            native_abi: NATIVE_ABI_VERSION,
-            host_abi: HOST_ABI_VERSION,
-            vm_abi: VM_ABI_VERSION,
-            supported_features: BTreeSet::new(),
-            native_imports: BTreeMap::new(),
-            runtime_native_authorizations: BTreeMap::new(),
-            runtime_host_authorizations: BTreeMap::new(),
-            runtime_staged_authorizations: BTreeMap::new(),
-            host_imports: BTreeMap::new(),
-            host_capabilities: BTreeSet::new(),
-            limits: ValidationLimits::default(),
-        }
-    }
-}
-
-impl ValidationContext {
-    #[must_use]
-    pub fn for_artifact(artifact: &BytecodeArtifact) -> Self {
-        Self {
-            supported_features: artifact
-                .manifest
-                .required_features
-                .iter()
-                .cloned()
-                .collect(),
-            native_imports: artifact
-                .native_imports
-                .iter()
-                .cloned()
-                .map(|import| (import.import.key, import))
-                .collect(),
-            runtime_native_authorizations: artifact
-                .runtime_native_authorizations
-                .iter()
-                .cloned()
-                .map(|authorization| (authorization.key, authorization))
-                .collect(),
-            runtime_host_authorizations: artifact
-                .runtime_host_authorizations
-                .iter()
-                .cloned()
-                .map(|authorization| (authorization.key, authorization))
-                .collect(),
-            runtime_staged_authorizations: artifact
-                .runtime_staged_authorizations
-                .iter()
-                .cloned()
-                .map(|authorization| (authorization.key, authorization))
-                .collect(),
-            host_imports: artifact
-                .host_imports
-                .iter()
-                .cloned()
-                .map(|import| (import.import.key, import))
-                .collect(),
-            host_capabilities: artifact
-                .host_imports
-                .iter()
-                .map(|import| import.capability)
-                .chain(
-                    artifact
-                        .runtime_host_authorizations
-                        .iter()
-                        .flat_map(|family| {
-                            std::iter::once(&family.prototype)
-                                .chain(family.stages.iter().map(|(_, import)| import))
-                                .map(|import| import.capability)
-                        }),
-                )
-                .collect(),
-            ..Self::default()
-        }
-    }
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ValidatedArtifact(Arc<BytecodeArtifact>, Arc<ValidatedOperandStacks>);
@@ -651,46 +549,14 @@ fn validate_functions(
     context: &ValidationContext,
     diagnostics: &mut Vec<ValidationDiagnostic>,
 ) -> ValidatedOperandStacks {
-    let globals: BTreeMap<_, _> = artifact
-        .globals
-        .iter()
-        .map(|global| (global.key, global))
-        .collect();
-    let functions: BTreeMap<_, _> = artifact
-        .functions
-        .iter()
-        .map(|function| (function.key, function))
-        .collect();
-    let native: BTreeMap<_, _> = artifact
-        .native_imports
-        .iter()
-        .map(|import| (import.import.key, &import.import))
-        .collect();
-    let host: BTreeMap<_, _> = artifact
-        .host_imports
-        .iter()
-        .map(|import| (import.import.key, &import.import))
-        .collect();
-    let staged: BTreeMap<_, _> = artifact
-        .runtime_staged_authorizations
-        .iter()
-        .map(|authorization| (authorization.key, authorization))
-        .collect();
+    let instruction_context =
+        instructions::Context::new(artifact, &context.runtime_staged_authorizations);
     let function_diagnostics = artifact
         .functions
         .par_iter()
         .map(|function| {
             let mut diagnostics = Vec::new();
-            let stacks = validate_function(
-                function,
-                &globals,
-                &functions,
-                &native,
-                &host,
-                &staged,
-                context,
-                &mut diagnostics,
-            );
+            let stacks = validate_function(function, &instruction_context, &mut diagnostics);
             (function.key, stacks, diagnostics)
         })
         .collect::<Vec<_>>();
@@ -742,15 +608,9 @@ fn validate_function_header(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn validate_function(
     function: &BytecodeFunction,
-    globals: &BTreeMap<SymbolKey, &erabasic_bytecode::BytecodeGlobal>,
-    functions: &BTreeMap<SymbolKey, &BytecodeFunction>,
-    native: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
-    host: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
-    staged: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeStagedAuthorization>,
-    context: &ValidationContext,
+    context: &instructions::Context<'_>,
     diagnostics: &mut Vec<ValidationDiagnostic>,
 ) -> provenance::FunctionStackProvenance {
     let Some(probes) = validate_function_header(function, diagnostics) else {
@@ -765,18 +625,7 @@ fn validate_function(
         let Some(mut stack) = states[index].clone() else {
             continue;
         };
-        let successors = match apply_instruction(
-            function,
-            index,
-            &mut stack,
-            globals,
-            functions,
-            native,
-            host,
-            staged,
-            &context.runtime_staged_authorizations,
-            &probes,
-        ) {
+        let successors = match apply_instruction(function, index, &mut stack, context, &probes) {
             Ok(successors) => successors,
             Err((code, message)) => {
                 diagnostics.push(ValidationDiagnostic::instruction(

@@ -1,19 +1,14 @@
-use super::{StackValue, expect_payload, pop_type, read_u32};
-use crate::ValidationCode;
+use super::{InstructionError, StackValue, expect_payload, invalid, pop_type, read_u32};
 use erabasic_bytecode::{
     BytecodeFunction, BytecodeType, ImportKind, MapCallKind, Opcode, RuntimeImport, SymbolKey,
 };
 use std::collections::BTreeMap;
-type Error = (ValidationCode, String);
-fn invalid(message: &str) -> Error {
-    (ValidationCode::InvalidOperand, message.into())
-}
 
 pub(super) fn signature<'a>(
     function: &BytecodeFunction,
     begin: usize,
     native: &'a BTreeMap<SymbolKey, &RuntimeImport>,
-) -> Result<(MapCallKind, &'a RuntimeImport), Error> {
+) -> Result<(MapCallKind, &'a RuntimeImport), InstructionError> {
     let opening = function
         .code
         .get(begin)
@@ -46,7 +41,7 @@ pub(super) fn apply(
     opcode: Opcode,
     stack: &mut Vec<StackValue>,
     native: &BTreeMap<SymbolKey, &RuntimeImport>,
-) -> Result<(), Error> {
+) -> Result<(), InstructionError> {
     expect_payload(&function.code[index].payload, 4)?;
     let begin = if opcode == Opcode::BeginMapCall {
         index

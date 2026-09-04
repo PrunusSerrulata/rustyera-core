@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use erabasic_data::ProjectData;
 use erabasic_hir::{
-    CallTarget, HIR_FORMAT_VERSION, HirCallArgument, HirExpr, HirExprKind, HirStatementKind,
-    InstructionTarget, Program, SemanticType,
+    CallTarget, HIR_FORMAT_VERSION, HirCallArgument, HirExpr, HirExprKind, HirPlace,
+    HirStatementKind, InstructionTarget, Program, SemanticType,
 };
 
 use crate::{ValidationCode, ValidationDiagnostic, ValidationReport};
@@ -197,7 +197,6 @@ pub fn validate_hir(program: &Program, _data: &ProjectData) -> ValidationReport<
     }
 }
 
-#[allow(clippy::too_many_lines)]
 fn validate_expression(
     expression: &HirExpr,
     functions: &BTreeSet<erabasic_hir::FunctionId>,
@@ -206,152 +205,101 @@ fn validate_expression(
     instruction: usize,
     diagnostics: &mut Vec<ValidationDiagnostic>,
 ) {
-    if expression.value_type == SemanticType::Error || matches!(expression.kind, HirExprKind::Error)
-    {
-        diagnostics.push(ValidationDiagnostic::instruction(
-            ValidationCode::InvalidHir,
-            function_name,
-            instruction,
-            "error expression cannot be compiled",
-        ));
-        return;
+    ExpressionValidator {
+        functions,
+        variables,
+        function_name,
+        instruction,
+        diagnostics,
     }
-    match &expression.kind {
-        HirExprKind::Variable { place } => {
-            if !variables.contains(&place.variable) {
-                diagnostics.push(ValidationDiagnostic::instruction(
-                    ValidationCode::MissingReference,
-                    function_name,
-                    instruction,
-                    "expression refers to an unknown variable",
-                ));
-            }
-            for index in &place.indices {
-                validate_expression(
-                    index,
-                    functions,
-                    variables,
-                    function_name,
-                    instruction,
-                    diagnostics,
-                );
-            }
+    .validate(expression);
+}
+
+struct ExpressionValidator<'a, 'd> {
+    functions: &'a BTreeSet<erabasic_hir::FunctionId>,
+    variables: &'a BTreeSet<erabasic_hir::VariableId>,
+    function_name: &'a str,
+    instruction: usize,
+    diagnostics: &'d mut Vec<ValidationDiagnostic>,
+}
+
+impl ExpressionValidator<'_, '_> {
+    fn validate(&mut self, expression: &HirExpr) {
+        if expression.value_type == SemanticType::Error
+            || matches!(expression.kind, HirExprKind::Error)
+        {
+            self.diagnostic(
+                ValidationCode::InvalidHir,
+                "error expression cannot be compiled",
+            );
+            return;
         }
-        HirExprKind::Call { target, arguments } => {
-            match target {
-                CallTarget::User { function } if !functions.contains(function) => {
-                    diagnostics.push(ValidationDiagnostic::instruction(
-                        ValidationCode::MissingReference,
-                        function_name,
-                        instruction,
-                        "call refers to an unknown function",
-                    ));
-                }
-                CallTarget::Unresolved { name } => {
-                    diagnostics.push(ValidationDiagnostic::instruction(
-                        ValidationCode::MissingReference,
-                        function_name,
-                        instruction,
-                        format!("unresolved function {name}"),
-                    ));
-                }
-                _ => {}
+        match &expression.kind {
+            HirExprKind::Variable { place } => {
+                self.validate_place(place, "expression refers to an unknown variable");
             }
-            for argument in arguments {
-                match argument {
-                    HirCallArgument::Value(argument) => validate_expression(
-                        argument,
-                        functions,
-                        variables,
-                        function_name,
-                        instruction,
-                        diagnostics,
-                    ),
-                    HirCallArgument::Place(place) => {
-                        if !variables.contains(&place.variable) {
-                            diagnostics.push(ValidationDiagnostic::instruction(
-                                ValidationCode::MissingReference,
-                                function_name,
-                                instruction,
-                                "call place refers to an unknown variable",
-                            ));
-                        }
-                        for index in &place.indices {
-                            validate_expression(
-                                index,
-                                functions,
-                                variables,
-                                function_name,
-                                instruction,
-                                diagnostics,
-                            );
-                        }
+            HirExprKind::Call { target, arguments } => {
+                match target {
+                    CallTarget::User { function } if !self.functions.contains(function) => {
+                        self.diagnostic(
+                            ValidationCode::MissingReference,
+                            "call refers to an unknown function",
+                        );
                     }
-                    HirCallArgument::Omitted => {}
+                    CallTarget::Unresolved { name } => self.diagnostic(
+                        ValidationCode::MissingReference,
+                        format!("unresolved function {name}"),
+                    ),
+                    _ => {}
+                }
+                for argument in arguments {
+                    match argument {
+                        HirCallArgument::Value(argument) => self.validate(argument),
+                        HirCallArgument::Place(place) => {
+                            self.validate_place(place, "call place refers to an unknown variable");
+                        }
+                        HirCallArgument::Omitted => {}
+                    }
                 }
             }
-        }
-        HirExprKind::Unary { operand, .. } | HirExprKind::Postfix { operand, .. } => {
-            validate_expression(
-                operand,
-                functions,
-                variables,
-                function_name,
-                instruction,
-                diagnostics,
-            );
-        }
-        HirExprKind::Binary { left, right, .. } => {
-            validate_expression(
-                left,
-                functions,
-                variables,
-                function_name,
-                instruction,
-                diagnostics,
-            );
-            validate_expression(
-                right,
-                functions,
-                variables,
-                function_name,
-                instruction,
-                diagnostics,
-            );
-        }
-        HirExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            validate_expression(
+            HirExprKind::Unary { operand, .. } | HirExprKind::Postfix { operand, .. } => {
+                self.validate(operand);
+            }
+            HirExprKind::Binary { left, right, .. } => {
+                self.validate(left);
+                self.validate(right);
+            }
+            HirExprKind::Ternary {
                 condition,
-                functions,
-                variables,
-                function_name,
-                instruction,
-                diagnostics,
-            );
-            validate_expression(
                 then_expr,
-                functions,
-                variables,
-                function_name,
-                instruction,
-                diagnostics,
-            );
-            validate_expression(
                 else_expr,
-                functions,
-                variables,
-                function_name,
-                instruction,
-                diagnostics,
-            );
+            } => {
+                self.validate(condition);
+                self.validate(then_expr);
+                self.validate(else_expr);
+            }
+            HirExprKind::Integer { .. }
+            | HirExprKind::String { .. }
+            | HirExprKind::Formatted { .. }
+            | HirExprKind::Error => {}
         }
-        HirExprKind::Integer { .. }
-        | HirExprKind::String { .. }
-        | HirExprKind::Formatted { .. }
-        | HirExprKind::Error => {}
+    }
+
+    fn validate_place(&mut self, place: &HirPlace, missing_message: &'static str) {
+        if !self.variables.contains(&place.variable) {
+            self.diagnostic(ValidationCode::MissingReference, missing_message);
+        }
+        for index in &place.indices {
+            self.validate(index);
+        }
+    }
+
+    fn diagnostic(&mut self, code: ValidationCode, message: impl Into<String>) {
+        self.diagnostics.push(ValidationDiagnostic::instruction(
+            code,
+            self.function_name,
+            self.instruction,
+            message,
+        ));
     }
 }

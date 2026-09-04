@@ -1,11 +1,17 @@
 use std::collections::BTreeMap;
 
 use erabasic_bytecode::{
-    BytecodeFunction, BytecodeStorage, BytecodeType, ImportKind, Opcode,
-    RuntimeStagedAuthorization, SymbolKey, opcode,
+    BytecodeArtifact, BytecodeFunction, BytecodeGlobal, BytecodeStorage, BytecodeType, ImportKind,
+    Opcode, RuntimeImport, RuntimeStagedAuthorization, SymbolKey, opcode,
 };
 
 use crate::ValidationCode;
+
+type InstructionError = (ValidationCode, String);
+
+fn invalid(message: impl Into<String>) -> InstructionError {
+    (ValidationCode::InvalidOperand, message.into())
+}
 
 mod bit_calls;
 mod existvar;
@@ -30,50 +36,73 @@ impl From<BytecodeType> for StackValue {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+pub(super) struct Context<'a> {
+    globals: BTreeMap<SymbolKey, &'a BytecodeGlobal>,
+    functions: BTreeMap<SymbolKey, &'a BytecodeFunction>,
+    native: BTreeMap<SymbolKey, &'a RuntimeImport>,
+    host: BTreeMap<SymbolKey, &'a RuntimeImport>,
+    staged: BTreeMap<SymbolKey, &'a RuntimeStagedAuthorization>,
+    trusted_staged: &'a BTreeMap<SymbolKey, RuntimeStagedAuthorization>,
+}
+
+impl<'a> Context<'a> {
+    pub(super) fn new(
+        artifact: &'a BytecodeArtifact,
+        trusted_staged: &'a BTreeMap<SymbolKey, RuntimeStagedAuthorization>,
+    ) -> Self {
+        Self {
+            globals: artifact
+                .globals
+                .iter()
+                .map(|global| (global.key, global))
+                .collect(),
+            functions: artifact
+                .functions
+                .iter()
+                .map(|function| (function.key, function))
+                .collect(),
+            native: artifact
+                .native_imports
+                .iter()
+                .map(|import| (import.import.key, &import.import))
+                .collect(),
+            host: artifact
+                .host_imports
+                .iter()
+                .map(|import| (import.import.key, &import.import))
+                .collect(),
+            staged: artifact
+                .runtime_staged_authorizations
+                .iter()
+                .map(|authorization| (authorization.key, authorization))
+                .collect(),
+            trusted_staged,
+        }
+    }
+}
+
 pub(super) fn apply_instruction(
     function: &BytecodeFunction,
     index: usize,
     stack: &mut Vec<StackValue>,
-    globals: &BTreeMap<SymbolKey, &erabasic_bytecode::BytecodeGlobal>,
-    functions: &BTreeMap<SymbolKey, &BytecodeFunction>,
-    native: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
-    host: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
-    staged: &BTreeMap<SymbolKey, &RuntimeStagedAuthorization>,
-    trusted_staged: &BTreeMap<SymbolKey, RuntimeStagedAuthorization>,
+    context: &Context<'_>,
     probes: &ProbeIndex,
-) -> Result<Vec<usize>, (ValidationCode, String)> {
-    let successors = apply_instruction_inner(
-        function,
-        index,
-        stack,
-        globals,
-        functions,
-        native,
-        host,
-        staged,
-        trusted_staged,
-        probes,
-    )?;
+) -> Result<Vec<usize>, InstructionError> {
+    let successors = apply_instruction_inner(function, index, stack, context, probes)?;
     for target in &successors {
         existvar::validate_edge(function, index, *target)?;
     }
     Ok(successors)
 }
 
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[allow(clippy::too_many_lines)]
 fn apply_instruction_inner(
     function: &BytecodeFunction,
     index: usize,
     stack: &mut Vec<StackValue>,
-    globals: &BTreeMap<SymbolKey, &erabasic_bytecode::BytecodeGlobal>,
-    functions: &BTreeMap<SymbolKey, &BytecodeFunction>,
-    native: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
-    host: &BTreeMap<SymbolKey, &erabasic_bytecode::RuntimeImport>,
-    staged: &BTreeMap<SymbolKey, &RuntimeStagedAuthorization>,
-    trusted_staged: &BTreeMap<SymbolKey, RuntimeStagedAuthorization>,
+    context: &Context<'_>,
     probes: &ProbeIndex,
-) -> Result<Vec<usize>, (ValidationCode, String)> {
+) -> Result<Vec<usize>, InstructionError> {
     let instruction = &function.code[index];
     let opcode_value = Opcode::try_from(instruction.opcode).map_err(|unknown| {
         (
@@ -89,7 +118,7 @@ fn apply_instruction_inner(
     };
     match opcode_value {
         Opcode::BeginMapCall | Opcode::FinishMapCall | Opcode::AbandonMapCall => {
-            map_calls::apply(function, index, opcode_value, stack, native)?;
+            map_calls::apply(function, index, opcode_value, stack, &context.native)?;
         }
         Opcode::BeginBitCall | Opcode::FinishBitCall => {
             bit_calls::apply(
@@ -97,9 +126,9 @@ fn apply_instruction_inner(
                 index,
                 opcode_value,
                 stack,
-                globals,
-                staged,
-                trusted_staged,
+                &context.globals,
+                &context.staged,
+                context.trusted_staged,
             )?;
         }
         Opcode::Nop | Opcode::Yield | Opcode::ForBreak | Opcode::SelectEnd => {
@@ -125,7 +154,7 @@ fn apply_instruction_inner(
             expect_payload(&instruction.payload, 19)?;
             let key = read_key(&instruction.payload)?;
             let indices = read_u16(&instruction.payload, 16)? as usize;
-            let global = globals.get(&key).copied().ok_or((
+            let global = context.globals.get(&key).copied().ok_or((
                 ValidationCode::MissingReference,
                 "variable operand does not resolve".into(),
             ))?;
@@ -336,18 +365,7 @@ fn apply_instruction_inner(
             stack.push(BytecodeType::Integer.into());
         }
         Opcode::BeginMatchCall | Opcode::MatchCallRange | Opcode::FinishMatchCall => {
-            return matching::apply(
-                function,
-                index,
-                opcode_value,
-                stack,
-                &matching::Context {
-                    globals,
-                    functions,
-                    staged,
-                    trusted_staged,
-                },
-            );
+            return matching::apply(function, index, opcode_value, stack, context);
         }
         Opcode::ProbeVariableName | Opcode::BeginExistVarProbe | Opcode::FinishExistVarProbe => {
             return existvar::apply(function, index, opcode_value, stack, probes);
@@ -360,7 +378,7 @@ fn apply_instruction_inner(
         | Opcode::AdvanceUserArgument
         | Opcode::AbandonUserCall
         | Opcode::InvokeCallText => {
-            return methods::apply(function, index, opcode_value, stack, globals);
+            return methods::apply(function, index, opcode_value, stack, &context.globals);
         }
         Opcode::JumpDynamicLabel => {
             expect_payload(&instruction.payload, 4)?;
@@ -395,7 +413,7 @@ fn apply_instruction_inner(
             ))?;
             let (parameters, result) = match (opcode_value, import.kind) {
                 (Opcode::Call, ImportKind::Function) => {
-                    let target = functions.get(&import.key).ok_or((
+                    let target = context.functions.get(&import.key).ok_or((
                         ValidationCode::MissingReference,
                         "called function does not resolve".into(),
                     ))?;
@@ -419,14 +437,14 @@ fn apply_instruction_inner(
                     )
                 }
                 (Opcode::CallNative, ImportKind::Native) => {
-                    let target = native.get(&import.key).ok_or((
+                    let target = context.native.get(&import.key).ok_or((
                         ValidationCode::MissingReference,
                         "native import does not resolve".into(),
                     ))?;
                     (target.parameters.clone(), target.result)
                 }
                 (Opcode::CallHost, ImportKind::Host) => {
-                    let target = host.get(&import.key).ok_or((
+                    let target = context.host.get(&import.key).ok_or((
                         ValidationCode::MissingReference,
                         "host import does not resolve".into(),
                     ))?;
@@ -532,7 +550,7 @@ fn apply_instruction_inner(
     Ok(next())
 }
 
-fn expect_payload(payload: &[u8], length: usize) -> Result<(), (ValidationCode, String)> {
+fn expect_payload(payload: &[u8], length: usize) -> Result<(), InstructionError> {
     if payload.len() == length {
         Ok(())
     } else {
@@ -543,7 +561,7 @@ fn expect_payload(payload: &[u8], length: usize) -> Result<(), (ValidationCode, 
     }
 }
 
-fn validate_host_call_payload(payload: &[u8]) -> Result<Vec<usize>, (ValidationCode, String)> {
+fn validate_host_call_payload(payload: &[u8]) -> Result<Vec<usize>, InstructionError> {
     if payload.len() == 7 {
         return Ok(Vec::new());
     }
@@ -585,7 +603,7 @@ fn validate_host_call_payload(payload: &[u8]) -> Result<Vec<usize>, (ValidationC
     Ok(omitted)
 }
 
-fn read_u16(payload: &[u8], offset: usize) -> Result<u16, (ValidationCode, String)> {
+fn read_u16(payload: &[u8], offset: usize) -> Result<u16, InstructionError> {
     Ok(u16::from_le_bytes(
         payload
             .get(offset..offset + 2)
@@ -598,7 +616,7 @@ fn read_u16(payload: &[u8], offset: usize) -> Result<u16, (ValidationCode, Strin
     ))
 }
 
-fn read_u32(payload: &[u8], offset: usize) -> Result<u32, (ValidationCode, String)> {
+fn read_u32(payload: &[u8], offset: usize) -> Result<u32, InstructionError> {
     Ok(u32::from_le_bytes(
         payload
             .get(offset..offset + 4)
@@ -611,7 +629,7 @@ fn read_u32(payload: &[u8], offset: usize) -> Result<u32, (ValidationCode, Strin
     ))
 }
 
-fn read_key(payload: &[u8]) -> Result<SymbolKey, (ValidationCode, String)> {
+fn read_key(payload: &[u8]) -> Result<SymbolKey, InstructionError> {
     let mut key = [0; 16];
     key.copy_from_slice(payload.get(..16).ok_or((
         ValidationCode::InvalidOperand,
@@ -620,10 +638,7 @@ fn read_key(payload: &[u8]) -> Result<SymbolKey, (ValidationCode, String)> {
     Ok(SymbolKey(key))
 }
 
-fn pop_type(
-    stack: &mut Vec<StackValue>,
-    expected: BytecodeType,
-) -> Result<(), (ValidationCode, String)> {
+fn pop_type(stack: &mut Vec<StackValue>, expected: BytecodeType) -> Result<(), InstructionError> {
     let actual = pop_value(stack, "instruction")?;
     if actual == expected {
         Ok(())
@@ -638,7 +653,7 @@ fn pop_type(
 fn pop_value(
     stack: &mut Vec<StackValue>,
     operation: &str,
-) -> Result<BytecodeType, (ValidationCode, String)> {
+) -> Result<BytecodeType, InstructionError> {
     match stack.pop() {
         Some(StackValue::Value(value)) => Ok(value),
         Some(value) => Err((

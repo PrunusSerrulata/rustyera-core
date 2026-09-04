@@ -7,10 +7,8 @@ use erabasic_bytecode::{
     SymbolKey, UserArgumentAdvance, UserArgumentSpec, UserCallSpec,
 };
 
-use super::{StackValue, expect_payload, pop_type, read_u16, read_u32};
+use super::{InstructionError, StackValue, expect_payload, invalid, pop_type, read_u16, read_u32};
 use crate::ValidationCode;
-
-type InstructionError = (ValidationCode, String);
 
 pub(super) fn apply(
     function: &BytecodeFunction,
@@ -103,7 +101,7 @@ pub(super) fn apply(
             Ok(vec![index + 1])
         }
         Opcode::InvokeCallText => {
-            let spec = CallTextSpec::decode(payload).map_err(operand_error)?;
+            let spec = CallTextSpec::decode(payload).map_err(invalid)?;
             pop_type(stack, BytecodeType::String)?;
             // CALLSTR is a statement. A jump's blank source still falls through.
             if !stack.is_empty() {
@@ -133,7 +131,7 @@ fn advance_argument(
     let resolve = read_u32(payload, 0)?;
     let slot = read_u16(payload, 4)?;
     let spec = referenced_spec(function, index, resolve, globals)?;
-    let reason = UserArgumentAdvance::decode(payload[6]).map_err(operand_error)?;
+    let reason = UserArgumentAdvance::decode(payload[6]).map_err(invalid)?;
     let argument = spec.arguments.get(usize::from(slot));
     let valid = match reason {
         UserArgumentAdvance::Omitted => matches!(argument, Some(UserArgumentSpec::Omitted)),
@@ -188,7 +186,7 @@ fn decode_spec(
     payload: &[u8],
     globals: &BTreeMap<SymbolKey, &BytecodeGlobal>,
 ) -> Result<UserCallSpec, InstructionError> {
-    let spec = UserCallSpec::decode(payload).map_err(operand_error)?;
+    let spec = UserCallSpec::decode(payload).map_err(invalid)?;
     if spec.allow_missing
         && !function
             .code
@@ -275,12 +273,4 @@ fn advance_token(
     *stack.last_mut().expect("token was checked") =
         StackValue::UserCallToken { resolve, next_slot };
     Ok(())
-}
-
-fn operand_error(message: String) -> InstructionError {
-    (ValidationCode::InvalidOperand, message)
-}
-
-fn invalid(message: &str) -> InstructionError {
-    operand_error(message.into())
 }

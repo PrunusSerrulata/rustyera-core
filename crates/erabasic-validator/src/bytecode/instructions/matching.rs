@@ -1,30 +1,17 @@
 //! MATCH phases retain an opaque token below ordinary, potentially waiting, expressions.
-use super::{StackValue, expect_payload, pop_type, read_u32};
-use crate::ValidationCode;
+use super::{InstructionError, StackValue, expect_payload, invalid, pop_type, read_u32};
 use erabasic_bytecode::{
-    BytecodeFunction, BytecodeGlobal, BytecodeType, MatchCallSpec, MatchInput, Opcode,
-    RuntimeExpressionShape, RuntimeStagedAuthorization, RuntimeStagedKind, SymbolKey,
+    BytecodeFunction, BytecodeType, MatchCallSpec, MatchInput, Opcode, RuntimeExpressionShape,
+    RuntimeStagedKind,
 };
-use std::collections::BTreeMap;
-type Error = (ValidationCode, String);
-fn invalid(message: impl Into<String>) -> Error {
-    (ValidationCode::InvalidOperand, message.into())
-}
-
-pub(super) struct Context<'a> {
-    pub globals: &'a BTreeMap<SymbolKey, &'a BytecodeGlobal>,
-    pub functions: &'a BTreeMap<SymbolKey, &'a BytecodeFunction>,
-    pub staged: &'a BTreeMap<SymbolKey, &'a RuntimeStagedAuthorization>,
-    pub trusted_staged: &'a BTreeMap<SymbolKey, RuntimeStagedAuthorization>,
-}
 
 fn validate_spec(
     function: &BytecodeFunction,
     index: usize,
     opcode: Opcode,
     begin: u32,
-    context: &Context<'_>,
-) -> Result<MatchCallSpec, Error> {
+    context: &super::Context<'_>,
+) -> Result<MatchCallSpec, InstructionError> {
     let begin_index = usize::try_from(begin)
         .map_err(|_| invalid("MATCH capture offset exceeds the host index range"))?;
     let opening = function
@@ -80,7 +67,7 @@ fn validate_spec(
         None => None,
     };
     super::super::staged_authorization::require(
-        context.staged,
+        &context.staged,
         context.trusted_staged,
         name,
         kind,
@@ -119,8 +106,8 @@ pub(super) fn apply(
     index: usize,
     opcode: Opcode,
     stack: &mut Vec<StackValue>,
-    context: &Context<'_>,
-) -> Result<Vec<usize>, Error> {
+    context: &super::Context<'_>,
+) -> Result<Vec<usize>, InstructionError> {
     let payload = &function.code[index].payload;
     let begin = if opcode == Opcode::BeginMatchCall {
         u32::try_from(index)
