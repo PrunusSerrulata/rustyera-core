@@ -24,8 +24,15 @@ fn in_ranges(value: u32, ranges: &[(u32, u32)]) -> bool {
 }
 
 fn grapheme_class(value: u32) -> u8 {
-    let position = data::GCB.partition_point(|(_, end, _)| *end < value);
-    data::GCB
+    let ranges = if value < 0xbfb1 {
+        data::GCB_LOW
+    } else if value < 0x101fd {
+        data::GCB_HIGH_BMP
+    } else {
+        data::GCB_SUPPLEMENTARY
+    };
+    let position = ranges.partition_point(|(_, end, _)| *end < value);
+    ranges
         .get(position)
         .filter(|(start, _, _)| *start <= value)
         .map_or(0, |(_, _, class)| *class)

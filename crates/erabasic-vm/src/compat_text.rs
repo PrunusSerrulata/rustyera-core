@@ -221,14 +221,16 @@ pub(crate) fn map_entry_at_utf16_index(
 /// A complete, sorted sparse BMP simple-uppercase table; omitted entries are identity.
 /// This is immutable product data, never an input supplied by scripts or frontends.
 pub(crate) struct OrdinalCasing {
-    bmp_simple_upper: &'static [(u16, u16)],
+    bmp_simple_upper_low: &'static [(u16, u16)],
+    bmp_simple_upper_high: &'static [(u16, u16)],
 }
 
 impl OrdinalCasing {
     /// Fixed .NET 8 ICU-mode casing, bound to Unicode 15 / ICU72 input.
     pub(crate) const fn fixed_dotnet8_icu72() -> Self {
         Self {
-            bmp_simple_upper: data::ICU72_BMP_SIMPLE_UPPER,
+            bmp_simple_upper_low: data::ICU72_BMP_SIMPLE_UPPER_LOW,
+            bmp_simple_upper_high: data::ICU72_BMP_SIMPLE_UPPER_HIGH,
         }
     }
 
@@ -274,8 +276,13 @@ impl OrdinalCasing {
         {
             return scalar;
         }
-        self.bmp_simple_upper
+        let table = if unit < 0x214e {
+            self.bmp_simple_upper_low
+        } else {
+            self.bmp_simple_upper_high
+        };
+        table
             .binary_search_by_key(&unit, |pair| pair.0)
-            .map_or(scalar, |index| u32::from(self.bmp_simple_upper[index].1))
+            .map_or(scalar, |index| u32::from(table[index].1))
     }
 }

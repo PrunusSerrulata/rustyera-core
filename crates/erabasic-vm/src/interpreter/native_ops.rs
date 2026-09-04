@@ -10,10 +10,14 @@ use super::{
 };
 use crate::{FindElementCacheKey, FindElementNeedle};
 
+mod array_queries;
 mod arrays;
+mod variable_access;
 mod variables;
 
+pub(super) use array_queries::*;
 pub(super) use arrays::*;
+pub(super) use variable_access::*;
 pub(super) use variables::*;
 
 pub(super) fn script_native_error(kind: crate::ScriptFaultKind, message: String) -> VmError {
