@@ -1208,6 +1208,56 @@ Web 发布 pin 未变，core worktree 后续 `02f8cf76` 仅含文档，不改变
 不影响已由组件测试、完整历史 DOM、真实 Tauri 几何及两种原生浏览器启动/兼容断面覆盖的
 共享图像投影结论。
 
+### 2026-09-05 蛇版 Web 动态地图 Runtime 等待回归修复验收
+
+本次是既有动态地图修复后的 Web 定向回归批次。用户报告蛇版 TW 打开后持续显示“等待
+Runtime…”且无法交互；同时要求继续验证动态地图单帧成本，并保证原版 eraTW 不回归。
+没有修改 core、协议、缓存身份、游戏脚本或 TUI；Web/WASM 继续使用 core pin
+`23c01c5b534b56b4f35c1a8865816cd99c070fe8`，WASM revision
+`1ae98c68183e0aee2f280c0fb1c40fc2117bd134927e3a79f2da5cb90cda3e5a`。
+
+- 根因是 Web 在每次 `advance_time` 发送前便开始 NF 展示事务。Runtime 合法地把尚未到其
+  逻辑 deadline 的采样视为无操作，不发送 `wait_changed` 或展示事件，前端事务因而永久
+  保持 staged，`canInteract=false`。修复后仍按 16 ms 调度采样，但只发送时间；仅由 Runtime
+  权威的 wait close / `set_input_wait:null` 开始原子事务。Runtime 与前端时钟原点不同及
+  超过 JavaScript 安全整数的 deadline 均有回归覆盖。
+- 游戏 `emuera.config` 的 `FPS:3` 仍由脚本换算成约 333 ms 的 `TINPUTSNF` deadline；前端
+  16 ms 是检查 Runtime deadline 的调度粒度，不是游戏画面 60 fps。NF 的 16–250 ms 恢复窗
+  只在已发布帧与下一次推进间保留交互机会，不替代 Runtime deadline。
+- 性能定位区分出两项测试开销：`sample_queries` 曾逐次复制多 MiB service ledger；冷编译
+  后远程测试文件系统还会在主线程 base64 写入 16 MiB 缓存块。轻量快照和当前身份精确缓存
+  排除两者后，蛇版地图两轮稳态采样为 11.927–35.031 ms，视口和按钮几何稳定；没有发现
+  Runtime/DOM 单帧超过 1 秒的产品性能缺陷。原子探针改为从权威交互锁定边界到目标历史
+  revision 检查真实可见历史，不再把点击前动画、wait-only revision 或下一动画周期误报为撕裂。
+- Web 提交：产品修复及回归
+  `c4023e546a5d8fe523a0d1c8db4dde2eb0a999cf`；动画测量/原子探针与场景修正
+  `3ce2c09ddb5945cd6f02b5d2ba7298d56ad76390`；Vitest 工作目录与策略 fixture 修正
+  `2b734a8bc89e01c507aabfc0bf74eeb82279323f`。根待发布日志为
+  `69dad15290e02258068f80c699752fa232e6b36b`。
+- 唯一重构审查在首条测试前完成，要求移除跨时钟域 deadline 比较和发送前 staging，改以
+  Runtime close 事件为事务边界；必选与可选意见均已落实。首次完整 Vitest 为
+  **112 files / 1590 passed / 5 failed**，失败均为测试文件的跨文件贪婪正则或 jsdom
+  `import.meta.url` 文件路径假设；按规则未重跑完整套件。修复后定向
+  `runtimeStore` **214/214**、Tauri 性能策略 **11/11**、Web runner 策略 **39/39**，typecheck、
+  定向 ESLint、Prettier 和 Web build 均 exit 0。
+- Chromium 冷启动可交互通过：
+  `.rustyera/test-runs/snake-tw-open-interactive-20260904164814923-3564/trace.ndjson`。
+  精确缓存蛇版存档→搬家→地图刷新→hover→真实 1997 点击→恢复输入通过：
+  `.rustyera/test-runs/snake-tw-dynamic-map-20260904171558196-5743/trace.ndjson`；最终
+  `waiting_input`、`canInteract=true`、`fault=null`。原版 eraTW 动态地图和 2000 点击通过：
+  `.rustyera/test-runs/eratw-dynamic-map-20260904171810420-5896/trace.ndjson`。
+- Firefox 155 完整兼容断面通过：
+  `.rustyera/test-runs/browser-compat-firefox-1788542369293/snapshots.ndjson`。Safari 26.6.2
+  首次在 Runtime 无 fault 时发生 WebDriver `invalid session id`/`ECONNREFUSED` 基础设施失败，
+  保留 `.rustyera/test-runs/browser-compat-safari-1788542426857/`；同断面定向重试通过于
+  `.rustyera/test-runs/browser-compat-safari-1788542468756/snapshots.ndjson`。
+- 真实蛇版动态地图以浏览器 Web 为验收重点；TUI 当前缺少运行该游戏所需能力，未伪装动态
+  验收，也未发现同类前端 staging 实现。未执行 Tauri 蛇版整图路径；共享 TypeScript 单测与
+  Web/WASM 浏览器断面通过。用户既有 Web `Cargo.lock`、core 批次 5 计划修改均未纳入提交。
+  测试材料和 142,892,702-byte 精确缓存
+  `/private/tmp/rustyera-snake-map-cache-current.reracache`（SHA-256
+  `a24f4db1e89a309f71e16b4b36049bbacd05507d901bc429eae20517e37a08e6`）按循环任务规则保留。
+
 <a id="batch-6"></a>
 
 ## 批次 6：完整蛇版语言
