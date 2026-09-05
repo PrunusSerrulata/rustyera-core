@@ -1,8 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 
-use regex::Regex;
+use fancy_regex::{CompileError, Error, ParseError, Regex, RegexBuilder, RuntimeError};
 
 const MAXIMUM_CACHED_PATTERNS: usize = 128;
+const BACKTRACK_LIMIT: usize = 1_000_000;
 
 #[derive(Clone, Default)]
 pub(crate) struct RegexCache {
@@ -30,171 +31,92 @@ impl RegexCache {
     }
 }
 
-/// Compile the deliberately small intersection between .NET and Rust regex syntax.
+/// Compile the supported intersection between .NET and Rust regex syntax.
 ///
-/// The pinned runtime uses `System.Text.RegularExpressions`. Accepting syntax that Rust's
-/// engine interprets differently would be worse than a stable runtime error, so constructs
-/// with backtracking-dependent semantics are rejected before compilation. Named captures use
-/// the only common spelling that needs a mechanical translation.
+/// `fancy-regex` supplies the four zero-width look-around forms used by the reference runtime.
+/// An explicit backtracking limit keeps hostile or accidental exponential expressions bounded.
 pub(crate) fn compile(pattern: &str) -> Result<Regex, crate::ExecutionFailure> {
-    reject_unsupported(pattern).map_err(script_regex_error)?;
-    let translated = translate_named_captures(pattern).map_err(script_regex_error)?;
-    Regex::new(&translated).map_err(|error| {
+    build(pattern).map_err(|error| {
         let message = format!("unsupported or invalid regex: {error}");
-        match error {
-            regex::Error::CompiledTooBig(_) => {
-                crate::ExecutionFailure::new(crate::VmFaultCode::ResourceLimit, message)
-            }
-            _ => script_regex_error(message),
-        }
+        vm_failure(&error, message)
     })
 }
 
-fn script_regex_error(message: String) -> crate::ExecutionFailure {
-    crate::ExecutionFailure::script(
-        crate::ScriptFaultKind::Parse,
-        crate::VmFaultCode::TypeMismatch,
-        message,
-    )
+pub(crate) fn build(pattern: &str) -> Result<Regex, Error> {
+    reject_unsupported(pattern)?;
+    RegexBuilder::new(pattern)
+        .backtrack_limit(BACKTRACK_LIMIT)
+        .build()
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) struct PositiveBoundaryCaptures {
-    pub(crate) captures_len: usize,
-    pub(crate) matches: Vec<Vec<String>>,
+#[derive(Clone, Copy)]
+enum ErrorClass {
+    Script,
+    ResourceLimit,
+    InternalInvariant,
 }
 
-/// Match the portable leading-positive-lookbehind/trailing-positive-lookahead shape.
-///
-/// Rust's linear regex engine deliberately omits lookaround. Era games commonly use
-/// `(?<=prefix)body(?=suffix)` only to exclude fixed delimiters from `REGEXPMATCH`
-/// output. Splitting those boundaries keeps matching linear and, unlike consuming a
-/// translated wrapper, lets one match's suffix serve as the next match's prefix.
-pub(crate) fn capture_positive_boundaries(
-    pattern: &str,
-    input: &str,
-) -> Result<Option<PositiveBoundaryCaptures>, crate::ExecutionFailure> {
-    let Some((prefix, body, suffix)) = split_positive_boundaries(pattern) else {
-        return Ok(None);
+fn error_class(error: &Error) -> ErrorClass {
+    match error {
+        Error::ParseError(_, _) => ErrorClass::Script,
+        Error::CompileError(error) => match error.as_ref() {
+            CompileError::InnerError(error) if error.size_limit().is_some() => {
+                ErrorClass::ResourceLimit
+            }
+            CompileError::InnerError(error) if error.syntax_error().is_some() => ErrorClass::Script,
+            CompileError::LookBehindNotConst
+            | CompileError::VariableLookBehindRequiresFeature
+            | CompileError::InvalidGroupName
+            | CompileError::InvalidGroupNameBackref(_)
+            | CompileError::InvalidBackref(_)
+            | CompileError::NamedBackrefOnly
+            | CompileError::FeatureNotYetSupported(_)
+            | CompileError::SubroutineCallTargetNotFound(_, _)
+            | CompileError::LeftRecursiveSubroutineCall(_)
+            | CompileError::NeverEndingRecursion => ErrorClass::Script,
+            CompileError::InnerError(_)
+            | CompileError::DfaBuildError(_, _)
+            | CompileError::UnexpectedGeneralError(_)
+            | CompileError::PatternCanNeverMatch
+            | CompileError::UnresolvedAstNode(_, _)
+            | _ => ErrorClass::InternalInvariant,
+        },
+        Error::RuntimeError(RuntimeError::StackOverflow | RuntimeError::BacktrackLimitExceeded) => {
+            ErrorClass::ResourceLimit
+        }
+        Error::RuntimeError(_) | _ => ErrorClass::InternalInvariant,
+    }
+}
+
+fn vm_failure(error: &Error, message: String) -> crate::ExecutionFailure {
+    let (category, code) = match error_class(error) {
+        ErrorClass::Script => (
+            crate::FaultCategory::Script(crate::ScriptFaultKind::Parse),
+            crate::VmFaultCode::TypeMismatch,
+        ),
+        ErrorClass::ResourceLimit => (
+            crate::FaultCategory::ResourceLimit,
+            crate::VmFaultCode::ResourceLimit,
+        ),
+        ErrorClass::InternalInvariant => (
+            crate::FaultCategory::InternalInvariant,
+            crate::VmFaultCode::Native,
+        ),
     };
-    if contains_capturing_group(prefix) || contains_capturing_group(suffix) {
-        return Err(script_regex_error(
-            "captures inside REGEXPMATCH positive boundaries are not supported by the portable subset".into(),
-        ));
-    }
-    let prefix = compile(prefix)?;
-    let tail = compile(&format!("^({body})(?:{suffix})"))?;
-    let captures_len = tail.captures_len().saturating_sub(1);
-    let mut matches = Vec::new();
-    let mut search = 0;
-    while search <= input.len() {
-        let Some(boundary) = prefix.find_at(input, search) else {
-            break;
-        };
-        let body_start = boundary.end();
-        if let Some(captures) = tail.captures(&input[body_start..]) {
-            let body_match = captures.get(1).expect("the body wrapper always captures");
-            matches.push(
-                (1..tail.captures_len())
-                    .map(|index| {
-                        captures
-                            .get(index)
-                            .map_or_else(String::new, |value| value.as_str().to_owned())
-                    })
-                    .collect(),
-            );
-            let next = body_start.saturating_add(body_match.end());
-            if next > search {
-                search = next;
-            } else if let Some(next) = next_char_boundary(input, search) {
-                search = next;
-            } else {
-                break;
-            }
-        } else if let Some(next) = next_char_boundary(input, boundary.start()) {
-            search = next;
-        } else {
-            break;
-        }
-    }
-    Ok(Some(PositiveBoundaryCaptures {
-        captures_len,
-        matches,
-    }))
+    crate::ExecutionFailure::classified(category, code, message)
 }
 
-fn split_positive_boundaries(pattern: &str) -> Option<(&str, &str, &str)> {
-    pattern.strip_prefix("(?<=")?;
-    let lookbehind_end = group_end(pattern, 0)?;
-    let remainder = &pattern[lookbehind_end + 1..];
-    let relative_lookahead = remainder.rfind("(?=")?;
-    let lookahead = lookbehind_end + 1 + relative_lookahead;
-    if is_escaped(pattern, lookahead) || group_end(pattern, lookahead)? + 1 != pattern.len() {
-        return None;
-    }
-    Some((
-        &pattern[4..lookbehind_end],
-        &pattern[lookbehind_end + 1..lookahead],
-        &pattern[lookahead + 3..pattern.len() - 1],
-    ))
+pub(crate) fn core_failure(error: &Error, message: String) -> crate::ExecutionFailure {
+    let category = match error_class(error) {
+        ErrorClass::Script => crate::FaultCategory::Script(crate::ScriptFaultKind::Parse),
+        ErrorClass::ResourceLimit => crate::FaultCategory::ResourceLimit,
+        ErrorClass::InternalInvariant => crate::FaultCategory::InternalInvariant,
+    };
+    crate::ExecutionFailure::classified(category, crate::VmFaultCode::Native, message)
 }
 
-fn group_end(pattern: &str, start: usize) -> Option<usize> {
-    let bytes = pattern.as_bytes();
-    (bytes.get(start) == Some(&b'(')).then_some(())?;
-    let mut depth = 1usize;
-    let mut index = start + 1;
-    let mut in_class = false;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'\\' => index = index.saturating_add(2),
-            b'[' => {
-                in_class = true;
-                index += 1;
-            }
-            b']' => {
-                in_class = false;
-                index += 1;
-            }
-            b'(' if !in_class => {
-                depth += 1;
-                index += 1;
-            }
-            b')' if !in_class => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(index);
-                }
-                index += 1;
-            }
-            _ => index += 1,
-        }
-    }
-    None
-}
-
-fn contains_capturing_group(pattern: &str) -> bool {
-    pattern
-        .match_indices('(')
-        .any(|(index, _)| !is_escaped(pattern, index) && !pattern[index..].starts_with("(?:"))
-}
-
-fn is_escaped(pattern: &str, index: usize) -> bool {
-    pattern.as_bytes()[..index]
-        .iter()
-        .rev()
-        .take_while(|value| **value == b'\\')
-        .count()
-        % 2
-        == 1
-}
-
-fn next_char_boundary(input: &str, index: usize) -> Option<usize> {
-    input
-        .get(index..)?
-        .chars()
-        .next()
-        .map(|character| index + character.len_utf8())
+pub(crate) fn runtime_error(error: &Error) -> crate::ExecutionFailure {
+    vm_failure(error, format!("regex execution failed: {error}"))
 }
 
 /// Match the portable subset `(<one character atom>)\1{N}`.
@@ -294,7 +216,7 @@ fn single_character(source: &str) -> Option<char> {
     (character.len_utf16() == 1 && characters.next().is_none()).then_some(character)
 }
 
-fn reject_unsupported(pattern: &str) -> Result<(), String> {
+fn reject_unsupported(pattern: &str) -> Result<(), Error> {
     let bytes = pattern.as_bytes();
     let mut index = 0;
     let mut in_class = false;
@@ -305,9 +227,9 @@ fn reject_unsupported(pattern: &str) -> Result<(), String> {
                 if escaped.is_some_and(|value| value.is_ascii_digit() && value != b'0')
                     || matches!(escaped, Some(b'k' | b'K'))
                 {
-                    return Err(
-                        ".NET backreferences are not supported by the common regex subset".into(),
-                    );
+                    return Err(unsupported_error(
+                        ".NET backreferences are not supported by the common regex subset",
+                    ));
                 }
                 index = index.saturating_add(2);
                 continue;
@@ -316,15 +238,13 @@ fn reject_unsupported(pattern: &str) -> Result<(), String> {
             b']' => in_class = false,
             b'(' if !in_class && bytes.get(index + 1) == Some(&b'?') => {
                 let suffix = &pattern[index..];
-                if suffix.starts_with("(?=")
-                    || suffix.starts_with("(?!")
-                    || suffix.starts_with("(?<=")
-                    || suffix.starts_with("(?<!")
-                    || suffix.starts_with("(?>")
+                if suffix.starts_with("(?>")
                     || suffix.starts_with("(?(")
                     || suffix.starts_with("(?'")
                 {
-                    return Err(".NET lookaround, atomic, conditional, and quoted-group constructs are not supported by the common regex subset".into());
+                    return Err(unsupported_error(
+                        ".NET atomic, conditional, and quoted-group constructs are not supported by the common regex subset",
+                    ));
                 }
             }
             _ => {}
@@ -334,55 +254,8 @@ fn reject_unsupported(pattern: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn translate_named_captures(pattern: &str) -> Result<String, String> {
-    let bytes = pattern.as_bytes();
-    let mut result = String::with_capacity(pattern.len());
-    let mut index = 0;
-    let mut in_class = false;
-    while index < bytes.len() {
-        if bytes[index] == b'\\' {
-            let escaped = pattern[index + 1..]
-                .chars()
-                .next()
-                .map_or(0, char::len_utf8);
-            let end = index + 1 + escaped;
-            result.push_str(&pattern[index..end]);
-            index = end;
-            continue;
-        }
-        if bytes[index] == b'[' {
-            in_class = true;
-        } else if bytes[index] == b']' {
-            in_class = false;
-        }
-        if !in_class && pattern[index..].starts_with("(?<") {
-            let name_start = index + 3;
-            let Some(relative_end) = pattern[name_start..].find('>') else {
-                return Err("unterminated .NET named capture".into());
-            };
-            let name_end = name_start + relative_end;
-            let name = &pattern[name_start..name_end];
-            if name.is_empty()
-                || !name
-                    .bytes()
-                    .all(|value| value.is_ascii_alphanumeric() || value == b'_')
-            {
-                return Err("named capture contains unsupported characters".into());
-            }
-            result.push_str("(?P<");
-            result.push_str(name);
-            result.push('>');
-            index = name_end + 1;
-            continue;
-        }
-        let character = pattern[index..]
-            .chars()
-            .next()
-            .expect("index remains at a character boundary");
-        result.push(character);
-        index += character.len_utf8();
-    }
-    Ok(result)
+fn unsupported_error(message: &str) -> Error {
+    Error::ParseError(0, ParseError::GeneralParseError(message.to_owned()))
 }
 
 #[cfg(test)]
@@ -390,18 +263,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn regex_failure_classification_survives_cache_and_unicode_translation() {
+    fn regex_failure_classification_survives_cache() {
         let mut cache = RegexCache::default();
         let invalid = cache.get_or_compile("[").unwrap_err();
         assert_eq!(
             invalid.category,
             crate::FaultCategory::Script(crate::ScriptFaultKind::Parse)
         );
+        assert_eq!(invalid.code, crate::VmFaultCode::TypeMismatch);
+        assert!(invalid.message.starts_with("unsupported or invalid regex:"));
         assert_eq!(cache.get_or_compile("[").unwrap_err(), invalid);
-        assert_eq!(translate_named_captures(r"\你").unwrap(), r"\你");
-        assert!(compile(r"\你").unwrap_err().is_script());
+        assert!(compile(r"\q").unwrap_err().is_script());
         let too_large = cache.get_or_compile("a{1000000000}").unwrap_err();
         assert_eq!(too_large.category, crate::FaultCategory::ResourceLimit);
+        assert_eq!(too_large.code, crate::VmFaultCode::ResourceLimit);
         assert_eq!(
             cache.get_or_compile("a{1000000000}").unwrap_err(),
             too_large
@@ -409,28 +284,44 @@ mod tests {
     }
 
     #[test]
-    fn translates_dotnet_named_groups() {
-        let regex = compile(r"(?<word>a+)").unwrap();
-        assert_eq!(&regex.captures("aaa").unwrap()["word"], "aaa");
+    fn runtime_limits_keep_the_vm_boundary_contract() {
+        let error = Error::RuntimeError(RuntimeError::BacktrackLimitExceeded);
+        let failure = runtime_error(&error);
+        assert_eq!(failure.category, crate::FaultCategory::ResourceLimit);
+        assert_eq!(failure.code, crate::VmFaultCode::ResourceLimit);
+        assert!(failure.message.starts_with("regex execution failed:"));
     }
 
     #[test]
-    fn rejects_backtracking_only_constructs() {
+    fn accepts_dotnet_named_groups() {
+        let regex = compile(r"(?<word>a+)").unwrap();
+        assert_eq!(&regex.captures("aaa").unwrap().unwrap()["word"], "aaa");
+    }
+
+    #[test]
+    fn rejects_unsupported_backreferences_but_accepts_all_lookarounds() {
         assert!(compile(r"(a)\1").is_err());
-        assert!(compile(r"a(?=b)").is_err());
+        for (pattern, input, expected_start, expected) in [
+            (r"foo(?=bar)", "foobar fooqux", 0, "foo"),
+            (r"foo(?!bar)", "foobar fooqux", 7, "foo"),
+            (r"(?<=USD)\d+", "USD10 EUR20", 3, "10"),
+            (r"(?<!AU)\$\d+", "AU$10, $20", 7, "$20"),
+        ] {
+            let regex = compile(pattern).unwrap();
+            let matched = regex.find(input).unwrap().unwrap();
+            assert_eq!(matched.start(), expected_start);
+            assert_eq!(matched.as_str(), expected);
+        }
     }
 
     #[test]
     fn captures_adjacent_values_between_positive_boundaries() {
-        let captures =
-            capture_positive_boundaries(r"(?<=\[\$TOKEN:).*?(?=\])", "[$TOKEN:A][$TOKEN:B]")
-                .unwrap()
-                .unwrap();
-        assert_eq!(captures.captures_len, 1);
-        assert_eq!(
-            captures.matches,
-            vec![vec!["A".to_owned()], vec!["B".to_owned()]]
-        );
+        let regex = compile(r"(?<=\[\$TOKEN:).*?(?=\])").unwrap();
+        let captures = regex
+            .captures_iter("[$TOKEN:A][$TOKEN:B]")
+            .map(|captures| captures.unwrap()[0].to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(captures, vec!["A".to_owned(), "B".to_owned()]);
     }
 
     #[test]
@@ -461,12 +352,12 @@ mod tests {
     #[test]
     fn cache_reuses_successes_and_errors_with_a_fixed_bound() {
         let mut cache = RegexCache::default();
-        assert!(cache.get_or_compile("a+").unwrap().is_match("aaa"));
-        assert!(cache.get_or_compile("a+").unwrap().is_match("aaa"));
+        assert!(cache.get_or_compile("a+").unwrap().is_match("aaa").unwrap());
+        assert!(cache.get_or_compile("a+").unwrap().is_match("aaa").unwrap());
         assert_eq!(cache.entries.len(), 1);
 
-        assert!(cache.get_or_compile("a(?=b)").is_err());
-        assert!(cache.get_or_compile("a(?=b)").is_err());
+        assert!(cache.get_or_compile("(a)\\1").is_err());
+        assert!(cache.get_or_compile("(a)\\1").is_err());
         assert_eq!(cache.entries.len(), 2);
 
         for index in 0..=MAXIMUM_CACHED_PATTERNS {

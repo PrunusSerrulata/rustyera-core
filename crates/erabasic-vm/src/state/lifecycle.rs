@@ -201,7 +201,7 @@ impl Vm {
     pub(crate) fn compile_regex(
         &mut self,
         pattern: &str,
-    ) -> Result<regex::Regex, crate::ExecutionFailure> {
+    ) -> Result<fancy_regex::Regex, crate::ExecutionFailure> {
         self.regex_cache.get_or_compile(pattern)
     }
 

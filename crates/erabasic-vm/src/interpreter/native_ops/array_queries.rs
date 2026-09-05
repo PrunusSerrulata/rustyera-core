@@ -118,6 +118,9 @@ pub(in super::super) fn execute_find_element(
                     .expect("the regex was initialized immediately above");
                 Ok(regex
                     .find(value)
+                    .map_err(|error| {
+                        VmError::ScriptFailure(crate::regex_compat::runtime_error(&error))
+                    })?
                     .is_some_and(|matched| !exact || matched.as_str().len() == value.len()))
             }
             (_, VmValue::Integer(_) | VmValue::String(_)) => Err(script_native_error(

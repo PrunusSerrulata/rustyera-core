@@ -30,6 +30,26 @@ fn regex_string_natives_match_non_overlapping_reference_semantics() {
             .value,
         Some(VmValue::Integer(1))
     );
+    for (input, pattern, expected) in [
+        ("foobar fooqux", r"foo(?=bar)", 1),
+        ("甲、乙、丙", r"(、)(?!.*、)", 1),
+        ("USD10 EUR20", r"(?<=USD)\d+", 1),
+        ("AU$10, $20", r"(?<!AU)\$\d+", 1),
+    ] {
+        assert_eq!(
+            count
+                .call(request(
+                    "strcount",
+                    vec![
+                        VmValue::String(input.into()),
+                        VmValue::String(pattern.into())
+                    ],
+                ))
+                .unwrap()
+                .value,
+            Some(VmValue::Integer(expected))
+        );
+    }
     assert_eq!(
         count
             .call(request(
@@ -206,6 +226,29 @@ fn replace_native_uses_reference_regex_literal_and_array_modes() {
             .message
             .starts_with("REPLACE argument 2 is not a regex:")
     );
+}
+
+#[test]
+fn replace_native_supports_all_lookaround_forms() {
+    for (input, pattern, replacement, expected) in [
+        ("foobar fooqux", r"foo(?=bar)", "X", "Xbar fooqux"),
+        ("甲、乙、丙", r"(、)(?!.*、)", "[$1]", "甲、乙[、]丙"),
+        ("USD10 EUR20", r"(?<=USD)(\d+)", "[$1]", "USD[10] EUR20"),
+        ("AU$10, $20", r"(?<!AU)\$(\d+)", "[$1]", "AU$10, [20]"),
+    ] {
+        assert_eq!(
+            evaluate_pure_native(
+                "replace",
+                vec![
+                    VmValue::String(input.into()),
+                    VmValue::String(pattern.into()),
+                    VmValue::String(replacement.into()),
+                ],
+            )
+            .unwrap(),
+            VmValue::String(expected.into())
+        );
+    }
 }
 
 pub(super) fn classified_native_request(name: &str, arguments: Vec<VmValue>) -> NativeCallRequest {

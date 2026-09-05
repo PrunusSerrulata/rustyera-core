@@ -85,16 +85,33 @@ fn snake_numeric_read_fallback_does_not_hide_native_contract_failures() {
 }
 
 #[test]
-fn regex_compilation_capacity_is_uncatchable_even_with_native_legacy_code() {
-    let error = ::regex::RegexBuilder::new(r"\w+")
-        .size_limit(0)
-        .build()
-        .unwrap_err();
-    assert!(matches!(error, ::regex::Error::CompiledTooBig(_)));
-    let failure = super::core::regex_failure("STRCOUNT", &error);
+fn regex_runtime_capacity_is_uncatchable_even_with_native_legacy_code() {
+    let error = fancy_regex::Error::RuntimeError(fancy_regex::RuntimeError::BacktrackLimitExceeded);
+    let failure = super::core::regex_runtime_failure("STRCOUNT", &error);
     assert_eq!(failure.category, FaultCategory::ResourceLimit);
     assert_eq!(failure.code, VmFaultCode::Native);
+    assert!(
+        failure
+            .message
+            .starts_with("STRCOUNT regex execution failed:")
+    );
     assert!(!failure.is_script());
+}
+
+#[test]
+fn regex_compile_errors_keep_the_core_native_boundary_contract() {
+    let error = crate::regex_compat::build("[").unwrap_err();
+    let failure = super::core::regex_compile_failure("REPLACE", &error);
+    assert_eq!(
+        failure.category,
+        FaultCategory::Script(ScriptFaultKind::Parse)
+    );
+    assert_eq!(failure.code, VmFaultCode::Native);
+    assert!(
+        failure
+            .message
+            .starts_with("REPLACE argument 2 is not a regex:")
+    );
 }
 
 #[test]

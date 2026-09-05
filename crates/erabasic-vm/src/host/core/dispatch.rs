@@ -294,12 +294,9 @@ impl NativeService for CoreNative {
                 let pattern = string(1)?;
                 self.regex_cache
                     .get_or_compile(pattern)
-                    .map_err(|error| regex_failure("STRCOUNT", &error))?;
+                    .map_err(|error| regex_compile_failure("STRCOUNT", &error))?;
                 let input = string(0)?;
-                let count = self
-                    .regex_cache
-                    .count_matches(pattern, input)
-                    .map_err(|error| regex_failure("STRCOUNT", &error))?;
+                let count = self.regex_cache.count_matches(pattern, input)?;
                 VmValue::Integer(i64::try_from(count).unwrap_or(i64::MAX))
             }
             "getpalamlv" | "getexplv" => {

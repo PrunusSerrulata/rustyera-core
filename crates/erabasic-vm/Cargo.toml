@@ -15,6 +15,7 @@ erabasic-lexer = { path = "../erabasic-lexer" }
 erabasic-parser = { path = "../erabasic-parser" }
 erabasic-validator = { path = "../erabasic-validator" }
 regex.workspace = true
+fancy-regex.workspace = true
 quick-xml.workspace = true
 rmp-serde.workspace = true
 serde.workspace = true

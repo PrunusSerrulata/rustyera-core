@@ -107,23 +107,14 @@ fn regex_captures(
     pattern: &str,
     input: &str,
 ) -> Result<(usize, Vec<Vec<VmValue>>), VmError> {
-    if let Some(captures) = crate::regex_compat::capture_positive_boundaries(pattern, input)
-        .map_err(VmError::ScriptFailure)?
-    {
-        return Ok((
-            captures.captures_len,
-            captures
-                .matches
-                .into_iter()
-                .map(|values| values.into_iter().map(VmValue::String).collect())
-                .collect(),
-        ));
-    }
     let regex = vm.compile_regex(pattern).map_err(VmError::ScriptFailure)?;
     let captures = regex
         .captures_iter(input)
         .map(|captures| {
-            (0..regex.captures_len())
+            let captures = captures.map_err(|error| {
+                VmError::ScriptFailure(crate::regex_compat::runtime_error(&error))
+            })?;
+            Ok((0..regex.captures_len())
                 .map(|index| {
                     VmValue::String(
                         captures
@@ -131,9 +122,9 @@ fn regex_captures(
                             .map_or_else(String::new, |value| value.as_str().to_owned()),
                     )
                 })
-                .collect()
+                .collect::<Vec<_>>())
         })
-        .collect();
+        .collect::<Result<Vec<_>, VmError>>()?;
     Ok((regex.captures_len(), captures))
 }
 
