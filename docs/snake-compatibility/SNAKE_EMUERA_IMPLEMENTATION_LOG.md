@@ -1427,6 +1427,27 @@ EraBasic oracle 差分，蛇版 TW 真实脚本和三端客户端状态作为验
   修复。用户既有批次 5 计划文档修改未纳入本次提交；没有推送或合并分支，临时 oracle
   游戏副本和输出在交付前清理。
 
+### 2026-09-05 ERAFL HTML 测试状态同步
+
+这是上一节蛇版 workspace 全量所暴露的三项既有测试修复，只修改测试辅助函数，不改变
+runtime、协议、profile、缓存、存档、展示行为、fixture 或参考实现。`WAIT` 已把
+`command_intents` 的所有权转移到活动 `PendingInput::choices`；蛇版分支中的旧 helper 仍读取
+转移后必为空的 `session.command_intents`，因此三个实际 HTML/警告断言均已通过后才在辅助
+断言处误报实际 0、期望 2。
+
+- 主分支已在 `24f3bb7a071b352225a764fad29373a5323a2ea5` 修正该 helper；本次未在主分支制造
+  重复改动，而是把同一 hunk 精确同步到蛇版分支，commit
+  `e6eac3046174bbb0e660dfc89fe2a0d0ac02177c`。新断言要求活动 `WAIT` 存在，并继续精确
+  检查两个 choice 及各自字符串值，没有放宽规范化 HTML、警告顺序或 island 文档断言。
+- 唯一重构审查在测试前完成，结论为同步位置与权威状态正确、无需生产代码改动或额外重构。
+  首条测试为 2026-09-05 14:24:08+08:00；fmt、`era-runtime` all-targets check、Clippy
+  `-D warnings` 均 exit 0，ERAFL 定向测试 3/3 通过，唯一一次
+  `cargo test -p era-runtime --lib` 为 520/520 通过。上一节首次 workspace 全量的 517/3
+  失败由该定向复验闭合；按一次全量规则未重跑 workspace 全量。
+- 因只同步测试状态读取、产品行为与 C# 输入均未改变，按测试 skill 不运行 reference smoke
+  或差分，也不更新根 `CHANGELOG_PENDING.md`。用户既有批次 5 计划文档修改未纳入提交，
+  没有推送或合并分支。
+
 <a id="batch-6"></a>
 
 ## 批次 6：完整蛇版语言
