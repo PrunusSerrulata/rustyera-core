@@ -480,27 +480,14 @@ fn findelement_uses_the_verified_regex_subset() {
     // An empty range never inspects an element, so even an invalid pattern is
     // intentionally not compiled and the query returns the not-found sentinel.
     let artifact = compile_source(
-        "@SYSTEM_TITLE\nRESULTS:0 '= \"ab\"\nRESULT = FINDELEMENT(RESULTS, \"a(?=b)\", 0, 0, 0)\nRETURN RESULT\n",
+        "@SYSTEM_TITLE\nRESULTS:0 '= \"ab\"\nRESULT = FINDELEMENT(RESULTS, \"(a)\\\\1\", 0, 0, 0)\nRETURN RESULT\n",
     );
     assert_eq!(run_compiled_result(&artifact), VmValue::Integer(-1));
 
     let artifact = compile_source(
         "@SYSTEM_TITLE\nRESULTS:0 '= \"ab\"\nRESULT = FINDELEMENT(RESULTS, \"a(?=b)\", 0, 1, 0)\nRETURN RESULT\n",
     );
-    let entry = artifact.functions[0].key;
-    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
-    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
-    vm.spawn_entry(entry, Vec::new()).unwrap();
-    let report = vm.run_slice(
-        &mut ReadyHost::default(),
-        &mut natives,
-        RunBudget::default(),
-    );
-    assert!(report.events.iter().any(|event| matches!(
-        event,
-        VmEvent::FiberFaulted { fault, .. }
-            if fault.message.contains("lookaround")
-    )));
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(0));
 }
 
 #[test]

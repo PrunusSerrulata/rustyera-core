@@ -493,6 +493,26 @@ fn regex_string_natives_match_non_overlapping_reference_semantics() {
             .value,
         Some(VmValue::Integer(1))
     );
+    for (input, pattern, expected) in [
+        ("foobar fooqux", r"foo(?=bar)", 1),
+        ("甲、乙、丙", r"(、)(?!.*、)", 1),
+        ("USD10 EUR20", r"(?<=USD)\d+", 1),
+        ("AU$10, $20", r"(?<!AU)\$\d+", 1),
+    ] {
+        assert_eq!(
+            count
+                .call(request(
+                    "strcount",
+                    vec![
+                        VmValue::String(input.into()),
+                        VmValue::String(pattern.into())
+                    ],
+                ))
+                .unwrap()
+                .value,
+            Some(VmValue::Integer(expected))
+        );
+    }
     assert_eq!(
         count
             .call(request(
@@ -690,6 +710,29 @@ fn classified_native_request(name: &str, arguments: Vec<VmValue>) -> NativeCallR
 }
 
 #[test]
+fn replace_native_supports_all_lookaround_forms() {
+    for (input, pattern, replacement, expected) in [
+        ("foobar fooqux", r"foo(?=bar)", "X", "Xbar fooqux"),
+        ("甲、乙、丙", r"(、)(?!.*、)", "[$1]", "甲、乙[、]丙"),
+        ("USD10 EUR20", r"(?<=USD)(\d+)", "[$1]", "USD[10] EUR20"),
+        ("AU$10, $20", r"(?<!AU)\$(\d+)", "[$1]", "AU$10, [20]"),
+    ] {
+        assert_eq!(
+            evaluate_pure_native(
+                "replace",
+                vec![
+                    VmValue::String(input.into()),
+                    VmValue::String(pattern.into()),
+                    VmValue::String(replacement.into()),
+                ],
+            )
+            .unwrap(),
+            VmValue::String(expected.into())
+        );
+    }
+}
+
+#[test]
 fn core_native_domains_are_script_failures_but_malformed_arguments_are_contract_failures() {
     for (name, arguments, kind) in [
         (
@@ -775,16 +818,33 @@ fn snake_numeric_read_fallback_does_not_hide_native_contract_failures() {
 }
 
 #[test]
-fn regex_compilation_capacity_is_uncatchable_even_with_native_legacy_code() {
-    let error = regex::RegexBuilder::new(r"\w+")
-        .size_limit(0)
-        .build()
-        .unwrap_err();
-    assert!(matches!(error, regex::Error::CompiledTooBig(_)));
-    let failure = super::core::regex_failure("STRCOUNT", &error);
+fn regex_runtime_capacity_is_uncatchable_even_with_native_legacy_code() {
+    let error = fancy_regex::Error::RuntimeError(fancy_regex::RuntimeError::BacktrackLimitExceeded);
+    let failure = super::core::regex_runtime_failure("STRCOUNT", &error);
     assert_eq!(failure.category, FaultCategory::ResourceLimit);
     assert_eq!(failure.code, VmFaultCode::Native);
+    assert!(
+        failure
+            .message
+            .starts_with("STRCOUNT regex execution failed:")
+    );
     assert!(!failure.is_script());
+}
+
+#[test]
+fn regex_compile_errors_keep_the_core_native_boundary_contract() {
+    let error = crate::regex_compat::build("[").unwrap_err();
+    let failure = super::core::regex_compile_failure("REPLACE", &error);
+    assert_eq!(
+        failure.category,
+        FaultCategory::Script(ScriptFaultKind::Parse)
+    );
+    assert_eq!(failure.code, VmFaultCode::Native);
+    assert!(
+        failure
+            .message
+            .starts_with("REPLACE argument 2 is not a regex:")
+    );
 }
 
 #[test]

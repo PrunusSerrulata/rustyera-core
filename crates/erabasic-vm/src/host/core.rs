@@ -15,16 +15,11 @@ const REGEX_CACHE_CAPACITY: usize = 16;
 // is intentionally rebuilt rather than persisted in VM snapshots.
 #[derive(Default)]
 struct RegexCache {
-    entries: Vec<(String, CachedRegex)>,
-}
-
-enum CachedRegex {
-    Standard(regex::Regex),
-    LeadingPositiveTail(Vec<regex::Regex>),
+    entries: Vec<(String, fancy_regex::Regex)>,
 }
 
 impl RegexCache {
-    fn get_or_compile(&mut self, pattern: &str) -> Result<&CachedRegex, regex::Error> {
+    fn get_or_compile(&mut self, pattern: &str) -> Result<&fancy_regex::Regex, fancy_regex::Error> {
         if let Some(index) = self
             .entries
             .iter()
@@ -38,7 +33,7 @@ impl RegexCache {
             return Ok(&self.entries[newest].1);
         }
 
-        let regex = compile_core_regex(pattern)?;
+        let regex = crate::regex_compat::build(pattern)?;
         if self.entries.len() == REGEX_CACHE_CAPACITY {
             self.entries.remove(0);
         }
@@ -47,59 +42,13 @@ impl RegexCache {
         Ok(&self.entries[index].1)
     }
 
-    fn get_standard(&mut self, pattern: &str) -> Result<&regex::Regex, regex::Error> {
-        match self.get_or_compile(pattern)? {
-            CachedRegex::Standard(regex) => Ok(regex),
-            CachedRegex::LeadingPositiveTail(_) => {
-                Err(regex::Regex::new(pattern)
-                    .expect_err("look-ahead is unsupported by regex crate"))
-            }
-        }
+    fn count_matches(&mut self, pattern: &str, input: &str) -> Result<usize, ExecutionFailure> {
+        self.get_or_compile(pattern)
+            .map_err(|error| regex_compile_failure("STRCOUNT", &error))?
+            .find_iter(input)
+            .try_fold(0usize, |count, matched| matched.map(|_| count + 1))
+            .map_err(|error| regex_runtime_failure("STRCOUNT", &error))
     }
-
-    fn count_matches(&mut self, pattern: &str, input: &str) -> Result<usize, regex::Error> {
-        Ok(match self.get_or_compile(pattern)? {
-            CachedRegex::Standard(regex) => regex.find_iter(input).count(),
-            CachedRegex::LeadingPositiveTail(assertions) => {
-                usize::from(assertions.iter().any(|assertion| assertion.is_match(input)))
-            }
-        })
-    }
-}
-
-fn compile_core_regex(pattern: &str) -> Result<CachedRegex, regex::Error> {
-    if let Some(assertions) = leading_positive_tail_assertions(pattern) {
-        return assertions.map(CachedRegex::LeadingPositiveTail);
-    }
-    regex::Regex::new(pattern).map(CachedRegex::Standard)
-}
-
-/// Compile the bounded look-ahead shape used by Snake TW's name predicate.
-///
-/// Each alternative asserts a condition and then consumes through the end of the
-/// input. Its observable result is therefore either one match or no match, which
-/// can be evaluated with Rust's linear regex engine without general backtracking.
-fn leading_positive_tail_assertions(
-    pattern: &str,
-) -> Option<Result<Vec<regex::Regex>, regex::Error>> {
-    let (case_insensitive, pattern) = pattern
-        .strip_prefix("(?i)")
-        .map_or((false, pattern), |pattern| (true, pattern));
-    let assertions = pattern
-        .strip_prefix("(?=")?
-        .strip_suffix(").*$")?
-        .split(").*$|(?=");
-    let mut compiled_assertions = Vec::new();
-    for assertion in assertions {
-        let compiled = regex::RegexBuilder::new(assertion)
-            .case_insensitive(case_insensitive)
-            .build();
-        match compiled {
-            Ok(compiled) => compiled_assertions.push(compiled),
-            Err(error) => return Some(Err(error)),
-        }
-    }
-    (!compiled_assertions.is_empty()).then_some(Ok(compiled_assertions))
 }
 
 impl CoreNative {
@@ -514,12 +463,9 @@ impl NativeService for CoreNative {
                 let pattern = string(1)?;
                 self.regex_cache
                     .get_or_compile(pattern)
-                    .map_err(|error| regex_failure("STRCOUNT", &error))?;
+                    .map_err(|error| regex_compile_failure("STRCOUNT", &error))?;
                 let input = string(0)?;
-                let count = self
-                    .regex_cache
-                    .count_matches(pattern, input)
-                    .map_err(|error| regex_failure("STRCOUNT", &error))?;
+                let count = self.regex_cache.count_matches(pattern, input)?;
                 VmValue::Integer(i64::try_from(count).unwrap_or(i64::MAX))
             }
             "getpalamlv" | "getexplv" => {
@@ -635,9 +581,6 @@ fn replace_text(
         return Ok(input.replace(pattern, request_string(request, 2)?));
     }
 
-    let regex = regex_cache
-        .get_standard(pattern)
-        .map_err(|error| regex_failure("REPLACE", &error))?;
     if mode == 1 {
         match request.argument(2) {
             Some(VmValue::StringPlace(_)) => {}
@@ -666,18 +609,25 @@ fn replace_text(
             })
             .collect::<Result<Vec<_>, _>>()?;
         let mut index = 0;
-        return Ok(regex
-            .replace_all(input, |_: &regex::Captures<'_>| {
+        return regex_cache
+            .get_or_compile(pattern)
+            .map_err(|error| regex_compile_failure("REPLACE", &error))?
+            .try_replacen(input, 0, |_: &fancy_regex::Captures<'_, str>| {
                 let replacement = replacements.get(index).copied().unwrap_or_default();
                 index += 1;
-                replacement
+                replacement.to_owned()
             })
-            .into_owned());
+            .map(std::borrow::Cow::into_owned)
+            .map_err(|error| regex_runtime_failure("REPLACE", &error));
     }
 
-    Ok(regex
-        .replace_all(input, request_string(request, 2)?)
-        .into_owned())
+    let replacement = request_string(request, 2)?;
+    regex_cache
+        .get_or_compile(pattern)
+        .map_err(|error| regex_compile_failure("REPLACE", &error))?
+        .try_replacen(input, 0, replacement)
+        .map(std::borrow::Cow::into_owned)
+        .map_err(|error| regex_runtime_failure("REPLACE", &error))
 }
 
 fn request_string(request: &NativeCallRequest, index: usize) -> Result<&str, ExecutionFailure> {
@@ -964,14 +914,20 @@ fn legacy_index_to_utf8_boundary(value: &str, index: usize, encoding: LegacyEnco
         .unwrap_or(value.len())
 }
 
-pub(super) fn regex_failure(operation: &str, error: &regex::Error) -> ExecutionFailure {
+pub(super) fn regex_compile_failure(
+    operation: &str,
+    error: &fancy_regex::Error,
+) -> ExecutionFailure {
     let message = format!("{operation} argument 2 is not a regex: {error}");
-    match error {
-        regex::Error::Syntax(_) => native_script_failure(ScriptFaultKind::Parse, message),
-        regex::Error::CompiledTooBig(_) => native_resource_failure(message),
-        // Future regex error variants must not accidentally become script-catchable.
-        _ => native_contract_failure(message),
-    }
+    crate::regex_compat::core_failure(error, message)
+}
+
+pub(super) fn regex_runtime_failure(
+    operation: &str,
+    error: &fancy_regex::Error,
+) -> ExecutionFailure {
+    let message = format!("{operation} regex execution failed: {error}");
+    crate::regex_compat::core_failure(error, message)
 }
 
 impl From<NumericReadError> for ExecutionFailure {
