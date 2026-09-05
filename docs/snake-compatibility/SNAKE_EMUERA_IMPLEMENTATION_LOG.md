@@ -1348,6 +1348,51 @@ EraBasic oracle 差分，蛇版 TW 真实脚本和三端客户端状态作为验
   Tauri 二进制、有效测试脚本以及最终 trace/快照均保留。用户 Web `Cargo.lock`、`.rustyera/`
   和 core 批次 5 计划修改未纳入提交；未推送或合并。
 
+### 2026-09-05 蛇版 TW HPH 与 PRINTDATA 着色修复及受阻验收
+
+这是批次 4 可玩路径后的单一文本输出兼容修复批次，只修改 core，不修改蛇版 TW、两个参考
+实现、Web/TUI、协议、profile、缓存或存档格式。用户提供的两份 format-30 runtime snapshot
+均作为只读定位输入：`runtime_20260905-124606.snapshot` SHA-256 为
+`c9ab088267a6d6f97c279e920f4cbd96ff7794720dc0dc9f67d587c24af985cd`；
+`runtime_20260905-123350.snapshot` SHA-256 为
+`76a25e33a9bec6b82eed58821cec01abb0684b55d63b890a30cfd646d4158ce0`。
+
+- 蛇版 TW 的活跃 `HPH_PRINT` 先以非 U `STRFIND` 找到 `HPH`，再把该索引交给非 U
+  `SUBSTRING`，只有标记被切到首部才进入
+  `HEARTMARK → GET_HEARTMARK_HTML → HTMLFONT → HTML_PRINT(..., 1)`。Rust 过去返回 UTF-8
+  字节偏移，但 `SUBSTRING` 已按配置的 CP936/legacy ANSI 字节切分；新快照中的
+  `【HPH膣内HPH】` 和 `【HPH小腹HPH】` 因而分别被拆成 `【H`、中段和 `H】`。修复后非 U
+  `STRFIND` 的 start 和返回值统一采用当前 `LegacyEncoding`，多字节字符内部的 start 边界
+  推进与蛇版 C# `LangManager.GetUFTIndex` 一致；`STRFINDU` 的 Unicode scalar 语义不变。
+  产品与回归由 core commit `0ffa39d4666907d4b90a89440d9e76193f694565` 提交。
+- `PRINTDATAW` 的 `DATAFORM` 本应继承 `SETCOLOR` 后的 user style；只有显式
+  `PRINTDATAD*` 才使用默认色。编译器过去对整个 `PRINTDATA*` 名称执行 `contains('D')`，
+  把基名 `DATA` 自带的 `D` 当作修饰符，使普通 `PRINTDATA/PRINTDATAL/PRINTDATAW` 降为
+  `PRINTD`。现在只检查 `PRINTDATA` 后缀并保留 K 优先级。首份快照末尾两个引号行从当前
+  `#337D5C` 错落到默认 `#C0C0C0` 与该根因一致；Web 只忠实投影协议颜色，无需修改。
+  产品与回归由 core commit `69b37c437aa626d6a7051c45b336d0a3ab3a4b70` 提交。
+- 唯一重构审查在首条测试前完成；其要求补齐 legacy start 落在多字节字符内部/边界、可见
+  `【❤小腹❤】` 恰有两枚爱心、蛇版 profile 下真实 `PRINTDATAW` 与显式 D 对照，均在测试
+  前落实；后续仅修正两项回归对 presentation 投影表示的错误假设。首条测试为
+  2026-09-05T04:53:01Z；首次 fmt
+  检查仅报告本批文件格式差异，机械格式化后定向复验通过。workspace all-targets check 和
+  Clippy `-D warnings` 均 exit 0；三项新定向回归最终均通过。
+- 本批唯一一次 `cargo test --workspace` 为 exit 101；`era-runtime` 报告 **517 passed / 3
+  failed**。失败均在既有 `protocol_project.rs:953`：三个 ERAFL HTML 用例期望两项
+  `command_intents`、实际为 0。本批 diff 不涉及该 fixture/路径；从未改动的 core HEAD
+  `ed97e396a84b9d737d423b75cbd345607499fe8d` 导出的隔离副本又分别定向复现相同三项失败，
+  因此登记为既有基线阻塞，不归因于本批修复。按“一次全量”和静态门禁先行规则未重跑
+  workspace 全量，也未启动 original/snake smoke 或同输入差分。
+- 计划采用双 oracle：original wrapper
+  `ffe560dad2fe480c8babddcae0122137350bf021` 与 snake wrapper
+  `ed52a0ac58f970b4f39069d1dc12d135a299b705`，运行结果应以各 response 的
+  `referenceCommit` 认证固定语义基准；因上述既有全量失败未满足前置门禁，本次没有 oracle
+  结果，不能声称参考差分已验收。解除条件是另批修复/登记 ERAFL command intent 基线并使
+  所需静态门禁通过，随后只为本批补做双 smoke 与同一 HPH/PRINTDATA fixture 差分；不得借此
+  重跑本批 workspace 全量。
+- 本批在已授权范围内的两项产品修复和最小行为回归已完成，但整批 oracle 验收未完成；没有
+  推送或合并分支。用户既有 core 批次 5 计划文档修改与 Web `Cargo.lock` 均未纳入提交。
+
 <a id="batch-6"></a>
 
 ## 批次 6：完整蛇版语言
