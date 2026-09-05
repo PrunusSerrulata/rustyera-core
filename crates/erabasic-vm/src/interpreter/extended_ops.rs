@@ -1,5 +1,7 @@
 //! Regex and higher-rank bulk array operations.
 
+use std::borrow::Cow;
+
 use super::{
     BytecodeStorage, BytecodeType, Fiber, NativeServiceRegistry, PlaceDescriptor, Vm, VmError,
     VmValue, array_place, array_snapshot,
@@ -184,10 +186,19 @@ pub(super) fn execute_array_copy(
     fiber: &mut Fiber,
     arguments: &[VmValue],
 ) -> Result<(), VmError> {
+    // Match Emuera's argument order: both string expressions are evaluated
+    // before either resulting variable name is resolved or validated.
+    let source_argument = evaluate_array_copy_argument(vm, fiber, arguments.first())?;
+    let destination_argument = evaluate_array_copy_argument(vm, fiber, arguments.get(1))?;
     let (source, source_type, source_dimensions) =
-        array_copy_place(vm, fiber, arguments.first(), "source", false)?;
-    let (destination, destination_type, destination_dimensions) =
-        array_copy_place(vm, fiber, arguments.get(1), "destination", true)?;
+        array_copy_place(vm, fiber, source_argument.as_deref(), "source", false)?;
+    let (destination, destination_type, destination_dimensions) = array_copy_place(
+        vm,
+        fiber,
+        destination_argument.as_deref(),
+        "destination",
+        true,
+    )?;
     if source_type != destination_type {
         return Err(script_native_error(
             crate::ScriptFaultKind::Argument,
@@ -209,6 +220,21 @@ pub(super) fn execute_array_copy(
         &destination_dimensions,
     )?;
     commit_array_any_rank(vm, fiber, &destination, destination_values)
+}
+
+fn evaluate_array_copy_argument<'a>(
+    vm: &Vm,
+    fiber: &Fiber,
+    value: Option<&'a VmValue>,
+) -> Result<Option<Cow<'a, VmValue>>, VmError> {
+    // ARRAYCOPY receives variable-name string expressions. HIR keeps variable
+    // expressions as places for this mixed reference/string signature, so a
+    // StringPlace must be evaluated before resolving the named array.
+    match value {
+        Some(VmValue::StringPlace(place)) => Ok(Some(Cow::Owned(vm.read_place(fiber, place)?))),
+        Some(value) => Ok(Some(Cow::Borrowed(value))),
+        None => Ok(None),
+    }
 }
 
 fn copy_shared_array_extent(
