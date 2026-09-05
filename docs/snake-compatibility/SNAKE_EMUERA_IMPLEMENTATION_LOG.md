@@ -1308,6 +1308,46 @@ EraBasic oracle 差分，蛇版 TW 真实脚本和三端客户端状态作为验
 `CHANGELOG_PENDING.md` 由 `2f4bc83` 登记两项行为修复；未推送或合并组件分支，所有测试
 进程已结束，现有可复现 trace/快照按循环任务续做规则保留。
 
+### 2026-09-05 蛇版 TW Bad Apple 播放节奏定向修复
+
+这是上一节 Bad Apple 客户端修复的节奏跟进，不修改 core、协议、profile、缓存或存档身份。
+蛇版 TW `TITLE.ERB` 共播放 6572 帧，音频约 219.193 秒；脚本以 `count * 33` 为时间轴，
+正常帧执行 `AWAIT 28`，落后时执行 `AWAIT 0` 追赶。蛇版 Emuera 在刷新画面和处理事件后
+才执行 `Thread.Sleep(time)`。Web 之前在 DevicePump 确认后才以旧逻辑时钟建立 deadline，
+把当前帧的资源读取、解码与投影耗时错误地扣入下一帧等待，因而动画快于音乐。
+
+- Web 在设备泵清空真实输入后采样当前单调时钟，并保证 `advance_time` 先于
+  `service_response` 入队，使正数 `AWAIT` 从与蛇版 Emuera 相同的确认边界开始。首次 Tauri
+  动态验证暴露了等待 `advance_time` IPC 时真实鼠标事件可推进 event sequence、使旧水位确认
+  触发 `ServiceFailure`；trace 定位后改为在同一 JavaScript 事件轮次内入队两条消息，依赖 Worker
+  FIFO 与 TauriBridge 已有 runtime 串行队列保序。定向单测故意悬挂时钟提交，确认泵响应仍会
+  及时入队。实现与测试由 Web commit `7a0939524c82563aa4226234de734b2db9fb43a3`
+  提交。
+- 性能测试新增平均值和中位帧间隔；浏览器场景使用中位数下限，避免首帧冷加载离群值把过快
+  帧抬高成假通过。Tauri 场景显式使用真实系统时钟，直接比较音频位置与呈现帧数，并按用户
+  要求播放至少 17 秒后才退出；33 ms 是脚本目标而非硬性单帧上限。
+- 唯一重构审查在测试前完成，无必须修改项；其减少 5 帧退出样本抖动的建议已落实。本轮唯一
+  完整 Vitest 首次通过 114 files / 1602 tests；最终定向 Vitest 307/307、typecheck、受控
+  ESLint/Prettier、Web build 与 `build:wasm` 均通过。全仓 Prettier 另报告 `.rustyera` 与既有
+  文件共 10 个范围外格式问题，本轮文件的定向检查通过，未改写这些用户/既有内容。
+- 最终真实 Tauri WebDriver 17 秒验证为 516 帧、音频 17021 ms、33.0505 ms/帧；呈现间隔
+  平均 33.0291 ms、中位 45 ms、最大 62 ms，516 帧全部进入 DOM，514 个 paint checkpoint
+  无超时、无 long task。字符画可见，真实左键退出后返回标题，sound:0 为 stopped 且资源清空；
+  证据为
+  `.rustyera/test-runs/tauri-snapshots/2026-09-05T01-52-42.100Z-snake-bad-apple.spec.mjs.jsonl`
+  和 `.rustyera/test-runs/tauri-logs/wdio-2026-09-05T01-55-02-909Z.log`。
+- 本轮未下载浏览器；仓库要求的 Chromium executable 不存在，因此没有把新节奏修复宣称为
+  浏览器动态通过。eraRorona Tauri 替代回归在性能断言前因既有 WebDriver 左键只发出
+  mousedown/mouseup、未发 click 而停止；当时 runtime `fault=null`、service failure 为空，
+  后续平滑帧断言未执行，证据为
+  `.rustyera/test-runs/tauri-snapshots/2026-09-05T01-57-39.776Z-rorona-images.spec.mjs.jsonl`。
+  本次产品路径只由 core 的 `supports_snake_input()` 进入 DevicePump；eraRorona 普通 timed
+  wait 不经过该分支，相关 runtimeStore 定向静态测试通过，但不以此替代未完成的动态性能回归。
+- 按用户要求清除了上一轮过时 Bad Apple/视口失败迭代、临时映射与可再生增量缓存；本轮结束
+  又删除 4 份各约 2.6 GiB 的隔离游戏副本和约 1.8 GiB debug 增量缓存。工具、环境、共享依赖、
+  Tauri 二进制、有效测试脚本以及最终 trace/快照均保留。用户 Web `Cargo.lock`、`.rustyera/`
+  和 core 批次 5 计划修改未纳入提交；未推送或合并。
+
 <a id="batch-6"></a>
 
 ## 批次 6：完整蛇版语言
