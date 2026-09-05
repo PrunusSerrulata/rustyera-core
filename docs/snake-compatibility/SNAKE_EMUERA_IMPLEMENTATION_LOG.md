@@ -1393,6 +1393,40 @@ EraBasic oracle 差分，蛇版 TW 真实脚本和三端客户端状态作为验
 - 本批在已授权范围内的两项产品修复和最小行为回归已完成，但整批 oracle 验收未完成；没有
   推送或合并分支。用户既有 core 批次 5 计划文档修改与 Web `Cargo.lock` 均未纳入提交。
 
+### 2026-09-05 ARRAYCOPY 字符串数组名变量兼容修复
+
+这是原版与蛇版共同行为的单项 VM 修复，不修改协议、profile、缓存、存档、前端或游戏。
+蛇版 TW 在 `能力表示.ERB:1252` 使用 `ARRAYCOPY OPR_目标, "TARGET_LIST"`，其中
+`OPR_目标` 是值为 `"TARGET"` 的字符串常量；Rust 过去把其 `StringPlace` 本身当作源数组，
+因而将字符串源与整数目标比较并报告 `ARRAYCOPY array types differ`。现在仅在
+`execute_array_copy` 入口按 Emuera 顺序先求值两个字符串表达式，再解析所得数组名；共享
+数组解析/复制、整数引用参数、错误分类、原子提交及 `ARRAYMSORTEX` 路径保持不变。
+
+- 按共同语义先在原版 `master` 修复并提交
+  `a174c3031a52fa6a34406f2f2ee60b4609af9dc5`，随后把同一实现和两项回归同步到蛇版
+  `feature/snake-compatibility`，提交
+  `2ee37dd72e98d654e1f882df7729df64b3d6009c`。回归直接覆盖报告原句式，并覆盖
+  “两参数先求值、后解析”的首错顺序。
+- 唯一重构审查在测试前完成；要求采用两阶段求值并精确覆盖故障现场，均已落实。原版首条
+  测试为 2026-09-05 13:52:04+08:00；fmt、workspace all-targets check、Clippy
+  `-D warnings`、两项定向回归和唯一一次 `cargo test --workspace` 均 exit 0，其中 VM
+  集成测试 333/333 通过。
+- 蛇版首条测试为 2026-09-05 14:03:14+08:00；fmt、workspace all-targets check、Clippy
+  `-D warnings` 及两项 `ARRAYCOPY` 定向回归均 exit 0。该分支唯一一次 workspace 全量为
+  exit 101：`era-runtime` 517 passed / 3 failed，仍是本日志上一节已登记的三项 ERAFL
+  HTML `command_intents` 基线断言（实际 0、期望 2）；本次 diff 不涉及其源码或 fixture，
+  未重跑全量，也未把它记为本修复通过。
+- 同一冻结 fixture 的新增 ERB SHA-256 为
+  `ecf1cdcc2efd5bb769bbdff2493e25098a6836b82978d1c132ea59c62b35e7f9`。原版 wrapper
+  `ffe560dad2fe480c8babddcae0122137350bf021` / 语义基准
+  `26a35dc9334bb67590b96f7b8efbefbf199e391e` 与蛇版 wrapper
+  `ed52a0ac58f970b4f39069d1dc12d135a299b705` / 语义基准
+  `fc4fb21416768c17256d0e82f997e5f99c9bba91` 的 Wine smoke 均通过；四请求同输入运行均
+  `termination=completed`，且 `RESULT:0..2` 精确为 `7, 8, 9`。两个参考仓库未修改。
+- 根 `CHANGELOG_PENDING.md` 由 commit `87910576bb34ff1fca227744034a49f26f10c8f6` 登记产品
+  修复。用户既有批次 5 计划文档修改未纳入本次提交；没有推送或合并分支，临时 oracle
+  游戏副本和输出在交付前清理。
+
 <a id="batch-6"></a>
 
 ## 批次 6：完整蛇版语言
