@@ -480,17 +480,12 @@ impl NativeService for CoreNative {
                 };
                 VmValue::String(substring_scalars(string(0)?, start, length))
             }
-            "strfind" => {
-                let start = usize::try_from(integer(2).unwrap_or(0)).unwrap_or(usize::MAX);
-                let haystack = string(0)?;
-                let start = utf8_boundary_at_or_after(haystack, start).min(haystack.len());
-                VmValue::Integer(
-                    haystack[start..]
-                        .find(string(1)?)
-                        .and_then(|offset| i64::try_from(start + offset).ok())
-                        .unwrap_or(-1),
-                )
-            }
+            "strfind" => VmValue::Integer(strfind_legacy_bytes(
+                string(0)?,
+                string(1)?,
+                integer(2).unwrap_or(0),
+                self.legacy_encoding,
+            )),
             "strfindu" => {
                 let haystack = string(0)?;
                 let start = integer(2).unwrap_or(0);
@@ -935,11 +930,38 @@ pub(super) fn substring_scalars(value: &str, start: i64, length: Option<i64>) ->
         .collect()
 }
 
-fn utf8_boundary_at_or_after(value: &str, mut offset: usize) -> usize {
-    while offset < value.len() && !value.is_char_boundary(offset) {
-        offset += 1;
+pub(super) fn strfind_legacy_bytes(
+    haystack: &str,
+    needle: &str,
+    start: i64,
+    encoding: LegacyEncoding,
+) -> i64 {
+    let total = encoding.encoded_len(haystack);
+    let start = usize::try_from(start.max(0)).unwrap_or(usize::MAX);
+    if start >= total {
+        return -1;
     }
-    offset
+    let byte_start = legacy_index_to_utf8_boundary(haystack, start, encoding);
+    haystack[byte_start..]
+        .find(needle)
+        .and_then(|offset| {
+            i64::try_from(encoding.encoded_len(&haystack[..byte_start + offset])).ok()
+        })
+        .unwrap_or(-1)
+}
+
+fn legacy_index_to_utf8_boundary(value: &str, index: usize, encoding: LegacyEncoding) -> usize {
+    if index == 0 {
+        return 0;
+    }
+    let mut consumed = 0usize;
+    value
+        .char_indices()
+        .find_map(|(offset, character)| {
+            consumed = consumed.saturating_add(encoding.encoded_char_len(character));
+            (consumed >= index).then_some(offset + character.len_utf8())
+        })
+        .unwrap_or(value.len())
 }
 
 pub(super) fn regex_failure(operation: &str, error: &regex::Error) -> ExecutionFailure {

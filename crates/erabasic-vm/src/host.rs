@@ -688,7 +688,7 @@ mod tests;
 use core::CoreNative;
 pub use core::{evaluate_pure_native, evaluate_pure_native_with_compatibility};
 #[cfg(test)]
-use core::{parse_era_numeric, substring_legacy_bytes, substring_scalars};
+use core::{parse_era_numeric, strfind_legacy_bytes, substring_legacy_bytes, substring_scalars};
 pub(crate) use services::apply_owned_width_with_mode;
 #[cfg(test)]
 use services::apply_width;

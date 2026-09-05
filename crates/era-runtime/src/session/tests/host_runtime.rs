@@ -467,6 +467,70 @@ fn prefixed_hex_html_colors_are_shared_by_both_profiles() {
 }
 
 #[test]
+fn snake_tw_hph_print_replaces_markers_after_chinese_text_with_hearts() {
+    let source = r#"@SYSTEM_TITLE
+CALL HPH_PRINT, "【HPH小腹HPH】", "L"
+RESULTS '= HTML_GETPRINTEDSTR(0)
+FORCEWAIT
+RETURN
+@GET_HEARTMARK_HTML(L_COUNT = 1, USE_COLOR = 1)
+#FUNCTIONS
+#DIM DYNAMIC L_COUNT
+#DIM DYNAMIC USE_COLOR
+RETURNF HTMLFONT("❤" * L_COUNT, "Times New Roman", USE_COLOR)
+@HEARTMARK(L_COUNT = 1, L_MODE = "")
+#DIM DYNAMIC L_COUNT
+#DIMS DYNAMIC L_MODE
+HTML_PRINT GET_HEARTMARK_HTML(L_COUNT, L_MODE != "PLAIN"), 1
+@HTMLFONT(L_TEXT, FONT_FACE = "", FONT_COLOR = -1)
+#FUNCTIONS
+#DIMS DYNAMIC L_TEXT
+#DIMS DYNAMIC FONT_FACE
+#DIM DYNAMIC FONT_COLOR
+RETURNF "<font face='" + FONT_FACE + "' color='#FF69B4'>" + L_TEXT + "</font>"
+@HPH_PRINT(L_STR, L_MODE = "")
+#DIMS DYNAMIC L_STR
+#DIMS DYNAMIC L_MODE
+#DIM DYNAMIC L_IDX_HPH
+#DIMS DYNAMIC L_PRINT_PART
+DO
+    L_IDX_HPH = STRFIND(L_STR, "HPH")
+    IF L_IDX_HPH >= 1
+        L_PRINT_PART = %SUBSTRING(L_STR, 0, L_IDX_HPH)%
+        PRINTS @"%L_PRINT_PART%"
+        L_STR = %SUBSTRING(L_STR, L_IDX_HPH, -1)%
+    ELSEIF L_IDX_HPH == 0
+        CALL HEARTMARK
+        L_STR = %SUBSTRING(L_STR, 3, -1)%
+    ELSE
+        PRINTSL @"%L_STR%"
+        RETURN
+    ENDIF
+LOOP
+"#;
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let (session, _, messages) = run_immediate_query_project_with_profile(source, snake);
+
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:#?}");
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::Fault(_))),
+        "{messages:#?}"
+    );
+    let printed = read_runtime_string(session.vm.as_ref().expect("runtime VM"), "RESULTS")
+        .expect("captured printed HTML");
+    assert!(!printed.contains("HPH"), "{printed}");
+    assert!(printed.contains("【❤小腹❤】"), "{printed}");
+    assert_eq!(printed.matches('❤').count(), 2, "{printed}");
+    let visible = projected_presentation_text(&session.presentation.snapshot());
+    assert!(visible.contains("【❤小腹❤】"), "{visible}");
+    assert_eq!(visible.matches('❤').count(), 2, "{visible}");
+}
+
+#[test]
 fn malformed_immediate_html_query_falls_back_to_a_sourced_vm_fault() {
     let (session, _report, messages) = run_immediate_query_project(
         "@SYSTEM_TITLE\nRESULT = HTML_TOPLAINTEXT(\"&#xD800;\") == \"\"\nRETURN\n",
