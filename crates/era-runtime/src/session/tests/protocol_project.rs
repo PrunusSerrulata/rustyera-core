@@ -950,8 +950,12 @@ fn runtime_result_string(session: &RuntimeSession, index: u64) -> String {
 }
 
 fn assert_two_erafl_tab_intents(session: &RuntimeSession) {
-    assert_eq!(session.command_intents.len(), 2);
-    let values = session.command_intents.values().collect::<Vec<_>>();
+    let pending = session
+        .operations
+        .active_input()
+        .expect("eraFL fixture WAIT must be active");
+    assert_eq!(pending.choices.len(), 2);
+    let values = pending.choices.values().collect::<Vec<_>>();
     assert_eq!(
         values
             .iter()
