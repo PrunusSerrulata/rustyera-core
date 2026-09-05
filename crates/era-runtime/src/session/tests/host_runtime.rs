@@ -531,6 +531,83 @@ LOOP
 }
 
 #[test]
+fn printdata_without_d_suffix_preserves_the_active_text_color() {
+    let source = "@SYSTEM_TITLE\n\
+        SETCOLOR 51, 125, 92\n\
+        PRINTDATADL\n\
+        DATAFORM 「显式默认色」\n\
+        ENDDATA\n\
+        PRINTDATAW\n\
+        DATAFORM 「继承口上色」\n\
+        ENDDATA\n\
+        RETURN\n";
+    let snake = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let (session, _, messages) = run_immediate_query_project_with_profile(source, snake);
+
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:#?}");
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::Fault(_))),
+        "{messages:#?}"
+    );
+    let snapshot = session.presentation.snapshot();
+    let text_lines = snapshot
+        .history
+        .logical_lines
+        .iter()
+        .filter_map(|line| {
+            let fragments = line
+                .runs
+                .iter()
+                .filter_map(|run| match run {
+                    DisplayRun::Text { text, style, .. }
+                    | DisplayRun::TextLayout { text, style, .. }
+                        if !text.is_empty() =>
+                    {
+                        Some((text.as_str(), style.foreground))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            (!fragments.is_empty()).then(|| {
+                let text = fragments.iter().map(|(text, _)| *text).collect::<String>();
+                let colors = fragments
+                    .iter()
+                    .map(|(_, foreground)| *foreground)
+                    .collect::<Vec<_>>();
+                (text, colors)
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(text_lines.len(), 2, "{text_lines:#?}");
+    assert_eq!(text_lines[0].0, "「显式默认色」");
+    assert!(
+        text_lines[0].1.iter().all(|foreground| *foreground
+            == era_runtime_protocol::Color {
+                red: 192,
+                green: 192,
+                blue: 192,
+                alpha: 255,
+            }),
+        "{text_lines:#?}"
+    );
+    assert_eq!(text_lines[1].0, "「继承口上色」");
+    assert!(
+        text_lines[1].1.iter().all(|foreground| *foreground
+            == era_runtime_protocol::Color {
+                red: 51,
+                green: 125,
+                blue: 92,
+                alpha: 255,
+            }),
+        "{text_lines:#?}"
+    );
+}
+
+#[test]
 fn malformed_immediate_html_query_falls_back_to_a_sourced_vm_fault() {
     let (session, _report, messages) = run_immediate_query_project(
         "@SYSTEM_TITLE\nRESULT = HTML_TOPLAINTEXT(\"&#xD800;\") == \"\"\nRETURN\n",
