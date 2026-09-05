@@ -82,6 +82,72 @@ fn arraycopy_resolves_runtime_variable_names_and_array_queries_keep_places() {
 }
 
 #[test]
+fn arraycopy_evaluates_string_variables_as_array_names() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n#DIMS CONST OPR_目标 = \"TARGET\"\n#DIM TARGET_LIST, 3\nTARGET:0 = 7\nTARGET:1 = 8\nTARGET:2 = 9\nARRAYCOPY OPR_目标, \"TARGET_LIST\"\nRESULT:0 = TARGET_LIST:0\nRESULT:1 = TARGET_LIST:1\nRESULT:2 = TARGET_LIST:2\nRETURN RESULT\n",
+    );
+    let entry = artifact.functions[0].key;
+    let result = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULT")
+        .unwrap()
+        .key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{:#?}",
+        report.events
+    );
+    assert_eq!(
+        (0..3)
+            .map(|index| vm.read_variable(result, &[index], None).unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            VmValue::Integer(7),
+            VmValue::Integer(8),
+            VmValue::Integer(9),
+        ]
+    );
+}
+
+#[test]
+fn arraycopy_evaluates_both_string_places_before_resolving_names() {
+    let artifact = compile_source(
+        "@SYSTEM_TITLE\n#DIMS SOURCE_NAME\n#DIMS DESTINATION_NAMES, 1\nSOURCE_NAME = \"MISSING\"\nLOCAL = 1\nARRAYCOPY SOURCE_NAME, DESTINATION_NAMES:LOCAL\nRETURN RESULT\n",
+    );
+    let entry = artifact.functions[0].key;
+    let mut natives = NativeServiceRegistry::for_artifact(&artifact);
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    let fault = report
+        .events
+        .iter()
+        .find_map(|event| match event {
+            VmEvent::FiberFaulted { fault, .. } => Some(fault),
+            _ => None,
+        })
+        .expect("ARRAYCOPY should fault while evaluating its destination expression");
+    assert_eq!(fault.code, VmFaultCode::Bounds);
+    assert!(!fault.message.contains("MISSING"));
+}
+
+#[test]
 fn arraycopy_copies_the_shared_extent_when_array_lengths_differ() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\n#DIM TARGET_LIST, 3\nTARGET:0 = 7\nTARGET:1 = 8\nTARGET:2 = 9\nTARGET:3 = 10\nARRAYCOPY \"TARGET\", \"TARGET_LIST\"\nRESULT:0 = TARGET_LIST:0\nRESULT:1 = TARGET_LIST:1\nRESULT:2 = TARGET_LIST:2\nRETURN RESULT\n",
