@@ -1448,6 +1448,38 @@ runtime、协议、profile、缓存、存档、展示行为、fixture 或参考�
   或差分，也不更新根 `CHANGELOG_PENDING.md`。用户既有批次 5 计划文档修改未纳入提交，
   没有推送或合并分支。
 
+### 2026-09-07 双 Oracle 启动工具修复
+
+这是主线合并后补做双 Oracle 验收时暴露的两个独立工具修复，不修改 Rust runtime、协议、
+profile、游戏 fixture 或两个参考引擎的正常游戏语义。
+
+- 原版 reference CLI 在 Wine 重定向 stdin/stdout 时可能在首条响应前卡住。原版仓库提交
+  `058b9f17` 令 wrapper 直接持有 UTF-8 标准流，避开 console code-page setter；schema、
+  请求状态和响应顺序不变。`REFERENCE_CHANGES.md` 已记录逐文件目的、headless 隔离和验证。
+- 蛇版 macOS 入口在 Bash 3.2、`set -u` 和空 artifacts path 下展开空数组并报告
+  `unbound variable`。蛇版仓库提交 `a5d9f48` 改用始终非空的 restore/publish 参数数组，
+  并加入 stubbed 工具回归；`HEADLESS_CHANGES.md` 已记录边界和结果。
+- 本批唯一重构审查在首条测试前完成。审查确认 C#/Bash 边界无需继续重构，并要求回归显式
+  固定 `SKIP_BUILD=0`、stub Git/Wineboot，避免继承环境假通过或触发真实外部工具；两项均在
+  测试前落实。
+- 静态门禁：三仓 diff check、蛇版 Bash/Python 语法与 3 项 Python 单测通过；原版正常工程
+  /CLI 构建分别为 221/2 warnings、0 errors，蛇版分别为 922/16 warnings、0 errors；core
+  `fmt`、workspace all-targets check 和 Clippy `-D warnings` 均通过。当前 Rust 输入仍绑定
+  core `4bd7ccb8`；本批唯一 `cargo test --workspace` 已启动但工具回收前只取得编译输出，
+  无 exit/汇总，故明确记为 unverified 且未重跑。Rust 输入与合并批次已完成的首次全量及
+  修复后定向闭合相同，按输入身份规则复用既有结果；另以完整过滤名运行同输入 parser 回归
+  1/1 通过。
+- Oracle：本批首次原版完整 Wine smoke 在请求前因专用 prefix 的既有 wineserver 失联而
+  失败，未重跑完整 smoke；只终止该专用 server 后，`capabilities` 与
+  `parseExpression("1 + 2 * 3")` 定向监督 exit 0。蛇版唯一完整 smoke exit 0，八组依次为
+  protocol 10、csv 10、runtime 7、inputs 7、reload 11、save 5、limits 9、presentation 7；
+  同输入两请求定向监督亦 exit 0。原版/蛇版响应分别认证固定语义基准
+  `26a35dc9334bb67590b96f7b8efbefbf199e391e` 与
+  `fc4fb21416768c17256d0e82f997e5f99c9bba91`，均为 schema 2、`System.Int64` 和
+  `PlusIntInt(1, MultIntInt(2, 3))`，与 Rust 乘法优先级一致。
+- 未运行 Windows PowerShell smoke。此次只修复 reference/headless 工具，不更新
+  `CHANGELOG_PENDING.md`。
+
 <a id="batch-6"></a>
 
 ## 批次 6：完整蛇版语言
