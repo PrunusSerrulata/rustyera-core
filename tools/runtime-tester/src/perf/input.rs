@@ -68,10 +68,10 @@ pub(super) fn prepare(
             payload,
             content_hash: Some(content_hash),
         };
-        if relative_path.eq_ignore_ascii_case("reraconfig.toml") {
-            if configuration.replace(submitted.clone()).is_some() {
-                return Err("project contains multiple root reraconfig.toml inputs".into());
-            }
+        if relative_path.eq_ignore_ascii_case("reraconfig.toml")
+            && configuration.replace(submitted.clone()).is_some()
+        {
+            return Err("project contains multiple root reraconfig.toml inputs".into());
         }
         files.push(submitted);
     }

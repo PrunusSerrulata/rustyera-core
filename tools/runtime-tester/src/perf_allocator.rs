@@ -257,7 +257,7 @@ mod tests {
     fn nested_counting_window_is_rejected_without_disabling_the_outer_window() {
         let result = std::panic::catch_unwind(|| {
             let _ = measure(MeasurementMode::Counting, || {
-                let _ = measure(MeasurementMode::Counting, || Vec::<u8>::new());
+                let _ = measure(MeasurementMode::Counting, Vec::<u8>::new);
             });
         });
         assert!(result.is_err());
