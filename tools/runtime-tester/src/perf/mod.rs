@@ -12,7 +12,7 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use era_protocol::VersionRange;
+use era_protocol::{VersionRange, WireLimits};
 use era_runtime::{ProjectProgressReporter, RuntimeDriveState};
 use era_runtime_protocol::{
     ClientHello, ConfigurationClientProfile, RuntimeLogLevel, RuntimeMessage,
@@ -195,9 +195,7 @@ fn run(cli: &Cli, sink: &mut JsonlSink) -> AuditResult<()> {
         .encode_payload()?
         .len();
     let probe = PerfSession::new();
-    if u64::try_from(manifest_payload_bytes)
-        .map_or(true, |bytes| bytes > probe.wire_limits.maximum_payload_bytes)
-    {
+    if manifest_payload_bytes > probe.wire_limits.maximum_payload_bytes {
         return Err(format!(
             "encoded manifest is {manifest_payload_bytes} bytes, exceeding creator payload limit {}",
             probe.wire_limits.maximum_payload_bytes
@@ -213,7 +211,8 @@ fn run(cli: &Cli, sink: &mut JsonlSink) -> AuditResult<()> {
         "allocatorMode": allocator_name(cli.allocator), "allocatorCalibration": calibration,
         "input": {"files": prepared.input_count, "sourceBytes": prepared.source_bytes,
             "resourceBytes": prepared.resource_bytes, "manifestPayloadBytes": manifest_payload_bytes},
-        "requestedLimits": probe.requested_limits, "creatorWireLimits": probe.wire_limits
+        "requestedLimits": probe.requested_limits,
+        "creatorWireLimits": wire_limits_json(probe.wire_limits)
     }))?;
     watchdog.publish(json!({"phase": "prepared", "scenario": cli.scenario}), true)?;
     for iteration in 0..cli.iterations.get() {
@@ -532,6 +531,13 @@ const fn allocator_name(mode: MeasurementMode) -> &'static str {
     }
 }
 
+fn wire_limits_json(limits: WireLimits) -> serde_json::Value {
+    json!({
+        "maximumEnvelopeBytes": limits.maximum_envelope_bytes,
+        "maximumPayloadBytes": limits.maximum_payload_bytes,
+    })
+}
+
 fn rss_bytes() -> Option<u64> {
     let output = std::process::Command::new("/bin/ps")
         .args(["-o", "rss=", "-p", &std::process::id().to_string()])
@@ -593,6 +599,17 @@ mod tests {
         let mut line = String::new();
         assert!(resume_profiler(std::io::Cursor::new(Vec::<u8>::new()), &mut line).is_err());
         assert!(resume_profiler(std::io::Cursor::new(b"resume\n"), &mut line).is_ok());
+    }
+
+    #[test]
+    fn creator_wire_limits_use_the_metadata_schema() {
+        assert_eq!(
+            wire_limits_json(WireLimits {
+                maximum_envelope_bytes: 128,
+                maximum_payload_bytes: 127,
+            }),
+            json!({"maximumEnvelopeBytes": 128, "maximumPayloadBytes": 127})
+        );
     }
 
     #[test]

@@ -684,6 +684,26 @@ pub(super) fn run(compile: bool) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn report_rss(stage: &str) {
+    let pid = std::process::id().to_string();
+    let Ok(output) = std::process::Command::new("/bin/ps")
+        .args(["-o", "rss=", "-p", &pid])
+        .output()
+    else {
+        println!("rss_{stage}_bytes=unavailable");
+        return;
+    };
+    let Ok(stdout) = String::from_utf8(output.stdout) else {
+        println!("rss_{stage}_bytes=unavailable");
+        return;
+    };
+    let Ok(rss_kib) = stdout.trim().parse::<u64>() else {
+        println!("rss_{stage}_bytes=unavailable");
+        return;
+    };
+    println!("rss_{stage}_bytes={}", rss_kib.saturating_mul(1024));
+}
+
 #[cfg(test)]
 mod tests {
     use super::diagnostic_batch;
