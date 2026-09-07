@@ -162,7 +162,7 @@ fn immediate_queries_observe_latest_runtime_state_without_host_boundaries() {
         FLAG:10 = HTML_TOPLAINTEXT(\"a&nbsp;b\") == \"a b\"\n\
         FLAG:11 = HTML_ESCAPE(\"<\") == \"&lt;\"\n\
         RESULTS '= HTML_GETPRINTEDSTR(0)\n\
-        FLAG:12 = RESULTS == \"<p align='center'><nobr><b>p</b><b>e</b><b>n</b><b>d</b><b>i</b><b>n</b><b>g</b></nobr></p>\"\n\
+        FLAG:12 = RESULTS == \"<p align='center'><nobr><font face='query-font' color='#010203'><b>p</b></font><font face='query-font' color='#010203'><b>e</b></font><font face='query-font' color='#010203'><b>n</b></font><font face='query-font' color='#010203'><b>d</b></font><font face='query-font' color='#010203'><b>i</b></font><font face='query-font' color='#010203'><b>n</b></font><font face='query-font' color='#010203'><b>g</b></font></nobr></p>\"\n\
         FLAG:13 = GETDISPLAYLINE(0) == \"oldest\"\n\
         FLAG:14 = GETDISPLAYLINE(1) == \"pending\"\n\
         FLAG:15 = HTML_GETPRINTEDSTR(1) == \"<p align='left'><nobr>oldest</nobr></p>\"\n\
@@ -182,7 +182,7 @@ fn immediate_queries_observe_latest_runtime_state_without_host_boundaries() {
             RESULT:49 = GETFONT() == \"query-font\"\n\
             RESULT:50 = HTML_TOPLAINTEXT(\"a&nbsp;b\") == \"a b\"\n\
             RESULT:51 = HTML_ESCAPE(\"<\") == \"&lt;\"\n\
-            RESULT:52 = HTML_GETPRINTEDSTR(0) == \"<p align='center'><nobr><b>p</b><b>e</b><b>n</b><b>d</b><b>i</b><b>n</b><b>g</b></nobr></p>\"\n\
+            RESULT:52 = HTML_GETPRINTEDSTR(0) == \"<p align='center'><nobr><font face='query-font' color='#010203'><b>p</b></font><font face='query-font' color='#010203'><b>e</b></font><font face='query-font' color='#010203'><b>n</b></font><font face='query-font' color='#010203'><b>d</b></font><font face='query-font' color='#010203'><b>i</b></font><font face='query-font' color='#010203'><b>n</b></font><font face='query-font' color='#010203'><b>g</b></font></nobr></p>\"\n\
             RESULT:53 = GETDISPLAYLINE(1) == \"pending\"\n\
         NEXT\n\
         SKIPLOG 0\n\
