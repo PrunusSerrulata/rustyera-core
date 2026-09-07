@@ -56,7 +56,7 @@ fn consumed_owned_hir_matches_the_borrowed_compile() {
 }
 
 #[test]
-fn compilation_preparation_reports_intermediate_work() {
+fn compilation_reports_ordered_intermediate_work() {
     let events = std::sync::Mutex::new(Vec::new());
     let callback = |progress| events.lock().unwrap().push(progress);
     let project = analyzed("@SYSTEM_TITLE\nCALL HELPER\nRETURN\n@HELPER\nRETURN\n");
@@ -102,4 +102,34 @@ fn compilation_preparation_reports_intermediate_work() {
             .any(|progress| progress.completed > 0 && progress.completed < progress.total),
         "compilation preparation did not expose intermediate progress: {compiling:?}"
     );
+
+    let finalizing = events
+        .iter()
+        .filter(|progress| progress.stage == CompileProgressStage::Finalizing)
+        .collect::<Vec<_>>();
+    let finalizing_total = finalizing.first().unwrap().total;
+    assert_eq!(finalizing.first().unwrap().completed, 0);
+    assert!(
+        finalizing.iter().all(|progress| {
+            progress.total == finalizing_total && progress.completed <= progress.total
+        }),
+        "finalization progress changed its total or exceeded it: {finalizing:?}"
+    );
+    assert!(
+        finalizing
+            .windows(2)
+            .all(|progress| progress[0].completed < progress[1].completed),
+        "finalization progress did not increase strictly: {finalizing:?}"
+    );
+    assert_eq!(finalizing.last().unwrap().completed, finalizing_total);
+
+    let last_compiling = events
+        .iter()
+        .rposition(|progress| progress.stage == CompileProgressStage::Compiling)
+        .unwrap();
+    let first_finalizing = events
+        .iter()
+        .position(|progress| progress.stage == CompileProgressStage::Finalizing)
+        .unwrap();
+    assert!(last_compiling < first_finalizing);
 }

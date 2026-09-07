@@ -126,6 +126,12 @@ fn compile_progress_stride(total: usize) -> usize {
     total.div_ceil(100).clamp(1, 64)
 }
 
+const SOURCE_ENTRY_FINALIZATION_CHUNK_SIZE: usize = 8 * 1024;
+
+fn source_entry_finalization_chunks(total: usize) -> usize {
+    total.div_ceil(SOURCE_ENTRY_FINALIZATION_CHUNK_SIZE)
+}
+
 struct CompileProgressCounter<'a> {
     stage: CompileProgressStage,
     total: usize,
@@ -503,7 +509,10 @@ pub fn runtime_native_validation_context(
 
 #[cfg(test)]
 mod tests {
-    use super::{compile_progress_stride, should_report_progress};
+    use super::{
+        SOURCE_ENTRY_FINALIZATION_CHUNK_SIZE, compile_progress_stride, should_report_progress,
+        source_entry_finalization_chunks,
+    };
 
     #[test]
     fn compile_progress_is_frequent_for_large_projects() {
@@ -521,5 +530,29 @@ mod tests {
         assert!(!should_report_progress(10, 10, 1_000, true));
         assert!(should_report_progress(11, 10, 1_000, true));
         assert!(should_report_progress(1_000, 991, 1_000, false));
+    }
+
+    #[test]
+    fn source_entry_finalization_reports_large_projects_in_bounded_chunks() {
+        let cases = [
+            (0, 0),
+            (1, 1),
+            (8_191, 1),
+            (8_192, 1),
+            (8_193, 2),
+            (65_536, 8),
+            (65_537, 9),
+            (8_200_000, 1_001),
+            (
+                usize::MAX,
+                usize::MAX / SOURCE_ENTRY_FINALIZATION_CHUNK_SIZE + 1,
+            ),
+        ];
+        for &(entries, expected_chunks) in &cases {
+            assert_eq!(source_entry_finalization_chunks(entries), expected_chunks);
+        }
+        for adjacent in cases.windows(2) {
+            assert!(adjacent[0].1 <= adjacent[1].1);
+        }
     }
 }

@@ -366,7 +366,7 @@ fn compile_project_inner(
         .iter()
         .map(FunctionBuild::source_entry_count)
         .sum::<usize>();
-    let source_entry_chunks = source_entry_count.div_ceil(65_536);
+    let source_entry_chunks = source_entry_finalization_chunks(source_entry_count);
     let finalizing_total = total_functions
         .saturating_mul(2)
         .saturating_add(source_entry_chunks)
@@ -589,7 +589,10 @@ fn compile_project_inner(
     fingerprint_order.sort_unstable_by_key(|entry| fingerprint_prefixes[*entry as usize]);
     finalizing_progress.checkpoint();
     let mut statement_fingerprints = Vec::new();
-    for chunk in fingerprint_order.chunks(65_536) {
+    // Keep progress callbacks tied to completed source-map work. Large single-threaded WASM
+    // projects can take longer than the client watchdog interval to process 65,536 random writes,
+    // so use smaller bounded chunks without manufacturing timer-based progress.
+    for chunk in fingerprint_order.chunks(SOURCE_ENTRY_FINALIZATION_CHUNK_SIZE) {
         for &entry_index in chunk {
             let prefix = fingerprint_prefixes[entry_index as usize];
             let mut fingerprint = [0; 32];
