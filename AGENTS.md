@@ -63,16 +63,15 @@ RustyEra 使用 Rust 复刻 Emuera 的 EraBasic 语言和运行环境。发生�
 
 ## 蛇版适配计划与实施记录
 
-本仓库的蛇版开发使用 `feature/snake-compatibility` 分支及专用 worktree；其兄弟
-`../rustyera-tui`、`../rustyera-web` 必须是同组 worktree，不得误用原 master 工作区。
-开工先核对分支、工作树和实际 Cargo patch/target 来源；具体位置与隔离要求见主工作区
-规范。此分支仍同时维护 `emuera.em` 与 `emuera.skia.snake` 的明确兼容边界，不能用
-蛇版行为全局覆盖原版行为。
+蛇版能力与原版能力共同在本仓库主分支维护；`../rustyera-tui`、`../rustyera-web` 也在
+各自主分支同步适配，不再要求蛇版专用分支或 worktree。开工先分别核对三个仓库的当前
+revision、状态、实际 Cargo patch/target 来源和发布绑定。主线仍同时维护 `emuera.em`
+与 `emuera.skia.snake` 的明确兼容边界，不能用蛇版行为全局覆盖原版行为。
 
 core 负责语言、VM、规范化状态和公共协议，前端 I/O、数据库后端、像素/音频观察仍通过
 版本化 service 表达。跨组件改动先明确协议/Schema、capability、profile/cache/save
 identity 及所需前端适配，完成 core 契约门禁后再做集成验收；分别记录各组件 SHA。
-不得以切换分支、协议占位或 oracle smoke 代替已实现和通过验证的证据。
+不得以切换 profile、协议占位或 oracle smoke 代替已实现和通过验证的证据。
 
 按计划开发或续做蛇版适配时，开工前必须读取以下两个文档：
 
