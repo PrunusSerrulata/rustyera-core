@@ -255,17 +255,12 @@ impl NativeService for CoreNative {
                 };
                 VmValue::String(substring_scalars(string(0)?, start, length))
             }
-            "strfind" => {
-                let start = usize::try_from(integer(2).unwrap_or(0)).unwrap_or(usize::MAX);
-                let haystack = string(0)?;
-                let start = utf8_boundary_at_or_after(haystack, start).min(haystack.len());
-                VmValue::Integer(
-                    haystack[start..]
-                        .find(string(1)?)
-                        .and_then(|offset| i64::try_from(start + offset).ok())
-                        .unwrap_or(-1),
-                )
-            }
+            "strfind" => VmValue::Integer(strfind_legacy_bytes(
+                string(0)?,
+                string(1)?,
+                integer(2).unwrap_or(0),
+                self.legacy_encoding,
+            )),
             "strfindu" => {
                 let haystack = string(0)?;
                 let start = integer(2).unwrap_or(0);

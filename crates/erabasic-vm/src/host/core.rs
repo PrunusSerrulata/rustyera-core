@@ -452,21 +452,7 @@ pub(super) fn substring_legacy_bytes(
         .filter(|length| *length <= total)
         .unwrap_or(total);
 
-    let mut characters = value.char_indices();
-    let byte_start = if start == 0 {
-        0
-    } else {
-        let mut consumed: usize = 0;
-        loop {
-            let Some((index, character)) = characters.next() else {
-                return String::new();
-            };
-            consumed = consumed.saturating_add(encoding.encoded_char_len(character));
-            if consumed >= start {
-                break index + character.len_utf8();
-            }
-        }
-    };
+    let byte_start = legacy_index_to_utf8_boundary(value, start, encoding);
     let mut consumed: usize = 0;
     let byte_length = value[byte_start..]
         .char_indices()
@@ -492,11 +478,40 @@ pub(super) fn substring_scalars(value: &str, start: i64, length: Option<i64>) ->
         .collect()
 }
 
-fn utf8_boundary_at_or_after(value: &str, mut offset: usize) -> usize {
-    while offset < value.len() && !value.is_char_boundary(offset) {
-        offset += 1;
+pub(super) fn strfind_legacy_bytes(
+    haystack: &str,
+    needle: &str,
+    start: i64,
+    encoding: LegacyEncoding,
+) -> i64 {
+    let total = encoding.encoded_len(haystack);
+    let Ok(start) = usize::try_from(start) else {
+        return -1;
+    };
+    if start >= total {
+        return -1;
     }
-    offset
+    let byte_start = legacy_index_to_utf8_boundary(haystack, start, encoding);
+    haystack[byte_start..]
+        .find(needle)
+        .and_then(|offset| {
+            i64::try_from(encoding.encoded_len(&haystack[..byte_start + offset])).ok()
+        })
+        .unwrap_or(-1)
+}
+
+fn legacy_index_to_utf8_boundary(value: &str, index: usize, encoding: LegacyEncoding) -> usize {
+    if index == 0 {
+        return 0;
+    }
+    let mut consumed = 0usize;
+    value
+        .char_indices()
+        .find_map(|(offset, character)| {
+            consumed = consumed.saturating_add(encoding.encoded_char_len(character));
+            (consumed >= index).then_some(offset + character.len_utf8())
+        })
+        .unwrap_or(value.len())
 }
 
 pub(super) fn regex_compile_failure(

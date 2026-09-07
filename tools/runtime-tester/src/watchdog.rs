@@ -61,6 +61,11 @@ impl Comparison {
 fn required_identical_samples(state: &Value) -> usize {
     let observed = state.get("observed").unwrap_or(state);
     let phase = &observed["phase"];
+    // A perf-run checkpoint pause is explicitly requested so a CLI profiler can attach. The
+    // child is blocked on stdin by design; the wall-clock budget and process cleanup still apply.
+    if phase.as_str() == Some("profiler_pause") {
+        return usize::MAX;
+    }
     // Only explicit project-loading stages receive the user-authorized grace.
     // Report assembly/writes, execution and input waits retain the strict rule.
     let loading = matches!(
@@ -299,6 +304,16 @@ mod tests {
         let changed =
             json!({"phase": "running", "pending": "source.erb", "completed": 5, "diagnostics": []});
         assert!(!comparison.sample(&changed));
+    }
+
+    #[test]
+    fn explicit_profiler_pause_never_trips_identical_state_gate() {
+        let mut comparison = Comparison::default();
+        let state = json!({"observed": {"phase": "profiler_pause", "checkpoint": "ready"}});
+        for _ in 0..32 {
+            assert!(!comparison.sample(&state));
+        }
+        assert_eq!(required_identical_samples(&state), usize::MAX);
     }
 
     #[test]

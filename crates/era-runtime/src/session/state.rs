@@ -127,6 +127,41 @@ struct ProjectDiagnosticPublication {
     sites: BTreeSet<ProjectDiagnosticSite>,
 }
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct HtmlWarningSite {
+    code: &'static str,
+    generation: u64,
+    function: erabasic_bytecode::SymbolKey,
+    instruction: u32,
+    start: usize,
+    end: usize,
+    closing: &'static str,
+    crossed: Vec<&'static str>,
+}
+
+impl HtmlWarningSite {
+    fn new(
+        code: &'static str,
+        origin: &erabasic_vm::VmExecutionOrigin,
+        warning: &erabasic_html::HtmlWarning,
+    ) -> Self {
+        Self {
+            code,
+            generation: origin.generation.0,
+            function: origin.function,
+            instruction: origin.instruction,
+            start: warning.start,
+            end: warning.end,
+            closing: warning.closing.tag_name(),
+            crossed: warning
+                .crossed
+                .iter()
+                .map(|kind| kind.tag_name())
+                .collect(),
+        }
+    }
+}
+
 /// Single-owner runtime actor. Methods only enqueue, drive, and dequeue messages;
 /// no frontend code can run inside a VM instruction dispatch.
 #[allow(clippy::struct_excessive_bools)]
@@ -181,6 +216,7 @@ pub struct RuntimeSession {
     device_input: crate::device_input::DeviceInput,
     environment: crate::environment::Environment,
     input_notice_sites: BTreeSet<(String, u64, erabasic_bytecode::SymbolKey, u32)>,
+    html_warning_sites: BTreeSet<HtmlWarningSite>,
     hotkey_state: Vec<i64>,
     key_macros: KeyMacros,
     queued_input: VecDeque<QueuedInput>,
@@ -354,4 +390,40 @@ struct PendingCandidateCommit {
     effects: Vec<EffectKind>,
     save_bytes: Vec<u8>,
     save_slot: Option<u32>,
+}
+
+#[cfg(test)]
+mod html_warning_site_tests {
+    use super::*;
+
+    #[test]
+    fn warning_identity_keeps_distinct_tag_content_at_the_same_source_range() {
+        let origin = erabasic_vm::VmExecutionOrigin {
+            generation: erabasic_vm::GenerationId(3),
+            function: erabasic_bytecode::SymbolKey::default(),
+            function_name: "DYNAMIC_HTML".into(),
+            instruction: 7,
+            command: "HTML_PRINT".into(),
+            source: None,
+        };
+        let first = erabasic_html::HtmlWarning {
+            kind: erabasic_html::HtmlWarningKind::CrossedClosingTag,
+            start: 8,
+            end: 15,
+            closing: erabasic_html::HtmlElementKind::Font,
+            crossed: vec![erabasic_html::HtmlElementKind::Button],
+        };
+        let second = erabasic_html::HtmlWarning {
+            closing: erabasic_html::HtmlElementKind::Paragraph,
+            crossed: vec![erabasic_html::HtmlElementKind::NoBreak],
+            ..first.clone()
+        };
+        let first_site = HtmlWarningSite::new("runtime.html.warning", &origin, &first);
+        let second_site = HtmlWarningSite::new("runtime.html.warning", &origin, &second);
+        let mut sites = BTreeSet::new();
+
+        assert!(sites.insert(first_site.clone()));
+        assert!(!sites.insert(first_site));
+        assert!(sites.insert(second_site));
+    }
 }

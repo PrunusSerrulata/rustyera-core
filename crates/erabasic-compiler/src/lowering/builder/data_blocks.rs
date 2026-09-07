@@ -118,9 +118,10 @@ impl Builder<'_> {
                 continue;
             };
             let value_type = self.lower_argument(argument, line.location);
-            let command = if opener.contains('K') {
+            let modifiers = opener.strip_prefix("PRINTDATA").unwrap_or_default();
+            let command = if modifiers.contains('K') {
                 "PRINTK"
-            } else if opener.contains('D') {
+            } else if modifiers.contains('D') {
                 "PRINTD"
             } else {
                 "PRINT"

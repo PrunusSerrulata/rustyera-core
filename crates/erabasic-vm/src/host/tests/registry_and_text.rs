@@ -167,6 +167,54 @@ fn non_u_substring_uses_legacy_bytes_and_advances_to_boundaries() {
 }
 
 #[test]
+fn non_u_strfind_returns_offsets_accepted_by_non_u_substring() {
+    let input = "【HPH小腹HPH】";
+    let first = strfind_legacy_bytes(input, "HPH", 0, LegacyEncoding::ChineseHans);
+    assert_eq!(first, 2);
+    assert_eq!(
+        substring_legacy_bytes(input, first, Some(3), LegacyEncoding::ChineseHans),
+        "HPH"
+    );
+
+    let remainder = substring_legacy_bytes(input, first + 3, None, LegacyEncoding::ChineseHans);
+    let second = strfind_legacy_bytes(&remainder, "HPH", 0, LegacyEncoding::ChineseHans);
+    assert_eq!(second, 4);
+    assert_eq!(
+        substring_legacy_bytes(&remainder, second, Some(3), LegacyEncoding::ChineseHans),
+        "HPH"
+    );
+
+    for start in [1, 2] {
+        assert_eq!(
+            strfind_legacy_bytes("界HPH", "HPH", start, LegacyEncoding::ChineseHans),
+            2,
+            "a start within or at the end of a multibyte character advances past it"
+        );
+    }
+    assert_eq!(
+        strfind_legacy_bytes("界HPH", "HPH", 3, LegacyEncoding::ChineseHans),
+        -1,
+        "a start after the first marker character must not search backwards"
+    );
+
+    for encoding in [
+        LegacyEncoding::ChineseHans,
+        LegacyEncoding::ChineseHant,
+        LegacyEncoding::Japanese,
+        LegacyEncoding::Korean,
+    ] {
+        let input = "A界B";
+        let total = i64::try_from(encoding.encoded_len(input)).expect("short fixture length");
+        assert_eq!(strfind_legacy_bytes(input, "", -1, encoding), -1);
+        assert_eq!(substring_legacy_bytes(input, -1, Some(1), encoding), "A");
+        assert_eq!(strfind_legacy_bytes(input, "B", 1, encoding), 3);
+        assert_eq!(substring_legacy_bytes(input, 3, Some(1), encoding), "B");
+        assert_eq!(strfind_legacy_bytes(input, "", total, encoding), -1);
+        assert_eq!(substring_legacy_bytes(input, total, None, encoding), "");
+    }
+}
+
+#[test]
 fn context_free_strform_requires_the_vm_for_runtime_expansion() {
     assert_eq!(
         evaluate_pure_native("STRFORM", vec![VmValue::String("plain text".into())]),

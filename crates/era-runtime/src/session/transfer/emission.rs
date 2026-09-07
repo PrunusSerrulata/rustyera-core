@@ -617,6 +617,7 @@ impl RuntimeSession {
         self.operations.bind_epoch(self.epoch.0);
         self.device_input = crate::device_input::DeviceInput::default();
         self.input_notice_sites.clear();
+        self.html_warning_sites.clear();
         self.command_intents.clear();
         self.reusable_system_intents.clear();
         self.next_interaction_id = 1;

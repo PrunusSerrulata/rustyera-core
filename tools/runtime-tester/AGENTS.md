@@ -23,12 +23,18 @@ cargo run --manifest-path tools/runtime-tester/Cargo.toml -- COMMAND [PROJECT] [
 ```
 
 支持 `registry`、`minimal`、`minimal-root-paths`、`csv`、`analyzer`、`compile`、
-`benchmark`、`restore-saved`、`parse-file` 和 `project-extractor-all`。修改本目录 Rust
+`restore-saved`、`parse-file`、`perf-run` 和 `project-extractor-all`。修改本目录 Rust
 代码时继续遵守仓库根 `AGENTS.md` 的格式、Clippy、测试顺序和测试子 agent 要求。
 `compile PROJECT [PROFILE]` 的可选 profile 使用完整兼容标识（如
 `emuera.skia.snake`）；该命令由 5 秒完整状态看门狗监督，分析或编译错误会返回非零状态。
 该入口固定使用蛇版 TW 冻结配置中的递归目录、文件排序、ERD、全角空格、函数警告、
 用户实参转换、二进制保存和错误钩子策略，不从游戏配置静默推断另一套语义。
+
+`perf-run` 只接受显式 `emuera.skia.snake` profile、隔离项目副本、版本化 trace、场景和
+正迭代次数；CLI、trace schema、JSONL 字段及 profiler checkpoint 见 `PERF_RUN.md`。
+它是本工具覆盖加载期与运行期的唯一性能探针；旧 `benchmark` 已移除。`compile`、
+`coverage`、`project-extractor-all` 与恢复审计中的 elapsed/RSS 只是普通进度或工具诊断，
+不得作为性能结论或另一套探针；计数 allocator 只安装在本审计二进制，不得迁入生产库。
 
 循环迭代时，上述批次范围指该批次的当前轮次；各轮独立计算审查次数和测试预算。单轮预算
 耗尽只结束该轮测试，不能提前结束未达用户目标且未到用户时限的迭代任务。有时限须预留

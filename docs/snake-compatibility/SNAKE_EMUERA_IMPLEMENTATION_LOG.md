@@ -1208,6 +1208,246 @@ Web 发布 pin 未变，core worktree 后续 `02f8cf76` 仅含文档，不改变
 不影响已由组件测试、完整历史 DOM、真实 Tauri 几何及两种原生浏览器启动/兼容断面覆盖的
 共享图像投影结论。
 
+### 2026-09-05 蛇版 Web 动态地图 Runtime 等待回归修复验收
+
+本次是既有动态地图修复后的 Web 定向回归批次。用户报告蛇版 TW 打开后持续显示“等待
+Runtime…”且无法交互；同时要求继续验证动态地图单帧成本，并保证原版 eraTW 不回归。
+没有修改 core、协议、缓存身份、游戏脚本或 TUI；Web/WASM 继续使用 core pin
+`23c01c5b534b56b4f35c1a8865816cd99c070fe8`，WASM revision
+`1ae98c68183e0aee2f280c0fb1c40fc2117bd134927e3a79f2da5cb90cda3e5a`。
+
+- 根因是 Web 在每次 `advance_time` 发送前便开始 NF 展示事务。Runtime 合法地把尚未到其
+  逻辑 deadline 的采样视为无操作，不发送 `wait_changed` 或展示事件，前端事务因而永久
+  保持 staged，`canInteract=false`。修复后仍按 16 ms 调度采样，但只发送时间；仅由 Runtime
+  权威的 wait close / `set_input_wait:null` 开始原子事务。Runtime 与前端时钟原点不同及
+  超过 JavaScript 安全整数的 deadline 均有回归覆盖。
+- 游戏 `emuera.config` 的 `FPS:3` 仍由脚本换算成约 333 ms 的 `TINPUTSNF` deadline；前端
+  16 ms 是检查 Runtime deadline 的调度粒度，不是游戏画面 60 fps。NF 的 16–250 ms 恢复窗
+  只在已发布帧与下一次推进间保留交互机会，不替代 Runtime deadline。
+- 性能定位区分出两项测试开销：`sample_queries` 曾逐次复制多 MiB service ledger；冷编译
+  后远程测试文件系统还会在主线程 base64 写入 16 MiB 缓存块。轻量快照和当前身份精确缓存
+  排除两者后，蛇版地图两轮稳态采样为 11.927–35.031 ms，视口和按钮几何稳定；没有发现
+  Runtime/DOM 单帧超过 1 秒的产品性能缺陷。原子探针改为从权威交互锁定边界到目标历史
+  revision 检查真实可见历史，不再把点击前动画、wait-only revision 或下一动画周期误报为撕裂。
+- Web 提交：产品修复及回归
+  `c4023e546a5d8fe523a0d1c8db4dde2eb0a999cf`；动画测量/原子探针与场景修正
+  `3ce2c09ddb5945cd6f02b5d2ba7298d56ad76390`；Vitest 工作目录与策略 fixture 修正
+  `2b734a8bc89e01c507aabfc0bf74eeb82279323f`。根待发布日志为
+  `69dad15290e02258068f80c699752fa232e6b36b`。
+- 唯一重构审查在首条测试前完成，要求移除跨时钟域 deadline 比较和发送前 staging，改以
+  Runtime close 事件为事务边界；必选与可选意见均已落实。首次完整 Vitest 为
+  **112 files / 1590 passed / 5 failed**，失败均为测试文件的跨文件贪婪正则或 jsdom
+  `import.meta.url` 文件路径假设；按规则未重跑完整套件。修复后定向
+  `runtimeStore` **214/214**、Tauri 性能策略 **11/11**、Web runner 策略 **39/39**，typecheck、
+  定向 ESLint、Prettier 和 Web build 均 exit 0。
+- Chromium 冷启动可交互通过：
+  `.rustyera/test-runs/snake-tw-open-interactive-20260904164814923-3564/trace.ndjson`。
+  精确缓存蛇版存档→搬家→地图刷新→hover→真实 1997 点击→恢复输入通过：
+  `.rustyera/test-runs/snake-tw-dynamic-map-20260904171558196-5743/trace.ndjson`；最终
+  `waiting_input`、`canInteract=true`、`fault=null`。原版 eraTW 动态地图和 2000 点击通过：
+  `.rustyera/test-runs/eratw-dynamic-map-20260904171810420-5896/trace.ndjson`。
+- Firefox 155 完整兼容断面通过：
+  `.rustyera/test-runs/browser-compat-firefox-1788542369293/snapshots.ndjson`。Safari 26.6.2
+  首次在 Runtime 无 fault 时发生 WebDriver `invalid session id`/`ECONNREFUSED` 基础设施失败，
+  保留 `.rustyera/test-runs/browser-compat-safari-1788542426857/`；同断面定向重试通过于
+  `.rustyera/test-runs/browser-compat-safari-1788542468756/snapshots.ndjson`。
+- 真实蛇版动态地图以浏览器 Web 为验收重点；TUI 当前缺少运行该游戏所需能力，未伪装动态
+  验收，也未发现同类前端 staging 实现。未执行 Tauri 蛇版整图路径；共享 TypeScript 单测与
+  Web/WASM 浏览器断面通过。用户既有 Web `Cargo.lock`、core 批次 5 计划修改均未纳入提交。
+  测试材料和 142,892,702-byte 精确缓存
+  `/private/tmp/rustyera-snake-map-cache-current.reracache`（SHA-256
+  `a24f4db1e89a309f71e16b4b36049bbacd05507d901bc429eae20517e37a08e6`）按循环任务规则保留。
+
+### 2026-09-05 蛇版 Web Bad Apple 与 Tauri 视口回归修复验收
+
+本次是批次 5 既有客户端能力上的 Web 定向修复批次，不修改 core、协议、profile、缓存或
+存档身份。Web/WASM/Tauri 继续绑定 core
+`23c01c5b534b56b4f35c1a8865816cd99c070fe8`；主线 Tauri 视口修复先提交，再同步到蛇版
+分支。用户解除本任务的 60 分钟测试预算，并将浏览器 33 ms 帧间隔由硬门禁调整为尽力优化
+和如实测量；唯一重构审查、静态先行、首次全量一次及 5 秒完整 DOM/runtime 看门狗仍保留。
+
+- Tauri 过去把刚读取的内容视口尺寸与尚未稳定的外层窗口边框混用；启动配置可能以零边框
+  或当前布局的不同口径重复换算，保存视口后每次重启高度继续缩小。现在 Tauri 等待已挂载
+  游戏视口的稳定测量，只复用该测量缓存的 chrome 宽高应用 `WindowX/WindowY`；真实
+  Tauri 往返验证宽高误差均不超过 1 CSS px。主线 Web commit
+  `ad0cdd45363dca8d286c6ff28548b4cb2097ce44`，蛇版同步 commit
+  `f4a0d101ad0233fdc1bec90356294dfc21a5c0f6`。
+- Bad Apple 的脚本在 `AWAIT` 设备泵中逐帧更新展示，再用 `GETTEXTBOX` 判断终止。Web 过去
+  只在普通输入等待发布展示，设备泵帧留在 staged 状态，禁用的 prompt 又无法把键盘/鼠标
+  反映为文本状态，因而标题图不变且 Runtime 永久运行。现在在实际 DevicePump service
+  边界发布观察帧，并在设备泵期间保持临时文本观察；非修饰键、Enter、Escape、普通字符和
+  鼠标按下均能结束播放。多行字符画在无普通 input wait 时仍保留几何并滚动到当前帧。
+- 浏览器项目资源按规范化路径建立索引并复用 manifest identity，避免动画资源查找时反复
+  枚举目录和读取同一文件。冷启动后 30 帧样本仍受首轮文件/解码影响，最大帧间隔
+  818 ms；后续 6 帧为 662.5 ms，完全预热后的两组 5 帧分别为 43.9/45.2 ms，DOM 均按帧
+  同步且 presentation revision 固定步进 25。真实 Tauri 120 帧样本最大帧间隔 48 ms，
+  120 帧全部进入 DOM、步进固定且无 long task；paint checkpoint 受审计回调约 1002 ms
+  超时，因此不把 33 ms 或 paint 延迟宣称为达标。
+- Bad Apple 与资源/遥测/回归场景由 Web commit
+  `76443387faafda0e0a56fb8acd91271f281e963f` 提交。唯一重构审查要求把帧发布绑定到真实
+  DevicePump 边界、避免延时猜测释放并复用现有投影状态；均在动态测试前落实。一次
+  `requestAnimationFrame` 让步实验没有实质改善（48 ms 到 46 ms，paint 仍超时），已撤回。
+
+静态门禁中，首次且唯一完整 Vitest 为 **1597/1601 passed**；4 个失败经对应 trace 定位并
+修复后只做定向复验，不重跑全量。最终受影响 runtimeStore **216/216**、Web runner
+**91/91**、testing control **41/41**、Tauri performance audit **12/12**、runner policy
+**74/74** 通过；typecheck、定向 ESLint/Prettier、Web build 与 `build:wasm` 均 exit 0。
+
+| 客户端 / 场景 | 结果与证据 |
+|---|---|
+| Chromium 151 蛇版 TW Bad Apple | exit 0；四轮分别以鼠标左键、Enter、Escape、普通字符退出，均返回标题且音频停止；字符画多行 DOM 可见，无 5 秒静止。`.rustyera/test-runs/snake-tw-bad-apple-20260904193926496-18836/trace.ndjson` |
+| Tauri WebDriver Bad Apple | exit 0；真实 native bridge 观察至少 120 帧、固定 revision 步进、逐帧 DOM 同步；可信 W3C 左键退出后返回标题且音频停止。`.rustyera/test-runs/tauri-snapshots/2026-09-04T21-04-13.965Z-snake-bad-apple.spec.mjs.jsonl` |
+| Tauri WebDriver 视口往返 | 主线和蛇版均 exit 0，保存当前游戏视口并重启后宽高误差各不超过 1 px。主线 `.rustyera/test-runs/tauri-snapshots/2026-09-04T21-17-30.840Z-preferences.spec.mjs.jsonl`；蛇版 `.rustyera/test-runs/tauri-snapshots/2026-09-04T21-18-50.119Z-preferences.spec.mjs.jsonl` |
+| eraRorona 回归 | opening-right-skip、presentation-atomicity、master-interactions 三个真实 Chromium 场景均 exit 0，原子展示与可交互终态保持。证据分别为 `.rustyera/test-runs/erarorona-opening-right-skip-20260904194457082-19240/trace.ndjson`、`.rustyera/test-runs/erarorona-presentation-atomicity-20260904200541940-21048/trace.ndjson`、`.rustyera/test-runs/erarorona-master-interactions-20260904200624991-21122/trace.ndjson` |
+| Firefox 155 | 完整兼容断面 exit 0，存档导出终态通过。`.rustyera/test-runs/browser-compat-firefox-1788556999028/snapshots.ndjson` |
+| Safari 26.6.2 | 两次均在任何产品断言前因 SafariDriver automation window 无法取得 document focus 失败；显式系统激活的定向实验没有改变失败并已撤回。保留基础设施失败，不宣称 Safari 产品通过。`.rustyera/test-runs/browser-compat-safari-1788557037896/snapshots.ndjson`、`.rustyera/test-runs/browser-compat-safari-1788557222040/snapshots.ndjson` |
+
+本批未修改两个参考实现及其 CLI；客户端设备输入、DOM 投影和平台文件读取不适用新的
+EraBasic oracle 差分，蛇版 TW 真实脚本和三端客户端状态作为验收输入。用户既有 Web
+`Cargo.lock`、`.rustyera/` 及 core 批次 5 计划修改均未纳入提交。根
+`CHANGELOG_PENDING.md` 由 `2f4bc83` 登记两项行为修复；未推送或合并组件分支，所有测试
+进程已结束，现有可复现 trace/快照按循环任务续做规则保留。
+
+### 2026-09-05 蛇版 TW Bad Apple 播放节奏定向修复
+
+这是上一节 Bad Apple 客户端修复的节奏跟进，不修改 core、协议、profile、缓存或存档身份。
+蛇版 TW `TITLE.ERB` 共播放 6572 帧，音频约 219.193 秒；脚本以 `count * 33` 为时间轴，
+正常帧执行 `AWAIT 28`，落后时执行 `AWAIT 0` 追赶。蛇版 Emuera 在刷新画面和处理事件后
+才执行 `Thread.Sleep(time)`。Web 之前在 DevicePump 确认后才以旧逻辑时钟建立 deadline，
+把当前帧的资源读取、解码与投影耗时错误地扣入下一帧等待，因而动画快于音乐。
+
+- Web 在设备泵清空真实输入后采样当前单调时钟，并保证 `advance_time` 先于
+  `service_response` 入队，使正数 `AWAIT` 从与蛇版 Emuera 相同的确认边界开始。首次 Tauri
+  动态验证暴露了等待 `advance_time` IPC 时真实鼠标事件可推进 event sequence、使旧水位确认
+  触发 `ServiceFailure`；trace 定位后改为在同一 JavaScript 事件轮次内入队两条消息，依赖 Worker
+  FIFO 与 TauriBridge 已有 runtime 串行队列保序。定向单测故意悬挂时钟提交，确认泵响应仍会
+  及时入队。实现与测试由 Web commit `7a0939524c82563aa4226234de734b2db9fb43a3`
+  提交。
+- 性能测试新增平均值和中位帧间隔；浏览器场景使用中位数下限，避免首帧冷加载离群值把过快
+  帧抬高成假通过。Tauri 场景显式使用真实系统时钟，直接比较音频位置与呈现帧数，并按用户
+  要求播放至少 17 秒后才退出；33 ms 是脚本目标而非硬性单帧上限。
+- 唯一重构审查在测试前完成，无必须修改项；其减少 5 帧退出样本抖动的建议已落实。本轮唯一
+  完整 Vitest 首次通过 114 files / 1602 tests；最终定向 Vitest 307/307、typecheck、受控
+  ESLint/Prettier、Web build 与 `build:wasm` 均通过。全仓 Prettier 另报告 `.rustyera` 与既有
+  文件共 10 个范围外格式问题，本轮文件的定向检查通过，未改写这些用户/既有内容。
+- 最终真实 Tauri WebDriver 17 秒验证为 516 帧、音频 17021 ms、33.0505 ms/帧；呈现间隔
+  平均 33.0291 ms、中位 45 ms、最大 62 ms，516 帧全部进入 DOM，514 个 paint checkpoint
+  无超时、无 long task。字符画可见，真实左键退出后返回标题，sound:0 为 stopped 且资源清空；
+  证据为
+  `.rustyera/test-runs/tauri-snapshots/2026-09-05T01-52-42.100Z-snake-bad-apple.spec.mjs.jsonl`
+  和 `.rustyera/test-runs/tauri-logs/wdio-2026-09-05T01-55-02-909Z.log`。
+- 本轮未下载浏览器；仓库要求的 Chromium executable 不存在，因此没有把新节奏修复宣称为
+  浏览器动态通过。eraRorona Tauri 替代回归在性能断言前因既有 WebDriver 左键只发出
+  mousedown/mouseup、未发 click 而停止；当时 runtime `fault=null`、service failure 为空，
+  后续平滑帧断言未执行，证据为
+  `.rustyera/test-runs/tauri-snapshots/2026-09-05T01-57-39.776Z-rorona-images.spec.mjs.jsonl`。
+  本次产品路径只由 core 的 `supports_snake_input()` 进入 DevicePump；eraRorona 普通 timed
+  wait 不经过该分支，相关 runtimeStore 定向静态测试通过，但不以此替代未完成的动态性能回归。
+- 按用户要求清除了上一轮过时 Bad Apple/视口失败迭代、临时映射与可再生增量缓存；本轮结束
+  又删除 4 份各约 2.6 GiB 的隔离游戏副本和约 1.8 GiB debug 增量缓存。工具、环境、共享依赖、
+  Tauri 二进制、有效测试脚本以及最终 trace/快照均保留。用户 Web `Cargo.lock`、`.rustyera/`
+  和 core 批次 5 计划修改未纳入提交；未推送或合并。
+
+### 2026-09-05 蛇版 TW HPH 与 PRINTDATA 着色修复及受阻验收
+
+这是批次 4 可玩路径后的单一文本输出兼容修复批次，只修改 core，不修改蛇版 TW、两个参考
+实现、Web/TUI、协议、profile、缓存或存档格式。用户提供的两份 format-30 runtime snapshot
+均作为只读定位输入：`runtime_20260905-124606.snapshot` SHA-256 为
+`c9ab088267a6d6f97c279e920f4cbd96ff7794720dc0dc9f67d587c24af985cd`；
+`runtime_20260905-123350.snapshot` SHA-256 为
+`76a25e33a9bec6b82eed58821cec01abb0684b55d63b890a30cfd646d4158ce0`。
+
+- 蛇版 TW 的活跃 `HPH_PRINT` 先以非 U `STRFIND` 找到 `HPH`，再把该索引交给非 U
+  `SUBSTRING`，只有标记被切到首部才进入
+  `HEARTMARK → GET_HEARTMARK_HTML → HTMLFONT → HTML_PRINT(..., 1)`。Rust 过去返回 UTF-8
+  字节偏移，但 `SUBSTRING` 已按配置的 CP936/legacy ANSI 字节切分；新快照中的
+  `【HPH膣内HPH】` 和 `【HPH小腹HPH】` 因而分别被拆成 `【H`、中段和 `H】`。修复后非 U
+  `STRFIND` 的 start 和返回值统一采用当前 `LegacyEncoding`，多字节字符内部的 start 边界
+  推进与蛇版 C# `LangManager.GetUFTIndex` 一致；`STRFINDU` 的 Unicode scalar 语义不变。
+  产品与回归由 core commit `0ffa39d4666907d4b90a89440d9e76193f694565` 提交。
+- `PRINTDATAW` 的 `DATAFORM` 本应继承 `SETCOLOR` 后的 user style；只有显式
+  `PRINTDATAD*` 才使用默认色。编译器过去对整个 `PRINTDATA*` 名称执行 `contains('D')`，
+  把基名 `DATA` 自带的 `D` 当作修饰符，使普通 `PRINTDATA/PRINTDATAL/PRINTDATAW` 降为
+  `PRINTD`。现在只检查 `PRINTDATA` 后缀并保留 K 优先级。首份快照末尾两个引号行从当前
+  `#337D5C` 错落到默认 `#C0C0C0` 与该根因一致；Web 只忠实投影协议颜色，无需修改。
+  产品与回归由 core commit `69b37c437aa626d6a7051c45b336d0a3ab3a4b70` 提交。
+- 唯一重构审查在首条测试前完成；其要求补齐 legacy start 落在多字节字符内部/边界、可见
+  `【❤小腹❤】` 恰有两枚爱心、蛇版 profile 下真实 `PRINTDATAW` 与显式 D 对照，均在测试
+  前落实；后续仅修正两项回归对 presentation 投影表示的错误假设。首条测试为
+  2026-09-05T04:53:01Z；首次 fmt
+  检查仅报告本批文件格式差异，机械格式化后定向复验通过。workspace all-targets check 和
+  Clippy `-D warnings` 均 exit 0；三项新定向回归最终均通过。
+- 本批唯一一次 `cargo test --workspace` 为 exit 101；`era-runtime` 报告 **517 passed / 3
+  failed**。失败均在既有 `protocol_project.rs:953`：三个 ERAFL HTML 用例期望两项
+  `command_intents`、实际为 0。本批 diff 不涉及该 fixture/路径；从未改动的 core HEAD
+  `ed97e396a84b9d737d423b75cbd345607499fe8d` 导出的隔离副本又分别定向复现相同三项失败，
+  因此登记为既有基线阻塞，不归因于本批修复。按“一次全量”和静态门禁先行规则未重跑
+  workspace 全量，也未启动 original/snake smoke 或同输入差分。
+- 计划采用双 oracle：original wrapper
+  `ffe560dad2fe480c8babddcae0122137350bf021` 与 snake wrapper
+  `ed52a0ac58f970b4f39069d1dc12d135a299b705`，运行结果应以各 response 的
+  `referenceCommit` 认证固定语义基准；因上述既有全量失败未满足前置门禁，本次没有 oracle
+  结果，不能声称参考差分已验收。解除条件是另批修复/登记 ERAFL command intent 基线并使
+  所需静态门禁通过，随后只为本批补做双 smoke 与同一 HPH/PRINTDATA fixture 差分；不得借此
+  重跑本批 workspace 全量。
+- 本批在已授权范围内的两项产品修复和最小行为回归已完成，但整批 oracle 验收未完成；没有
+  推送或合并分支。用户既有 core 批次 5 计划文档修改与 Web `Cargo.lock` 均未纳入提交。
+
+### 2026-09-05 ARRAYCOPY 字符串数组名变量兼容修复
+
+这是原版与蛇版共同行为的单项 VM 修复，不修改协议、profile、缓存、存档、前端或游戏。
+蛇版 TW 在 `能力表示.ERB:1252` 使用 `ARRAYCOPY OPR_目标, "TARGET_LIST"`，其中
+`OPR_目标` 是值为 `"TARGET"` 的字符串常量；Rust 过去把其 `StringPlace` 本身当作源数组，
+因而将字符串源与整数目标比较并报告 `ARRAYCOPY array types differ`。现在仅在
+`execute_array_copy` 入口按 Emuera 顺序先求值两个字符串表达式，再解析所得数组名；共享
+数组解析/复制、整数引用参数、错误分类、原子提交及 `ARRAYMSORTEX` 路径保持不变。
+
+- 按共同语义先在原版 `master` 修复并提交
+  `a174c3031a52fa6a34406f2f2ee60b4609af9dc5`，随后把同一实现和两项回归同步到蛇版
+  `feature/snake-compatibility`，提交
+  `2ee37dd72e98d654e1f882df7729df64b3d6009c`。回归直接覆盖报告原句式，并覆盖
+  “两参数先求值、后解析”的首错顺序。
+- 唯一重构审查在测试前完成；要求采用两阶段求值并精确覆盖故障现场，均已落实。原版首条
+  测试为 2026-09-05 13:52:04+08:00；fmt、workspace all-targets check、Clippy
+  `-D warnings`、两项定向回归和唯一一次 `cargo test --workspace` 均 exit 0，其中 VM
+  集成测试 333/333 通过。
+- 蛇版首条测试为 2026-09-05 14:03:14+08:00；fmt、workspace all-targets check、Clippy
+  `-D warnings` 及两项 `ARRAYCOPY` 定向回归均 exit 0。该分支唯一一次 workspace 全量为
+  exit 101：`era-runtime` 517 passed / 3 failed，仍是本日志上一节已登记的三项 ERAFL
+  HTML `command_intents` 基线断言（实际 0、期望 2）；本次 diff 不涉及其源码或 fixture，
+  未重跑全量，也未把它记为本修复通过。
+- 同一冻结 fixture 的新增 ERB SHA-256 为
+  `ecf1cdcc2efd5bb769bbdff2493e25098a6836b82978d1c132ea59c62b35e7f9`。原版 wrapper
+  `ffe560dad2fe480c8babddcae0122137350bf021` / 语义基准
+  `26a35dc9334bb67590b96f7b8efbefbf199e391e` 与蛇版 wrapper
+  `ed52a0ac58f970b4f39069d1dc12d135a299b705` / 语义基准
+  `fc4fb21416768c17256d0e82f997e5f99c9bba91` 的 Wine smoke 均通过；四请求同输入运行均
+  `termination=completed`，且 `RESULT:0..2` 精确为 `7, 8, 9`。两个参考仓库未修改。
+- 根 `CHANGELOG_PENDING.md` 由 commit `87910576bb34ff1fca227744034a49f26f10c8f6` 登记产品
+  修复。用户既有批次 5 计划文档修改未纳入本次提交；没有推送或合并分支，临时 oracle
+  游戏副本和输出在交付前清理。
+
+### 2026-09-05 ERAFL HTML 测试状态同步
+
+这是上一节蛇版 workspace 全量所暴露的三项既有测试修复，只修改测试辅助函数，不改变
+runtime、协议、profile、缓存、存档、展示行为、fixture 或参考实现。`WAIT` 已把
+`command_intents` 的所有权转移到活动 `PendingInput::choices`；蛇版分支中的旧 helper 仍读取
+转移后必为空的 `session.command_intents`，因此三个实际 HTML/警告断言均已通过后才在辅助
+断言处误报实际 0、期望 2。
+
+- 主分支已在 `24f3bb7a071b352225a764fad29373a5323a2ea5` 修正该 helper；本次未在主分支制造
+  重复改动，而是把同一 hunk 精确同步到蛇版分支，commit
+  `e6eac3046174bbb0e660dfc89fe2a0d0ac02177c`。新断言要求活动 `WAIT` 存在，并继续精确
+  检查两个 choice 及各自字符串值，没有放宽规范化 HTML、警告顺序或 island 文档断言。
+- 唯一重构审查在测试前完成，结论为同步位置与权威状态正确、无需生产代码改动或额外重构。
+  首条测试为 2026-09-05 14:24:08+08:00；fmt、`era-runtime` all-targets check、Clippy
+  `-D warnings` 均 exit 0，ERAFL 定向测试 3/3 通过，唯一一次
+  `cargo test -p era-runtime --lib` 为 520/520 通过。上一节首次 workspace 全量的 517/3
+  失败由该定向复验闭合；按一次全量规则未重跑 workspace 全量。
+- 因只同步测试状态读取、产品行为与 C# 输入均未改变，按测试 skill 不运行 reference smoke
+  或差分，也不更新根 `CHANGELOG_PENDING.md`。用户既有批次 5 计划文档修改未纳入提交，
+  没有推送或合并分支。
+
 <a id="batch-6"></a>
 
 ## 批次 6：完整蛇版语言
