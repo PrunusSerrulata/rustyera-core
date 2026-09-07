@@ -526,6 +526,30 @@ fn printed_html_serializes_rich_projected_runs_as_an_emuera_fragment() {
 }
 
 #[test]
+fn printed_html_preserves_non_default_text_color_and_font() {
+    let mut model = PresentationModel::default();
+    model.current_style.foreground = Color {
+        red: 0x12,
+        green: 0x34,
+        blue: 0x56,
+        alpha: 0xff,
+    };
+    model.current_style.font_family = Some("font<&".into());
+    model.append_print_text("colored<&".into(), false, true);
+
+    let html = model.printed_html_line(0);
+    assert_eq!(html.matches("face='font&lt;&amp;'").count(), 9, "{html}");
+    assert_eq!(html.matches("color='#123456'").count(), 9, "{html}");
+    assert!(html.contains(">&lt;</font>"), "{html}");
+    assert!(html.contains(">&amp;</font>"), "{html}");
+
+    let mut inherited = PresentationModel::default();
+    inherited.current_style.font_family = None;
+    inherited.append_print_text("default".into(), false, true);
+    assert!(!inherited.printed_html_line(0).contains("<font"));
+}
+
+#[test]
 fn printed_html_honors_disabled_rich_projection_capabilities() {
     let mut model = PresentationModel::default();
     model.set_projection(false, false, false, false, true);
@@ -1702,6 +1726,8 @@ fn automatic_buttons_are_grouped_after_the_complete_print_buffer_is_committed() 
 #[test]
 fn html_pop_serializes_semantic_button_values_and_consumes_pending_runs() {
     let mut model = PresentationModel::default();
+    model.set_foreground(0x12_34_56);
+    model.set_font(Some("font<&".into()));
     model.append_print_text("A<&".into(), false, false);
     model.append_button(
         "choose".into(),
@@ -1711,7 +1737,8 @@ fn html_pop_serializes_semantic_button_values_and_consumes_pending_runs() {
     );
     assert_eq!(
         model.pop_printing_html(),
-        "A&lt;&amp;<button value='42'>choose</button>"
+        "<font face='font&lt;&amp;' color='#123456'>A&lt;&amp;</font>\
+         <button value='42'><font face='font&lt;&amp;' color='#123456'>choose</font></button>"
     );
     assert_eq!(model.pop_printing_html(), "");
     assert!(model.last_line_is_empty());

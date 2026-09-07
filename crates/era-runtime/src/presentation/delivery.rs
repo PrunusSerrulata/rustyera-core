@@ -69,7 +69,12 @@ impl PresentationModel {
                 output.push_str("<br>");
             }
             for run in &line.runs {
-                append_printed_html_run(&mut output, run, self.settings.line_height);
+                append_printed_html_run(
+                    &mut output,
+                    run,
+                    self.settings.line_height,
+                    &self.default_style,
+                );
             }
         }
         output.push_str("</nobr></p>");

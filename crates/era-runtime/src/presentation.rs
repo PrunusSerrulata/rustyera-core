@@ -542,7 +542,12 @@ impl PresentationModel {
         self.pending_temporary = false;
         let mut output = String::new();
         for run in &runs {
-            append_html_run(&mut output, run, self.settings.line_height);
+            append_html_run(
+                &mut output,
+                run,
+                self.settings.line_height,
+                &self.default_style,
+            );
         }
         self.bump();
         output
