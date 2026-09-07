@@ -25,6 +25,30 @@ fn printed_html_serializes_rich_projected_runs_as_an_emuera_fragment() {
 }
 
 #[test]
+fn printed_html_preserves_non_default_text_color_and_font() {
+    let mut model = PresentationModel::default();
+    model.current_style.foreground = Color {
+        red: 0x12,
+        green: 0x34,
+        blue: 0x56,
+        alpha: 0xff,
+    };
+    model.current_style.font_family = Some("font<&".into());
+    model.append_print_text("colored<&".into(), false, true);
+
+    let html = model.printed_html_line(0);
+    assert_eq!(html.matches("face='font&lt;&amp;'").count(), 9, "{html}");
+    assert_eq!(html.matches("color='#123456'").count(), 9, "{html}");
+    assert!(html.contains(">&lt;</font>"), "{html}");
+    assert!(html.contains(">&amp;</font>"), "{html}");
+
+    let mut inherited = PresentationModel::default();
+    inherited.current_style.font_family = None;
+    inherited.append_print_text("default".into(), false, true);
+    assert!(!inherited.printed_html_line(0).contains("<font"));
+}
+
+#[test]
 fn printed_html_honors_disabled_rich_projection_capabilities() {
     let mut model = PresentationModel::default();
     model.set_projection(false, false, false, false, true);

@@ -1,6 +1,8 @@
 use std::fmt::Write as _;
 
-use era_runtime_protocol::{Color, DisplayRun, LogicalLength, PresentationLength, ProtocolValue};
+use era_runtime_protocol::{
+    Color, DisplayRun, LogicalLength, PresentationLength, ProtocolValue, TextStyle,
+};
 
 pub(in crate::presentation) fn append_plain_run(output: &mut String, run: &DisplayRun) {
     match run {
@@ -62,16 +64,30 @@ pub(in crate::presentation) fn append_html_run(
     output: &mut String,
     run: &DisplayRun,
     line_height: LogicalLength,
+    default_style: &TextStyle,
 ) {
-    append_html_run_with_document_mode(output, run, line_height, HtmlDocumentMode::Complete);
+    append_html_run_with_document_mode(
+        output,
+        run,
+        line_height,
+        default_style,
+        HtmlDocumentMode::Complete,
+    );
 }
 
 pub(in crate::presentation) fn append_printed_html_run(
     output: &mut String,
     run: &DisplayRun,
     line_height: LogicalLength,
+    default_style: &TextStyle,
 ) {
-    append_html_run_with_document_mode(output, run, line_height, HtmlDocumentMode::PrintedFragment);
+    append_html_run_with_document_mode(
+        output,
+        run,
+        line_height,
+        default_style,
+        HtmlDocumentMode::PrintedFragment,
+    );
 }
 
 #[derive(Clone, Copy)]
@@ -85,6 +101,7 @@ fn append_html_run_with_document_mode(
     output: &mut String,
     run: &DisplayRun,
     line_height: LogicalLength,
+    default_style: &TextStyle,
     document_mode: HtmlDocumentMode,
 ) {
     match run {
@@ -101,6 +118,24 @@ fn append_html_run_with_document_mode(
             }
             if style.bold {
                 value = format!("<b>{value}</b>");
+            }
+            let changed_face = style
+                .font_family
+                .as_deref()
+                .filter(|face| Some(*face) != default_style.font_family.as_deref());
+            if changed_face.is_some() || style.foreground != default_style.foreground {
+                let mut attributes = String::new();
+                if let Some(face) = changed_face {
+                    attributes.push_str(" face='");
+                    attributes.push_str(&erabasic_html::escape(face));
+                    attributes.push('\'');
+                }
+                if style.foreground != default_style.foreground {
+                    attributes.push_str(" color='");
+                    append_html_color(&mut attributes, style.foreground);
+                    attributes.push('\'');
+                }
+                value = format!("<font{attributes}>{value}</font>");
             }
             output.push_str(&value);
         }
@@ -121,7 +156,13 @@ fn append_html_run_with_document_mode(
             }
             output.push_str("'>");
             for run in runs {
-                append_html_run_with_document_mode(output, run, line_height, document_mode);
+                append_html_run_with_document_mode(
+                    output,
+                    run,
+                    line_height,
+                    default_style,
+                    document_mode,
+                );
             }
             output.push_str("</button>");
         }
@@ -186,7 +227,13 @@ fn append_html_run_with_document_mode(
         }
         DisplayRun::ColumnCell { content, .. } => {
             for run in content {
-                append_html_run_with_document_mode(output, run, line_height, document_mode);
+                append_html_run_with_document_mode(
+                    output,
+                    run,
+                    line_height,
+                    default_style,
+                    document_mode,
+                );
             }
         }
         DisplayRun::Separator { pattern, .. } => {

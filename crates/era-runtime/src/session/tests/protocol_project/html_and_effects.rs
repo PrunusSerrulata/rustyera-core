@@ -88,6 +88,7 @@ const ERAFL_UIC_SOURCE: &str = "ERB/SYSTEM/UI/CONTAINER/UI_CONTAINER_MAIN.ERB";
 fn run_erafl_html_entry(entry: &str) -> (RuntimeSession, Vec<RuntimeMessage>) {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     let mut client = capabilities();
+    client.rich_text = true;
     client.html = true;
     submit(
         &mut session,
@@ -164,6 +165,157 @@ fn runtime_result_string(session: &RuntimeSession, index: u64) -> String {
         panic!("RESULTS:{index} must be a string");
     };
     value.clone()
+}
+
+#[derive(Default)]
+struct BodygraphHtmlObserved {
+    alignments: Vec<erabasic_html::HtmlAlignment>,
+    division_widths: Vec<erabasic_html::HtmlLength>,
+    colors: Vec<u32>,
+    hover_sources: Vec<String>,
+}
+
+fn observe_bodygraph_html(
+    nodes: &[erabasic_html::HtmlNode],
+    observed: &mut BodygraphHtmlObserved,
+) {
+    for node in nodes {
+        let erabasic_html::HtmlNode::Element {
+            semantic, children, ..
+        } = node
+        else {
+            continue;
+        };
+        match semantic {
+            erabasic_html::HtmlElementSemantic::Font {
+                color: Some(color), ..
+            } => observed.colors.push(*color),
+            erabasic_html::HtmlElementSemantic::Paragraph { alignment } => {
+                observed.alignments.push(*alignment);
+            }
+            erabasic_html::HtmlElementSemantic::Image {
+                hover_source: Some(source),
+                ..
+            } => observed.hover_sources.push(source.clone()),
+            erabasic_html::HtmlElementSemantic::Division { width, .. } => {
+                observed.division_widths.push(*width);
+            }
+            _ => {}
+        }
+        observe_bodygraph_html(children, observed);
+    }
+}
+
+const COMMON_BODYGRAPH_HTML_FIXTURE: &str = r#"@SYSTEM_TITLE
+SETCOLOR 0x123456
+PRINT colored
+RESULTS:30 '= HTML_GETPRINTEDSTR(0)
+RESULTS:31 '= HTML_POPPRINTINGSTR()
+LOCALS '= "<div width='120px' height='80px' xpos='0' ypos='0'><p align='right'>" + RESULTS:31 + "自动换行文本自动换行文本</p></div><div width='160px' height='80px' xpos='120px' ypos='80px'><p align='center'>center</p></div><button value='1'><img src='base' srcb='hover' width='20px' height='20px'></button>"
+RESULTS:32 '= LOCALS
+HTML_PRINT LOCALS
+PRINTL
+WAIT
+RETURN
+"#;
+
+#[test]
+fn original_profile_bodygraph_fixture_preserves_common_html_intents() {
+    let mut session = RuntimeSession::new(RuntimeOptions::default());
+    let mut client = capabilities();
+    client.html = true;
+    client.graphics = true;
+    submit(
+        &mut session,
+        0,
+        RuntimeMessage::ClientHello(ClientHello {
+            runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
+            client_name: "common-bodygraph-html-fixture".into(),
+            features: Vec::new(),
+            requested_limits: RuntimeOptions::default().limits,
+            capabilities: client,
+            preferred_locales: vec!["en".into()],
+            configuration_profile: None,
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    drain(&mut session);
+    submit(
+        &mut session,
+        1,
+        RuntimeMessage::ProjectManifest(ProjectManifest {
+            compatibility: era_runtime_protocol::CompatibilityIdentity::default(),
+            project_revision: 1,
+            files: vec![SubmittedFile {
+                relative_path: "common-bodygraph-html.erb".into(),
+                category: FileCategory::Erb,
+                payload: FilePayload::Utf8(COMMON_BODYGRAPH_HTML_FIXTURE.into()),
+                content_hash: None,
+            }],
+        }),
+    );
+    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let load_messages = drain(&mut session);
+    assert_eq!(session.phase(), RuntimePhase::Ready, "{load_messages:#?}");
+    submit(
+        &mut session,
+        2,
+        RuntimeMessage::Start(StartRequest {
+            mode: StartMode::NewGame { seed: Some(1) },
+        }),
+    );
+    let mut messages = Vec::new();
+    for _ in 0..24 {
+        session.drive(RuntimeDriveBudget::default()).unwrap();
+        messages.extend(drain(&mut session));
+        if session.phase() == RuntimePhase::WaitingInput {
+            break;
+        }
+    }
+    assert_eq!(session.phase(), RuntimePhase::WaitingInput, "{messages:#?}");
+
+    let printed = runtime_result_string(&session, 30);
+    assert!(printed.contains("color='#123456'"), "{printed}");
+    let popped = runtime_result_string(&session, 31);
+    assert!(popped.contains("color='#123456'"), "{popped}");
+    let composed = runtime_result_string(&session, 32);
+    assert!(composed.contains("color='#123456'"), "{composed}");
+
+    let snapshot = session.presentation.snapshot();
+    let mut observed = BodygraphHtmlObserved::default();
+    for document in snapshot
+        .history
+        .logical_lines
+        .iter()
+        .flat_map(|line| &line.runs)
+        .filter_map(|run| match run {
+            DisplayRun::HtmlDocument { document } => Some(document),
+            _ => None,
+        })
+    {
+        observe_bodygraph_html(&document.nodes, &mut observed);
+    }
+    assert!(
+        observed
+            .alignments
+            .contains(&erabasic_html::HtmlAlignment::Right)
+    );
+    assert!(
+        observed
+            .alignments
+            .contains(&erabasic_html::HtmlAlignment::Center)
+    );
+    assert!(
+        observed
+            .division_widths
+            .contains(&erabasic_html::HtmlLength::Pixels(120))
+    );
+    assert!(
+        observed.colors.contains(&0x12_34_56),
+        "observed colors: {:?}; printed: {printed}; popped: {popped}; composed: {composed}",
+        observed.colors
+    );
+    assert_eq!(observed.hover_sources, ["hover"]);
 }
 
 fn assert_two_erafl_tab_intents(session: &RuntimeSession) {
