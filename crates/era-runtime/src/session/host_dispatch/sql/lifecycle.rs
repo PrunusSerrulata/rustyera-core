@@ -4,6 +4,21 @@
 use super::super::super::*;
 
 impl RuntimeSession {
+    pub(in crate::session) fn negotiated_sql_version(&self) -> ProtocolVersion {
+        self.service_capabilities
+            .get(&(ServiceKind::Sql, SQL_OPERATION.into()))
+            .copied()
+            .unwrap_or(SQL_OPERATION_VERSION)
+    }
+
+    pub(super) fn require_sql_service(
+        &mut self,
+        request: &VmHostRequest,
+    ) -> Result<bool, RuntimeError> {
+        let version = self.negotiated_sql_version();
+        self.require_host_service(request, ServiceKind::Sql, SQL_OPERATION, version)
+    }
+
     pub(in crate::session) fn emit_sql_cleanup_requests(&mut self) -> Result<u32, RuntimeError> {
         let provider = self.sql.provider();
         let handles = self.sql.cleanup_handles();
@@ -96,12 +111,13 @@ impl RuntimeSession {
         let request_id = self.allocate_request()?;
         self.operations
             .insert_service(request_id, PendingService::Sql(continuation));
+        let operation_version = self.negotiated_sql_version();
         let result = self.emit(
             RuntimeMessage::ServiceRequest(ServiceRequest {
                 request_id,
                 kind: ServiceKind::Sql,
                 operation: SQL_OPERATION.into(),
-                operation_version: SQL_OPERATION_VERSION,
+                operation_version,
                 payload,
                 deadline_ns: None,
             }),

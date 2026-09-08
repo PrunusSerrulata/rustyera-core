@@ -150,7 +150,10 @@ impl SqlHostFixture {
         let RuntimeMessage::ServiceRequest(request) = self.messages.remove(index) else {
             unreachable!()
         };
-        assert_eq!(request.operation_version, SQL_OPERATION_VERSION);
+        assert_eq!(
+            request.operation_version,
+            era_runtime_protocol::SQL_READER_ROW_VERSION
+        );
         assert_eq!(request.deadline_ns, None);
         let payload = decode_canonical(request.payload.as_slice()).expect("decode SQL request");
         (request, payload)

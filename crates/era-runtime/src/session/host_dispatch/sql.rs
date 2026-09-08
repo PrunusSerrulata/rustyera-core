@@ -121,12 +121,7 @@ impl RuntimeSession {
         } else {
             None
         };
-        if !self.require_host_service(
-            request,
-            ServiceKind::Sql,
-            SQL_OPERATION,
-            SQL_OPERATION_VERSION,
-        )? {
+        if !self.require_sql_service(request)? {
             return Ok(());
         }
         let opening_source = resource
@@ -253,14 +248,20 @@ impl RuntimeSession {
         } else {
             Vec::new()
         };
-        if !self.require_host_service(
-            request,
-            ServiceKind::Sql,
-            SQL_OPERATION,
-            SQL_OPERATION_VERSION,
-        )? {
+        if !self.require_sql_service(request)? {
             return Ok(());
         }
+        let scalar_cache_key =
+            sql_scalar_cache_key(mode, &sql_text, &parameters, self.negotiated_sql_version());
+        if let Some(cache_key) = &scalar_cache_key
+            && let Some(value) = self.sql.cached_scalar(&key, cache_key).cloned()
+        {
+            return commit_cached_sql_scalar(vm, request.id, mode, value);
+        }
+        if scalar_cache_key.is_none() {
+            self.sql.invalidate_scalar_caches();
+        }
+        let scalar_cache_generation = self.sql.scalar_cache_generation();
         let reader_id = if mode == era_runtime_protocol::SqlExecuteModeV1::Reader {
             let Some(id) = self.sql.allocate_reader_id() else {
                 return complete_script_fault(
@@ -293,6 +294,8 @@ impl RuntimeSession {
                 connection,
                 mode,
                 reader_id,
+                scalar_cache_key,
+                scalar_cache_generation,
             },
             era_runtime_protocol::SqlOperationV1::Execute {
                 connection,
@@ -319,12 +322,7 @@ impl RuntimeSession {
         ) {
             return commit_integer_result(vm, request.id, 0);
         }
-        if !self.require_host_service(
-            request,
-            ServiceKind::Sql,
-            SQL_OPERATION,
-            SQL_OPERATION_VERSION,
-        )? {
+        if !self.require_sql_service(request)? {
             return Ok(());
         }
         if !self.sql.reserve_connection(&reader.connection) {
@@ -335,6 +333,9 @@ impl RuntimeSession {
                 "SQL connection already has an operation in flight",
             );
         }
+        if let Some(state) = self.sql.reader_mut(id) {
+            state.row = std::sync::Arc::default();
+        }
         self.issue_reserved_sql_service(
             vm,
             request,
@@ -344,6 +345,8 @@ impl RuntimeSession {
                 epoch: self.sql.service_epoch(),
                 reader_id: id,
                 reader: reader.handle,
+                row_projection: self.negotiated_sql_version()
+                    >= era_runtime_protocol::SQL_READER_ROW_VERSION,
             },
             era_runtime_protocol::SqlOperationV1::ReaderRead {
                 reader: reader.handle,
@@ -383,12 +386,7 @@ impl RuntimeSession {
                 "SQL reader is not positioned on a row",
             );
         }
-        if !self.require_host_service(
-            request,
-            ServiceKind::Sql,
-            SQL_OPERATION,
-            SQL_OPERATION_VERSION,
-        )? {
+        if !self.require_sql_service(request)? {
             return Ok(());
         }
         if !self.sql.reserve_connection(&reader.connection) {
@@ -398,6 +396,24 @@ impl RuntimeSession {
                 erabasic_vm::ScriptFaultKind::Operation,
                 "SQL connection already has an operation in flight",
             );
+        }
+        if let Some(cell) = reader.row.get(column as usize) {
+            let value = if string {
+                cell.string.clone().map(VmValue::String)
+            } else {
+                cell.integer.map(VmValue::Integer)
+            };
+            if let Some(value) = value {
+                self.sql.release_connection(&reader.connection);
+                return commit_completion(
+                    vm,
+                    request.id,
+                    VmHostCompletion::Ready(HostReady {
+                        value: Some(value),
+                        writes: Vec::new(),
+                    }),
+                );
+            }
         }
         self.issue_reserved_sql_service(
             vm,
@@ -444,12 +460,7 @@ impl RuntimeSession {
                 "SQL reader is not open",
             );
         };
-        if !self.require_host_service(
-            request,
-            ServiceKind::Sql,
-            SQL_OPERATION,
-            SQL_OPERATION_VERSION,
-        )? {
+        if !self.require_sql_service(request)? {
             return Ok(());
         }
         if reader.status != era_runtime_protocol::SqlReaderStatusV1::Row
@@ -461,6 +472,14 @@ impl RuntimeSession {
                 erabasic_vm::ScriptFaultKind::Operation,
                 "SQL reader is not ready",
             );
+        }
+        if let Some(is_null) = reader
+            .row
+            .get(column as usize)
+            .and_then(|cell| cell.is_null)
+        {
+            self.sql.release_connection(&reader.connection);
+            return commit_integer_result(vm, request.id, i64::from(is_null));
         }
         self.issue_reserved_sql_service(
             vm,
@@ -488,12 +507,7 @@ impl RuntimeSession {
         let Some(reader) = self.sql.reader(id).cloned() else {
             return commit_integer_result(vm, request.id, 1);
         };
-        if !self.require_host_service(
-            request,
-            ServiceKind::Sql,
-            SQL_OPERATION,
-            SQL_OPERATION_VERSION,
-        )? {
+        if !self.require_sql_service(request)? {
             return Ok(());
         }
         if !self.sql.reserve_connection(&reader.connection) {
@@ -532,14 +546,10 @@ impl RuntimeSession {
         let Some(connection) = self.sql.connection_by_key(&key).map(|value| value.handle) else {
             return commit_integer_result(vm, request.id, 1);
         };
-        if !self.require_host_service(
-            request,
-            ServiceKind::Sql,
-            SQL_OPERATION,
-            SQL_OPERATION_VERSION,
-        )? {
+        if !self.require_sql_service(request)? {
             return Ok(());
         }
+        self.sql.invalidate_scalar_caches();
         if !self.sql.reserve_connection(&key) {
             return complete_script_fault(
                 vm,
@@ -592,14 +602,10 @@ impl RuntimeSession {
                 "SQL MAP XML path is not an active project Resource",
             );
         };
-        if !self.require_host_service(
-            request,
-            ServiceKind::Sql,
-            SQL_OPERATION,
-            SQL_OPERATION_VERSION,
-        )? {
+        if !self.require_sql_service(request)? {
             return Ok(());
         }
+        self.sql.invalidate_scalar_caches();
         if !self.sql.reserve_connection(&key) {
             return complete_script_fault(
                 vm,
@@ -696,4 +702,69 @@ impl RuntimeSession {
             })
             .map(|resource| (resource.relative_path.clone(), resource.payload_digest))
     }
+}
+
+fn commit_cached_sql_scalar(
+    vm: &mut RuntimeVm,
+    request: erabasic_vm::HostRequestId,
+    mode: era_runtime_protocol::SqlExecuteModeV1,
+    value: era_runtime_protocol::SqlValueV1,
+) -> Result<(), RuntimeError> {
+    let value = match (mode, value) {
+        (
+            era_runtime_protocol::SqlExecuteModeV1::ScalarInteger,
+            era_runtime_protocol::SqlValueV1::Null,
+        ) => VmValue::Integer(0),
+        (
+            era_runtime_protocol::SqlExecuteModeV1::ScalarInteger,
+            era_runtime_protocol::SqlValueV1::Integer(value),
+        ) => VmValue::Integer(value),
+        (
+            era_runtime_protocol::SqlExecuteModeV1::ScalarString,
+            era_runtime_protocol::SqlValueV1::Null,
+        ) => VmValue::String(String::new()),
+        (
+            era_runtime_protocol::SqlExecuteModeV1::ScalarString,
+            era_runtime_protocol::SqlValueV1::Integer(value),
+        ) => VmValue::String(value.to_string()),
+        (
+            era_runtime_protocol::SqlExecuteModeV1::ScalarString,
+            era_runtime_protocol::SqlValueV1::String(value),
+        ) => VmValue::String(value),
+        _ => {
+            return Err(RuntimeError::Internal(
+                "SQL scalar cache contains an incompatible value".into(),
+            ));
+        }
+    };
+    commit_completion(
+        vm,
+        request,
+        VmHostCompletion::Ready(HostReady {
+            value: Some(value),
+            writes: Vec::new(),
+        }),
+    )
+}
+
+fn sql_scalar_cache_key(
+    mode: era_runtime_protocol::SqlExecuteModeV1,
+    sql: &str,
+    parameters: &[era_runtime_protocol::SqlValueV1],
+    version: ProtocolVersion,
+) -> Option<crate::sql::SqlScalarCacheKey> {
+    if version < era_runtime_protocol::SQL_REUSABLE_SCALAR_VERSION
+        || !matches!(
+            mode,
+            era_runtime_protocol::SqlExecuteModeV1::ScalarInteger
+                | era_runtime_protocol::SqlExecuteModeV1::ScalarString
+        )
+    {
+        return None;
+    }
+    Some(crate::sql::SqlScalarCacheKey {
+        mode,
+        sql: sql.to_owned(),
+        parameters: parameters.to_vec(),
+    })
 }

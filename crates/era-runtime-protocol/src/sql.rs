@@ -3,13 +3,25 @@
 //! These records expose only project-scoped resource identities and logical handles. They never
 //! carry operating-system paths, connection strings after validation, or provider-native handles.
 
-use era_protocol::{ProtocolBytes, ProtocolVersion};
+use era_protocol::{ProtocolBytes, ProtocolVersion, VersionRange};
 use minicbor::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 pub const SQL_OPERATION: &str = erabasic_compat::SQL_SERVICE_CONTRACT_NAME;
 pub const SQL_OPERATION_VERSION: ProtocolVersion =
     ProtocolVersion::new(erabasic_compat::SQL_SERVICE_CONTRACT_VERSION, 0);
+/// Optional minor-version extension that lets the provider certify a scalar result as reusable.
+pub const SQL_REUSABLE_SCALAR_VERSION: ProtocolVersion =
+    ProtocolVersion::new(erabasic_compat::SQL_SERVICE_CONTRACT_VERSION, 1);
+/// Bounded current-row projections; never permits advancing a reader speculatively.
+pub const SQL_READER_ROW_VERSION: ProtocolVersion =
+    ProtocolVersion::new(erabasic_compat::SQL_SERVICE_CONTRACT_VERSION, 2);
+pub const SQL_READER_ROW_MAXIMUM_COLUMNS: usize = 32;
+pub const SQL_READER_ROW_MAXIMUM_BYTES: usize = 64 * 1024;
+pub const SQL_OPERATION_VERSIONS: VersionRange = VersionRange {
+    minimum: SQL_OPERATION_VERSION,
+    maximum: SQL_READER_ROW_VERSION,
+};
 pub const SQL_LIMITS_POLICY_VERSION: u32 = erabasic_compat::SQL_LIMITS_CONTRACT_VERSION;
 pub const SQL_DATABASE_FORMAT_VERSION: u32 = 1;
 pub const SQL_SQLITE_VERSION: &str = "3.53.0";
@@ -135,7 +147,7 @@ pub enum SqlOpenRevisionV1 {
     Exact(#[n(0)] SqlRevisionV1),
 }
 
-#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Decode, Encode, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum SqlValueV1 {
     #[n(0)]
@@ -146,7 +158,9 @@ pub enum SqlValueV1 {
     String(#[n(0)] String),
 }
 
-#[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Decode, Encode, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
 #[cbor(index_only)]
 #[serde(rename_all = "snake_case")]
 pub enum SqlExecuteModeV1 {
@@ -438,6 +452,12 @@ pub enum SqlResultV1 {
         #[n(0)]
         has_row: bool,
     },
+    /// Optional projections for the current row. Missing cells/conversions use `ReaderGet`.
+    #[n(12)]
+    ReaderRow {
+        #[n(0)]
+        cells: Vec<SqlReaderCellV1>,
+    },
     #[n(5)]
     ReaderValue {
         #[n(0)]
@@ -462,6 +482,25 @@ pub enum SqlResultV1 {
         #[n(0)]
         error: SqlErrorV1,
     },
+    /// A deterministic, read-only scalar result. The runtime may reuse it for an identical
+    /// request until another SQL operation may change database state.
+    #[n(11)]
+    ReusableScalar {
+        #[n(0)]
+        value: SqlValueV1,
+    },
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct SqlReaderCellV1 {
+    #[n(0)]
+    pub integer: Option<i64>,
+    #[n(1)]
+    pub string: Option<String>,
+    /// Only populated when the ordinary `ReaderIsNull` operation would succeed.
+    #[n(2)]
+    pub is_null: Option<bool>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

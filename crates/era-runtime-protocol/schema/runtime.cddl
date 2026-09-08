@@ -411,7 +411,11 @@ sql-result-v1 =
   [7] /
   [8, uint] /
   [9] /
-  [10, sql-error-v1]
+  [10, sql-error-v1] /
+  [11, sql-value-v1] /
+  [12, [[0*32 sql-reader-cell-v1]]]
+; SQL 1.2: at most 32 cells; UTF-8 text bytes plus 16 per cell at most 65536.
+sql-reader-cell-v1 = { ? 0: int / null, ? 1: tstr / null, ? 2: bool / null }
 sql-response-v1 = {
   0: sql-provider-handle-v1, 1: sql-database-state-v1 / null,
   2: sql-reader-state-v1 / null, 3: sql-result-v1

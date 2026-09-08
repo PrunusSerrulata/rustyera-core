@@ -18,8 +18,19 @@ struct SqlHarness {
 
 impl SqlHarness {
     fn start(source: &str) -> (Self, CapturedSqlRequest) {
+        Self::start_version(source, era_runtime_protocol::SQL_READER_ROW_VERSION)
+    }
+
+    fn start_version(source: &str, version: ProtocolVersion) -> (Self, CapturedSqlRequest) {
         let profile = erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake;
-        let mut session = negotiated_session();
+        let mut client = capabilities();
+        client
+            .services
+            .iter_mut()
+            .find(|service| service.kind == ServiceKind::Sql)
+            .unwrap()
+            .versions = VersionRange::exact(version);
+        let mut session = negotiated_session_with_capabilities(client);
         submit(
             &mut session,
             1,
@@ -64,7 +75,7 @@ impl SqlHarness {
             harness.session.vm.is_some(),
             "the script created a RuntimeVm"
         );
-        let request = take_sql_request(messages);
+        let request = take_sql_request_version(messages, version);
         (harness, request)
     }
 
@@ -154,7 +165,14 @@ impl SqlHarness {
 }
 
 fn take_sql_request(messages: Vec<RuntimeMessage>) -> CapturedSqlRequest {
-    let mut requests = take_sql_requests(messages);
+    take_sql_request_version(messages, era_runtime_protocol::SQL_READER_ROW_VERSION)
+}
+
+fn take_sql_request_version(
+    messages: Vec<RuntimeMessage>,
+    version: ProtocolVersion,
+) -> CapturedSqlRequest {
+    let mut requests = take_sql_requests_version(messages, version);
     assert_eq!(
         requests.len(),
         1,
@@ -164,6 +182,13 @@ fn take_sql_request(messages: Vec<RuntimeMessage>) -> CapturedSqlRequest {
 }
 
 fn take_sql_requests(messages: Vec<RuntimeMessage>) -> Vec<CapturedSqlRequest> {
+    take_sql_requests_version(messages, era_runtime_protocol::SQL_READER_ROW_VERSION)
+}
+
+fn take_sql_requests_version(
+    messages: Vec<RuntimeMessage>,
+    version: ProtocolVersion,
+) -> Vec<CapturedSqlRequest> {
     messages
         .into_iter()
         .filter_map(|message| match message {
@@ -172,7 +197,7 @@ fn take_sql_requests(messages: Vec<RuntimeMessage>) -> Vec<CapturedSqlRequest> {
             {
                 let payload = era_protocol::decode_canonical(request.payload.as_slice())
                     .expect("decode SqlRequestV1 from the runtime envelope");
-                assert_eq!(request.operation_version, SQL_OPERATION_VERSION);
+                assert_eq!(request.operation_version, version);
                 Some(CapturedSqlRequest {
                     wire: request,
                     payload,

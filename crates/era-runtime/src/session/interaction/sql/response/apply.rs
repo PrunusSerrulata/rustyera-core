@@ -91,6 +91,7 @@ impl RuntimeSession {
             ServiceResult::Ready { payload } => match decode_canonical(payload.as_slice()) {
                 Ok(response) => response,
                 Err(_) => {
+                    self.invalidate_sql_caches();
                     self.release_sql_continuation(&continuation);
                     self.cleanup_uncertain_sql_open(&continuation);
                     return self.fault(
@@ -101,6 +102,7 @@ impl RuntimeSession {
                 }
             },
             ServiceResult::Error { error } => {
+                self.invalidate_sql_caches();
                 self.release_sql_continuation(&continuation);
                 self.cleanup_uncertain_sql_open(&continuation);
                 return self.fault(
@@ -142,6 +144,7 @@ impl RuntimeSession {
             expected_connection,
             continuation_reader(&continuation).and_then(|(id, _)| self.sql.reader(id)),
         ) {
+            self.invalidate_sql_caches();
             self.release_sql_continuation(&continuation);
             self.cleanup_uncertain_sql_open(&continuation);
             return self.fault(FaultCode::ServiceFailure, message, None);
@@ -171,13 +174,28 @@ impl RuntimeSession {
             } else if let Some((reader_id, _)) = continuation_reader(&continuation)
                 && let Some(state) = self.sql.reader_mut(reader_id)
             {
+                if state.status != reader.status
+                    || state.rows_read != reader.rows_read
+                    || matches!(
+                        &response.result,
+                        era_runtime_protocol::SqlResultV1::Error { .. }
+                    )
+                {
+                    state.row = std::sync::Arc::default();
+                }
                 state.status = reader.status;
                 state.rows_read = reader.rows_read;
             }
         }
 
         if let era_runtime_protocol::SqlResultV1::Error { error } = &response.result {
+            if let Some((reader_id, _)) = continuation_reader(&continuation)
+                && let Some(state) = self.sql.reader_mut(reader_id)
+            {
+                state.row = std::sync::Arc::default();
+            }
             self.release_sql_continuation(&continuation);
+            self.invalidate_sql_caches();
             if response
                 .database
                 .as_ref()
@@ -210,6 +228,20 @@ impl RuntimeSession {
                     sql_error_code_name(error.code)
                 ),
             );
+        }
+
+        let reusable_cache_response = matches!(
+            (&continuation, &response.result),
+            (
+                SqlServiceContinuation::Execute {
+                    scalar_cache_key: Some(_),
+                    ..
+                },
+                era_runtime_protocol::SqlResultV1::ReusableScalar { .. }
+            )
+        );
+        if !reusable_cache_response {
+            self.sql.invalidate_scalar_caches();
         }
 
         match (continuation, response.result) {
@@ -338,6 +370,54 @@ impl RuntimeSession {
                 SqlServiceContinuation::Execute {
                     request,
                     connection_key,
+                    mode: era_runtime_protocol::SqlExecuteModeV1::ScalarInteger,
+                    scalar_cache_key: Some(cache_key),
+                    scalar_cache_generation,
+                    ..
+                },
+                era_runtime_protocol::SqlResultV1::ReusableScalar { value },
+            ) => {
+                self.sql.release_connection(&connection_key);
+                let converted = match &value {
+                    era_runtime_protocol::SqlValueV1::Null => 0,
+                    era_runtime_protocol::SqlValueV1::Integer(value) => *value,
+                    era_runtime_protocol::SqlValueV1::String(_) => {
+                        return self.finish_sql_script_fault(
+                            request,
+                            erabasic_vm::ScriptFaultKind::Operation,
+                            "SQL scalar value is not an integer",
+                        );
+                    }
+                };
+                self.sql
+                    .cache_scalar(&connection_key, cache_key, value, scalar_cache_generation);
+                self.finish_sql_value(request, VmValue::Integer(converted))
+            }
+            (
+                SqlServiceContinuation::Execute {
+                    request,
+                    connection_key,
+                    mode: era_runtime_protocol::SqlExecuteModeV1::ScalarString,
+                    scalar_cache_key: Some(cache_key),
+                    scalar_cache_generation,
+                    ..
+                },
+                era_runtime_protocol::SqlResultV1::ReusableScalar { value },
+            ) => {
+                self.sql.release_connection(&connection_key);
+                let converted = match &value {
+                    era_runtime_protocol::SqlValueV1::Null => String::new(),
+                    era_runtime_protocol::SqlValueV1::Integer(value) => value.to_string(),
+                    era_runtime_protocol::SqlValueV1::String(value) => value.clone(),
+                };
+                self.sql
+                    .cache_scalar(&connection_key, cache_key, value, scalar_cache_generation);
+                self.finish_sql_value(request, VmValue::String(converted))
+            }
+            (
+                SqlServiceContinuation::Execute {
+                    request,
+                    connection_key,
                     connection: _,
                     mode: era_runtime_protocol::SqlExecuteModeV1::Reader,
                     reader_id: Some(reader_id),
@@ -358,6 +438,7 @@ impl RuntimeSession {
                             handle: reader,
                             status: reader_state.status,
                             rows_read: reader_state.rows_read,
+                            row: std::sync::Arc::default(),
                         },
                     )
                 {
@@ -375,6 +456,9 @@ impl RuntimeSession {
                 },
                 era_runtime_protocol::SqlResultV1::ReaderAdvanced { has_row },
             ) => {
+                if let Some(reader) = self.sql.reader_mut(reader_id) {
+                    reader.row = std::sync::Arc::default();
+                }
                 let key = self
                     .sql
                     .reader(reader_id)
@@ -383,6 +467,21 @@ impl RuntimeSession {
                     self.sql.release_connection(&key);
                 }
                 self.finish_sql_value(request, VmValue::Integer(i64::from(has_row)))
+            }
+            (
+                SqlServiceContinuation::ReaderRead {
+                    request, reader_id, ..
+                },
+                era_runtime_protocol::SqlResultV1::ReaderRow { cells },
+            ) => {
+                let key = self.sql.reader_mut(reader_id).map(|reader| {
+                    reader.row = cells.into();
+                    reader.connection.clone()
+                });
+                if let Some(key) = key {
+                    self.sql.release_connection(&key);
+                }
+                self.finish_sql_value(request, VmValue::Integer(1))
             }
             (
                 SqlServiceContinuation::ReaderGet {
@@ -547,6 +646,10 @@ impl RuntimeSession {
                 }
             }
         }
+    }
+
+    fn invalidate_sql_caches(&mut self) {
+        self.sql.invalidate_scalar_caches();
     }
 
     fn cleanup_uncertain_sql_open(&mut self, continuation: &SqlServiceContinuation) {

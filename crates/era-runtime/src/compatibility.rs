@@ -54,7 +54,12 @@ pub(crate) fn missing_compatibility_service(
             && service.version == u32::from(erabasic_compat::SQL_SERVICE_CONTRACT_VERSION)
     });
     if !requires_sql
-        || services.get(&(ServiceKind::Sql, SQL_OPERATION.into())) == Some(&SQL_OPERATION_VERSION)
+        || services
+            .get(&(ServiceKind::Sql, SQL_OPERATION.into()))
+            .is_some_and(|version| {
+                version.major == SQL_OPERATION_VERSION.major
+                    && version.minor <= era_runtime_protocol::SQL_READER_ROW_VERSION.minor
+            })
     {
         return None;
     }

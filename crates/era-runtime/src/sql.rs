@@ -1,13 +1,77 @@
 //! Runtime-owned state and validation for the safe SQL host service.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use era_runtime_protocol::{
     SqlConnectionHandleV1, SqlDatabaseIdentityV1, SqlDatabaseSourceV1, SqlProviderHandleV1,
     SqlReaderHandleV1, SqlReaderStatusV1, SqlRevisionV1,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::runtime_snapshot::{SqlConnectionSnapshot, SqlRuntimeSnapshot};
+
+const MAXIMUM_SCALAR_CACHE_ENTRIES: usize = 4_096;
+const MAXIMUM_SCALAR_CACHE_BYTES: usize = 16 * 1024 * 1024;
+const MAXIMUM_SCALAR_CACHE_ENTRY_BYTES: usize = 64 * 1024;
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub(crate) struct SqlScalarCacheKey {
+    pub(crate) mode: era_runtime_protocol::SqlExecuteModeV1,
+    pub(crate) sql: String,
+    pub(crate) parameters: Vec<era_runtime_protocol::SqlValueV1>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SqlScalarCache {
+    entries: BTreeMap<SqlScalarCacheKey, era_runtime_protocol::SqlValueV1>,
+    insertion_order: VecDeque<SqlScalarCacheKey>,
+    bytes: usize,
+}
+
+impl SqlScalarCache {
+    fn get(&self, key: &SqlScalarCacheKey) -> Option<&era_runtime_protocol::SqlValueV1> {
+        self.entries.get(key)
+    }
+
+    fn insert(&mut self, key: SqlScalarCacheKey, value: era_runtime_protocol::SqlValueV1) {
+        if self.entries.contains_key(&key) {
+            return;
+        }
+        let bytes = scalar_cache_key_bytes(&key).saturating_add(sql_value_bytes(&value));
+        if bytes > MAXIMUM_SCALAR_CACHE_ENTRY_BYTES {
+            return;
+        }
+        while self.entries.len() >= MAXIMUM_SCALAR_CACHE_ENTRIES
+            || self.bytes.saturating_add(bytes) > MAXIMUM_SCALAR_CACHE_BYTES
+        {
+            let Some(oldest) = self.insertion_order.pop_front() else {
+                break;
+            };
+            if let Some(old_value) = self.entries.remove(&oldest) {
+                let old_bytes =
+                    scalar_cache_key_bytes(&oldest).saturating_add(sql_value_bytes(&old_value));
+                self.bytes = self.bytes.saturating_sub(old_bytes);
+            }
+        }
+        self.bytes = self.bytes.saturating_add(bytes);
+        self.insertion_order.push_back(key.clone());
+        self.entries.insert(key, value);
+    }
+}
+
+fn scalar_cache_key_bytes(key: &SqlScalarCacheKey) -> usize {
+    key.sql
+        .len()
+        .saturating_add(key.parameters.iter().map(sql_value_bytes).sum::<usize>())
+}
+
+fn sql_value_bytes(value: &era_runtime_protocol::SqlValueV1) -> usize {
+    match value {
+        era_runtime_protocol::SqlValueV1::Null => 0,
+        era_runtime_protocol::SqlValueV1::Integer(_) => std::mem::size_of::<i64>(),
+        era_runtime_protocol::SqlValueV1::String(value) => value.len(),
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct SqlConnection {
@@ -27,6 +91,7 @@ pub(crate) struct SqlReader {
     pub(crate) handle: SqlReaderHandleV1,
     pub(crate) status: SqlReaderStatusV1,
     pub(crate) rows_read: u64,
+    pub(crate) row: std::sync::Arc<[era_runtime_protocol::SqlReaderCellV1]>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -65,6 +130,8 @@ pub(crate) struct SqlRuntimeState {
     readers: BTreeMap<i64, SqlReader>,
     busy_connections: BTreeSet<String>,
     opening: BTreeMap<String, SqlOpening>,
+    scalar_caches: BTreeMap<String, SqlScalarCache>,
+    scalar_cache_generation: u64,
 }
 
 impl Default for SqlRuntimeState {
@@ -77,6 +144,8 @@ impl Default for SqlRuntimeState {
             readers: BTreeMap::new(),
             busy_connections: BTreeSet::new(),
             opening: BTreeMap::new(),
+            scalar_caches: BTreeMap::new(),
+            scalar_cache_generation: 0,
         }
     }
 }
@@ -172,6 +241,8 @@ impl SqlRuntimeState {
         };
         match self.connections.entry(key) {
             std::collections::btree_map::Entry::Vacant(entry) => {
+                let key = entry.key().clone();
+                self.scalar_caches.insert(key, SqlScalarCache::default());
                 entry.insert(connection);
                 true
             }
@@ -182,7 +253,45 @@ impl SqlRuntimeState {
     pub(crate) fn remove_connection(&mut self, key: &str) -> Option<SqlConnection> {
         self.busy_connections.remove(key);
         self.readers.retain(|_, reader| reader.connection != key);
+        self.scalar_caches.remove(key);
         self.connections.remove(key)
+    }
+
+    pub(crate) fn cached_scalar(
+        &self,
+        connection: &str,
+        key: &SqlScalarCacheKey,
+    ) -> Option<&era_runtime_protocol::SqlValueV1> {
+        if !self.busy_connections.is_empty() || !self.readers.is_empty() {
+            return None;
+        }
+        self.scalar_caches.get(connection)?.get(key)
+    }
+
+    pub(crate) const fn scalar_cache_generation(&self) -> u64 {
+        self.scalar_cache_generation
+    }
+
+    pub(crate) fn cache_scalar(
+        &mut self,
+        connection: &str,
+        key: SqlScalarCacheKey,
+        value: era_runtime_protocol::SqlValueV1,
+        generation: u64,
+    ) {
+        if generation != self.scalar_cache_generation {
+            return;
+        }
+        if let Some(cache) = self.scalar_caches.get_mut(connection) {
+            cache.insert(key, value);
+        }
+    }
+
+    pub(crate) fn invalidate_scalar_caches(&mut self) {
+        self.scalar_cache_generation = self.scalar_cache_generation.wrapping_add(1);
+        for cache in self.scalar_caches.values_mut() {
+            *cache = SqlScalarCache::default();
+        }
     }
 
     pub(crate) fn reserve_connection(&mut self, key: &str) -> bool {
@@ -277,6 +386,8 @@ impl SqlRuntimeState {
         self.readers.clear();
         self.busy_connections.clear();
         self.opening.clear();
+        self.scalar_caches.clear();
+        self.scalar_cache_generation = self.scalar_cache_generation.wrapping_add(1);
     }
 }
 
@@ -446,6 +557,7 @@ mod tests {
                 },
                 status: SqlReaderStatusV1::BeforeFirst,
                 rows_read: 0,
+                row: std::sync::Arc::default(),
             },
         ));
         assert_eq!(reading.snapshot(), Err(SqlSnapshotBlocker::Reader));
@@ -463,6 +575,42 @@ mod tests {
             revision_missing.snapshot(),
             Err(SqlSnapshotBlocker::RevisionMissing)
         );
+    }
+
+    #[test]
+    fn reader_row_projections_are_isolated_by_reader_and_connection() {
+        let mut state = SqlRuntimeState::default();
+        insert_connection(&mut state, "first", None);
+        insert_connection(&mut state, "second", None);
+        for (id, connection, value) in [(1, "first", 11), (2, "first", 22), (3, "second", 33)] {
+            assert!(
+                state.insert_reader(
+                    id,
+                    SqlReader {
+                        connection: connection.into(),
+                        handle: SqlReaderHandleV1 {
+                            service_epoch: state.service_epoch(),
+                            id: u64::try_from(id).unwrap()
+                        },
+                        status: SqlReaderStatusV1::Row,
+                        rows_read: 1,
+                        row: vec![era_runtime_protocol::SqlReaderCellV1 {
+                            integer: Some(value),
+                            string: Some(value.to_string()),
+                            is_null: Some(false),
+                        }]
+                        .into(),
+                    }
+                )
+            );
+        }
+        state.reader_mut(1).unwrap().row = std::sync::Arc::default();
+        assert_eq!(state.reader(2).unwrap().row[0].integer, Some(22));
+        assert_eq!(state.reader(3).unwrap().row[0].integer, Some(33));
+        state.remove_connection("first");
+        assert!(state.reader(1).is_none());
+        assert!(state.reader(2).is_none());
+        assert_eq!(state.reader(3).unwrap().row[0].integer, Some(33));
     }
 
     #[test]
@@ -484,6 +632,7 @@ mod tests {
                 handle: old_reader,
                 status: SqlReaderStatusV1::Row,
                 rows_read: 1,
+                row: std::sync::Arc::default(),
             },
         ));
         assert!(state.reserve_connection("main"));

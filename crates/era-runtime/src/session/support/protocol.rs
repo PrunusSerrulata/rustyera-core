@@ -89,7 +89,15 @@ pub(in super::super) fn selected_service_capabilities(
                 (ServiceKind::Audio, AUDIO_OBSERVATION_OPERATION) => {
                     AUDIO_OBSERVATION_OPERATION_VERSION
                 }
-                (ServiceKind::Sql, SQL_OPERATION) => SQL_OPERATION_VERSION,
+                (ServiceKind::Sql, SQL_OPERATION) => {
+                    return negotiate_version(capability.versions, SQL_OPERATION_VERSIONS).map(
+                        |version| ServiceCapability {
+                            kind: capability.kind,
+                            operation: capability.operation.clone(),
+                            versions: VersionRange::exact(version),
+                        },
+                    );
+                }
                 // Extension operations are application-defined. Select the client's
                 // maximum now; a later registry declaration must bind that exact version.
                 (ServiceKind::Extension, _) => capability.versions.maximum,

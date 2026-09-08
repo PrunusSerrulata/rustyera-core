@@ -1,4 +1,50 @@
 #[test]
+fn sql_current_row_projection_round_trips_with_missing_conversions() {
+    use era_runtime_protocol::{
+        SQL_OPERATION_VERSIONS, SQL_READER_ROW_VERSION, SqlReaderCellV1, SqlResultV1,
+    };
+    assert_eq!(SQL_READER_ROW_VERSION, ProtocolVersion::new(1, 2));
+    let value = SqlResultV1::ReaderRow {
+        cells: vec![
+            SqlReaderCellV1 {
+                integer: Some(i64::MIN),
+                string: Some("测试".into()),
+                is_null: Some(false),
+            },
+            SqlReaderCellV1 {
+                integer: None,
+                string: None,
+                is_null: None,
+            },
+        ],
+    };
+    let bytes = encode_canonical(&value).unwrap();
+    assert_eq!(decode_canonical::<SqlResultV1>(&bytes), Ok(value));
+    assert_eq!(SQL_OPERATION_VERSIONS.minimum, ProtocolVersion::new(1, 0));
+    assert_eq!(SQL_OPERATION_VERSIONS.maximum, SQL_READER_ROW_VERSION);
+    assert_eq!(
+        encode_canonical(&SqlResultV1::ReaderRow { cells: vec![] }).unwrap(),
+        vec![0x82, 12, 0x81, 0x80]
+    );
+    let empty = SqlResultV1::ReaderRow {
+        cells: vec![SqlReaderCellV1 {
+            integer: None,
+            string: None,
+            is_null: None,
+        }],
+    };
+    assert_eq!(
+        encode_canonical(&empty).unwrap(),
+        vec![0x82, 12, 0x81, 0x81, 0xa0]
+    );
+    // The Web provider emits explicit null; Rust emits omitted optional map keys.
+    assert_eq!(
+        decode_canonical::<SqlResultV1>(&[0x82, 12, 0x81, 0x81, 0xa3, 0, 0xf6, 1, 0xf6, 2, 0xf6]),
+        Ok(empty)
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn protocol_46_audio_targets_effects_and_observations_are_exact() {
     assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
@@ -650,6 +696,21 @@ fn protocol_41_carries_safe_sql_v1_without_native_paths_or_handles() {
 }
 
 #[test]
+fn sql_scalar_reuse_is_an_optional_minor_version_extension() {
+    use runtime_protocol::{
+        SQL_OPERATION_VERSION, SQL_OPERATION_VERSIONS, SQL_REUSABLE_SCALAR_VERSION,
+    };
+
+    assert_eq!(SQL_OPERATION_VERSION, ProtocolVersion::new(1, 0));
+    assert_eq!(SQL_REUSABLE_SCALAR_VERSION, ProtocolVersion::new(1, 1));
+    assert_eq!(SQL_OPERATION_VERSIONS.minimum, SQL_OPERATION_VERSION);
+    assert_eq!(
+        SQL_OPERATION_VERSIONS.maximum,
+        era_runtime_protocol::SQL_READER_ROW_VERSION
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn safe_sql_v1_round_trips_every_operation_and_result_variant() {
     use runtime_protocol::{
@@ -732,6 +793,9 @@ fn safe_sql_v1_round_trips_every_operation_and_result_variant() {
         },
         SqlResultV1::NonQuery { affected_rows: 2 },
         SqlResultV1::Scalar {
+            value: SqlValueV1::Integer(3),
+        },
+        SqlResultV1::ReusableScalar {
             value: SqlValueV1::Integer(3),
         },
         SqlResultV1::ReaderOpened { reader },

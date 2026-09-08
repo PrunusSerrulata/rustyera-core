@@ -24,12 +24,15 @@ pub(crate) enum SqlServiceContinuation {
         connection: era_runtime_protocol::SqlConnectionHandleV1,
         mode: era_runtime_protocol::SqlExecuteModeV1,
         reader_id: Option<i64>,
+        scalar_cache_key: Option<crate::sql::SqlScalarCacheKey>,
+        scalar_cache_generation: u64,
     },
     ReaderRead {
         request: HostRequestId,
         epoch: u64,
         reader_id: i64,
         reader: era_runtime_protocol::SqlReaderHandleV1,
+        row_projection: bool,
     },
     ReaderGet {
         request: HostRequestId,

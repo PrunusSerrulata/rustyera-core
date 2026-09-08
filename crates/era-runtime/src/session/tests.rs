@@ -46,7 +46,7 @@ fn capabilities() -> ClientCapabilities {
             ServiceCapability {
                 kind: ServiceKind::Sql,
                 operation: SQL_OPERATION.into(),
-                versions: VersionRange::exact(SQL_OPERATION_VERSION),
+                versions: SQL_OPERATION_VERSIONS,
             },
         ],
         storage: StorageCapabilities {

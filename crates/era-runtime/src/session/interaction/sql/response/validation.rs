@@ -285,6 +285,24 @@ fn validate_sql_response(
         (
             SqlServiceContinuation::Execute {
                 mode: era_runtime_protocol::SqlExecuteModeV1::ScalarInteger,
+                scalar_cache_key: Some(_),
+                ..
+            },
+            Result::ReusableScalar { value },
+            None,
+        ) if sql_value_size_valid(value) => Ok(()),
+        (
+            SqlServiceContinuation::Execute {
+                mode: era_runtime_protocol::SqlExecuteModeV1::ScalarString,
+                scalar_cache_key: Some(_),
+                ..
+            },
+            Result::ReusableScalar { value },
+            None,
+        ) if sql_value_size_valid(value) => Ok(()),
+        (
+            SqlServiceContinuation::Execute {
+                mode: era_runtime_protocol::SqlExecuteModeV1::ScalarInteger,
                 ..
             },
             Result::Scalar { value },
@@ -325,6 +343,26 @@ fn validate_sql_response(
             state.status == Status::Eof
                 && current_reader.is_some_and(|current| state.rows_read == current.rows_read)
         } =>
+        {
+            Ok(())
+        }
+        (
+            SqlServiceContinuation::ReaderRead {
+                row_projection: true,
+                ..
+            },
+            Result::ReaderRow { cells },
+            Some(state),
+        ) if state.status == Status::Row
+            && current_reader.is_some_and(|current| {
+                current.rows_read.checked_add(1) == Some(state.rows_read)
+            })
+            && cells.len() <= era_runtime_protocol::SQL_READER_ROW_MAXIMUM_COLUMNS
+            && cells
+                .iter()
+                .map(|cell| cell.string.as_ref().map_or(0, String::len) + 16)
+                .sum::<usize>()
+                <= era_runtime_protocol::SQL_READER_ROW_MAXIMUM_BYTES =>
         {
             Ok(())
         }
