@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::hash::BuildHasherDefault;
 use std::sync::Arc;
 
@@ -65,6 +65,8 @@ pub(crate) struct ProgramGeneration {
     // This map is lookup-only; authoritative globals remain canonically ordered
     // in the artifact, so hash iteration can never affect serialized output.
     global_indices: SymbolMap<usize>,
+    // Lookup-only membership for the per-access REF guard; rebuilt for every generation.
+    reference_variable_keys: HashSet<SymbolKey, BuildHasherDefault<SymbolKeyHasher>>,
     variable_global_indices: Vec<Vec<u32>>,
     bulk_fill_loop_plans: Vec<Vec<(u32, BulkFillLoopPlan)>>,
     literal_group_match_plans: Vec<Vec<(u32, LiteralGroupMatchPlan)>>,

@@ -13,8 +13,7 @@ impl ProgramGeneration {
     }
 
     pub(crate) fn is_reference_variable(&self, key: SymbolKey) -> bool {
-        self.runtime_variable(key)
-            .is_some_and(|symbol| symbol.reference)
+        self.reference_variable_keys.contains(&key)
     }
 
     pub(crate) fn effective_character_disposal(
@@ -78,6 +77,14 @@ impl ProgramGeneration {
             preparation.advance();
         }
         let mut variable_global_indices = Vec::with_capacity(artifact.functions.len());
+        // Only REF definitions participate. Ordinary accesses no longer search the complete
+        // runtime-symbol table, while the artifact remains the serialized source of truth.
+        let reference_variable_keys = artifact
+            .runtime_variables
+            .iter()
+            .filter(|symbol| symbol.reference)
+            .map(|symbol| symbol.key)
+            .collect();
         for function in &artifact.functions {
             variable_global_indices.push(
                 function
@@ -303,6 +310,7 @@ impl ProgramGeneration {
             function_indices,
             function_name_indices,
             global_indices,
+            reference_variable_keys,
             variable_global_indices,
             bulk_fill_loop_plans,
             literal_group_match_plans,
@@ -617,12 +625,13 @@ mod compact_generation_index_tests {
                          RESULT = GROUPMATCH(VALUE, \"keep\", \"other\", \"keep\")\n\
                          CALL CLEAR_ROW(2, 0)\nRETURN\n\
                          @CLEAR_ROW(ARG, VALUE)\n#DIM VALUE\n#LOCALSIZE 1\n\
-                         FOR LOCAL, 0, 4\nDA:ARG:LOCAL = 0\nNEXT\nRETURN\n"
+                         FOR LOCAL, 0, 4\nDA:ARG:LOCAL = 0\nNEXT\nRETURN\n\
+                         @REF_VALUES(NUMBERS, TEXTS)\n#DIM REF NUMBERS\n#DIMS REF TEXTS\nRETURN\n"
                             .into(),
                     ),
                 }],
             },
-            &AnalyzerOptions::default(),
+            &AnalyzerOptions::analysis_mode(),
             &ExtensionRegistry::default(),
         );
         assert!(analysis.project.is_some(), "{:#?}", analysis.diagnostics);
@@ -634,6 +643,40 @@ mod compact_generation_index_tests {
         );
         assert!(compile.artifact.is_some(), "{:#?}", compile.diagnostics);
         compile.artifact.expect("compiled artifact")
+    }
+
+    #[test]
+    fn reference_membership_matches_metadata_and_is_generation_local() {
+        let artifact = Arc::new(compiled_generation_fixture());
+        let generation = ProgramGeneration::new(Arc::clone(&artifact));
+        let mut references = 0;
+        for symbol in &artifact.runtime_variables {
+            assert_eq!(
+                generation.is_reference_variable(symbol.key),
+                symbol.reference
+            );
+            references += usize::from(symbol.reference);
+        }
+        assert_eq!(references, 2);
+        let missing = SymbolKey([0xff; 16]);
+        assert!(
+            artifact
+                .runtime_variables
+                .iter()
+                .all(|symbol| symbol.key != missing)
+        );
+        assert!(!generation.is_reference_variable(missing));
+
+        let cloned = generation.clone();
+        let mut next_artifact = (*artifact).clone();
+        for symbol in &mut next_artifact.runtime_variables {
+            symbol.reference = false;
+        }
+        let next = ProgramGeneration::new(Arc::new(next_artifact));
+        for symbol in &artifact.runtime_variables {
+            assert_eq!(cloned.is_reference_variable(symbol.key), symbol.reference);
+            assert!(!next.is_reference_variable(symbol.key));
+        }
     }
 
     #[test]
