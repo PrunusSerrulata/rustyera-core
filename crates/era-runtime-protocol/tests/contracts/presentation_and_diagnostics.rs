@@ -1,4 +1,23 @@
 #[test]
+fn protocol_47_resource_delta_has_stable_operation_encoding() {
+    let operation = runtime_protocol::PresentationOperation::ApplyResourceDelta {
+        delta: runtime_protocol::ResourceReplayDelta {
+            sprite_edits: Vec::new(), canvas_edits: Vec::new(), animation_timer_ms: -1,
+        },
+    };
+    let bytes = encode_canonical(&operation).unwrap();
+    assert_eq!(bytes, vec![0x82, 15, 0x81, 0xa3, 0, 0x80, 1, 0x80, 2, 0x20]);
+    assert_eq!(decode_canonical::<runtime_protocol::PresentationOperation>(&bytes), Ok(operation.clone()));
+    assert_eq!(serde_json::to_value(&operation).unwrap(), serde_json::json!({
+        "type": "apply_resource_delta", "delta": {"sprite_edits": [], "canvas_edits": [], "animation_timer_ms": -1}
+    }));
+    let message = runtime_protocol::RuntimeMessage::PresentationDelta(runtime_protocol::PresentationDelta {
+        base_revision: 1, new_revision: 2, operations: vec![operation],
+    });
+    assert_eq!(decode_canonical::<runtime_protocol::RuntimeMessage>(&encode_canonical(&message).unwrap()), Ok(message));
+}
+
+#[test]
 fn protocol_21_carries_parsed_html_instead_of_opaque_markup() {
     let run = DisplayRun::HtmlDocument {
         document: parse_document("<div width='50' height='10'><b>text</b><br></div>").unwrap(),
@@ -144,7 +163,7 @@ fn protocol_45_scene_and_cell_intents_have_stable_json_cbor_and_cddl() {
     ] {
         assert!(schema.contains(definition));
     }
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(47, 0));
 }
 
 #[test]
@@ -381,7 +400,7 @@ fn protocol_44_scene_interactions_and_line_geometry_have_stable_contracts() {
         GET_LINE_GEOMETRY_OPERATION_VERSION,
         ProtocolVersion::new(1, 0)
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(47, 0));
     let schema = include_str!("../../schema/runtime.cddl");
     assert!(schema.contains("get-line-geometry-v1-request"));
     assert!(schema.contains("get-line-geometry-v1-response"));
@@ -476,7 +495,7 @@ fn protocol_40_round_trips_input_environment_wait_and_ordered_device_contracts()
         .unwrap(),
         pump
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(47, 0));
     let schema = include_str!("../../schema/runtime.cddl");
     for definition in [
         "environment-capability",
@@ -507,7 +526,7 @@ fn protocol_24_carries_backend_authoritative_logs() {
         RuntimeMessage::decode_payload(98, &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(47, 0));
 }
 
 #[test]
@@ -540,7 +559,7 @@ fn protocol_38_carries_correlated_secondary_vm_faults() {
         RuntimeMessage::decode_payload(message.tag(), &message.encode_payload().unwrap()).unwrap(),
         message
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(47, 0));
     let schema = include_str!("../../schema/runtime.cddl");
     assert!(schema.contains("runtime-vm-fault-detail"));
     assert_eq!(
@@ -575,7 +594,7 @@ fn protocol_34_carries_diagnostic_notification_guidance() {
         serde_json::to_value(&message).unwrap()["value"]["notification"],
         "log_only"
     );
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(47, 0));
 }
 
 #[test]
@@ -598,6 +617,5 @@ fn protocol_35_carries_the_encoded_journal_byte_limit_at_map_key_six() {
     assert!(include_str!("../../schema/runtime.cddl").contains(
         "runtime-limits = { 0: uint, 1: uint, 2: uint, 3: uint, 4: uint, 5: uint, 6: uint }"
     ));
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(47, 0));
 }
-

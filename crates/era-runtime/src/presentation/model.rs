@@ -113,6 +113,7 @@ pub(super) struct PresentationDelivery {
     pub(super) history_line_count: usize,
     pub(super) pending_line_id: Option<u64>,
     pub(super) scene_revision: u64,
+    pub(super) resources: ResourceReplay,
     pub(super) dirty_lines: BTreeSet<u64>,
     pub(super) dirty: PresentationDirty,
 }

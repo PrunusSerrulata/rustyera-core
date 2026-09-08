@@ -198,7 +198,7 @@ fn assert_presentation_precedes_wait_change(messages: &[RuntimeMessage], expecte
 }
 
 #[test]
-fn resource_replay_is_materialized_once_when_a_deferred_frame_is_published() {
+fn unchanged_resource_replay_is_materialized_without_redundant_delivery() {
     let mut session = RuntimeSession::new(RuntimeOptions::default());
     session.presentation.snapshot_for_delivery();
 
@@ -210,10 +210,13 @@ fn resource_replay_is_materialized_once_when_a_deferred_frame_is_published() {
     assert!(session.presentation.resource_replay_stale());
     assert!(deferred.iter().all(|message| {
         match message {
-            RuntimeMessage::PresentationDelta(delta) => !delta
-                .operations
-                .iter()
-                .any(|operation| matches!(operation, PresentationOperation::SetResources { .. })),
+            RuntimeMessage::PresentationDelta(delta) => !delta.operations.iter().any(|operation| {
+                matches!(
+                    operation,
+                    PresentationOperation::SetResources { .. }
+                        | PresentationOperation::ApplyResourceDelta { .. }
+                )
+            }),
             _ => true,
         }
     }));
@@ -230,11 +233,18 @@ fn resource_replay_is_materialized_once_when_a_deferred_frame_is_published() {
             _ => None,
         })
         .flatten()
-        .filter(|operation| matches!(operation, PresentationOperation::SetResources { .. }))
+        .filter(|operation| {
+            matches!(
+                operation,
+                PresentationOperation::SetResources { .. }
+                    | PresentationOperation::ApplyResourceDelta { .. }
+            )
+        })
         .count();
 
-    assert_eq!(resource_updates, 1);
+    assert_eq!(resource_updates, 0);
     assert!(!session.presentation.resource_replay_stale());
+    assert!(!session.materialize_resource_replay_if_ready());
 }
 
 #[test]

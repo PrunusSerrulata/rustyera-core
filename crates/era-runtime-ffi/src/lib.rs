@@ -6,7 +6,7 @@
 use std::ffi::{c_char, c_void};
 
 pub const ERA_RUNTIME_ABI_VERSION: EraAbiVersion = EraAbiVersion { major: 3, minor: 9 };
-pub const ERA_RUNTIME_PROTOCOL_MAJOR: u16 = 46;
+pub const ERA_RUNTIME_PROTOCOL_MAJOR: u16 = 47;
 pub const ERA_RUNTIME_PROTOCOL_MINOR: u16 = 0;
 pub const ERA_RUNTIME_GET_API_SYMBOL: &str = "era_runtime_get_api";
 

@@ -1,4 +1,4 @@
-; Runtime channel version: 46.0.
+; Runtime channel version: 47.0.
 ; RuntimeMessage is encoded as a minicbor enum [stable-tag, typed-body].
 runtime-message =
   [0, client-hello] /
@@ -308,6 +308,10 @@ sprite-replay = {
   ? 4: int, ? 5: canvas-rect, 6: uint, ? 7: uint
 }
 resource-replay = { 0: [* sprite-replay], 1: [* canvas-replay], 2: int }
+; Ordered edits refer to the original baseline, never intermediate list offsets.
+resource-sprite-edit = { 0: 0..4294967295, 1: 0..4294967295, 2: [* sprite-replay] }
+resource-canvas-edit = { 0: 0..4294967295, 1: 0..4294967295, 2: [* canvas-replay] }
+resource-replay-delta = { 0: [* resource-sprite-edit], 1: [* resource-canvas-edit], 2: -2147483648..2147483647 }
 presentation-delta = { 0: uint, 1: uint, 2: [* presentation-operation] }
 presentation-operation =
   [0, [display-line]] /
@@ -324,7 +328,8 @@ presentation-operation =
   [11, [[* any]]] /
   [12, [redraw-state]] /
   [13, [uint]] /
-  [14, [uint]]
+  [14, [uint]] /
+  [15, [resource-replay-delta]]
 audio-channel-v1 = [0, [0..9]] / [1, []]
 audio-playback-state-v1 = 0..2
 audio-state = {

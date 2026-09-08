@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::{AudioChannelV1, AudioPlaybackStateV1, InputWait, InteractionToken};
 
 pub use replay::{
-    CanvasReplay, CanvasReplayCommand, PresentationSnapshot, ResourceReplay, SpriteFrameReplay,
-    SpriteReplay,
+    CanvasReplay, CanvasReplayCommand, PresentationSnapshot, ResourceReplay, ResourceReplayDelta,
+    ResourceReplayListEdit, SpriteFrameReplay, SpriteReplay,
 };
 pub use scene::{
     SceneAnchorV1, SceneDeltaV1, SceneInteractionV1, SceneLayerV1, SceneOffsetV1, SceneOperationV1,
@@ -665,6 +665,11 @@ pub enum PresentationOperation {
     TrimLines {
         #[n(0)]
         count: u32,
+    },
+    #[n(15)]
+    ApplyResourceDelta {
+        #[n(0)]
+        delta: ResourceReplayDelta,
     },
 }
 

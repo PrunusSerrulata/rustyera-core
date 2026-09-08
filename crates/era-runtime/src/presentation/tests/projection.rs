@@ -156,6 +156,9 @@ fn apply_delta(snapshot: &mut PresentationSnapshot, delta: PresentationDelta) {
             PresentationOperation::SetResources { resources } => {
                 snapshot.resources = resources;
             }
+            PresentationOperation::ApplyResourceDelta { delta } => {
+                snapshot.resources = snapshot.resources.apply_delta(&delta).unwrap();
+            }
             PresentationOperation::SetHtmlIsland { html_island } => {
                 snapshot.html_island = html_island;
             }
@@ -241,6 +244,43 @@ fn presentation_deltas_replay_to_the_same_visible_state_as_a_snapshot() {
             .is_none(),
         "the runtime-only shared journal must not enter persisted snapshots"
     );
+}
+
+#[test]
+fn resource_delta_delivery_resets_its_baseline_after_resynchronization() {
+    let mut model = PresentationModel::default();
+    model.set_projection(true, true, true, true, true);
+    let resources = ResourceReplay {
+        sprites: (0..4).map(|index| era_runtime_protocol::SpriteReplay {
+            name: format!("S{index}"), size: [1, 1], position: [0, 0], frames: Vec::new(),
+            canvas_id: None, canvas_rectangle: None, revision: 1, canvas_revision: None,
+        }).collect(),
+        ..ResourceReplay::default()
+    };
+    model.set_resource_replay(resources.clone());
+    let PresentationUpdate::Snapshot(mut frontend) = model.next_update() else {
+        panic!("initial delivery must be complete");
+    };
+    let mut changed = resources;
+    changed.sprites[1].position = [2, 3];
+    model.set_resource_replay(changed.clone());
+    let PresentationUpdate::Delta(delta) = model.next_update() else { panic!("expected delta") };
+    assert!(delta.operations.iter().any(|op| matches!(op, PresentationOperation::ApplyResourceDelta { .. })));
+    apply_delta(&mut frontend, delta);
+    assert_eq!(frontend.resources, changed);
+    *frontend = model.snapshot_for_delivery();
+    changed.sprites.remove(0);
+    model.set_resource_replay(changed.clone());
+    let PresentationUpdate::Delta(delta) = model.next_update() else { panic!("expected delta") };
+    apply_delta(&mut frontend, delta);
+    assert_eq!(frontend.resources, changed);
+    model.set_projection(true, true, true, false, true);
+    match model.next_update() {
+        PresentationUpdate::Snapshot(snapshot) => frontend = snapshot,
+        PresentationUpdate::Delta(delta) => apply_delta(&mut frontend, delta),
+    }
+    assert_eq!(frontend.resources, model.snapshot().resources);
+    assert!(frontend.resources.sprites.is_empty());
 }
 
 #[test]

@@ -158,9 +158,13 @@ impl PresentationModel {
             });
         }
         if delivery.dirty.resources {
-            operations.push(PresentationOperation::SetResources {
-                resources: self.projected_resources(),
-            });
+            let resources = self.projected_resources();
+            if let Some(operation) =
+                super::resource_delta::resource_update(&delivery.resources, &resources)
+            {
+                operations.push(operation);
+            }
+            delivery.resources = resources;
         }
         if delivery.dirty.html_island {
             operations.push(PresentationOperation::SetHtmlIsland {
@@ -305,6 +309,7 @@ impl PresentationModel {
             history_line_count: self.delivered_line_count(),
             pending_line_id: (!self.pending_runs.is_empty()).then_some(self.next_line),
             scene_revision: self.scene.revision,
+            resources: snapshot.resources.clone(),
             dirty_lines: BTreeSet::new(),
             dirty: PresentationDirty::default(),
         };

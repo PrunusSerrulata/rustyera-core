@@ -47,7 +47,7 @@ fn sql_current_row_projection_round_trips_with_missing_conversions() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn protocol_46_audio_targets_effects_and_observations_are_exact() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(47, 0));
     assert_eq!(AUDIO_OBSERVATION_OPERATION, "audio_observation");
     assert_eq!(
         AUDIO_OBSERVATION_OPERATION_VERSION,
@@ -689,7 +689,7 @@ fn protocol_41_carries_safe_sql_v1_without_native_paths_or_handles() {
     );
     assert_eq!(SqlLimitsV1::FIXED.maximum_connections, 8);
     assert_eq!(SqlLimitsV1::FIXED.execution_budget_ms, 5_000);
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(46, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(47, 0));
     let schema = include_str!("../../schema/runtime.cddl");
     assert!(schema.contains("sql-request-v1"));
     assert!(schema.contains("sql-response-v1"));

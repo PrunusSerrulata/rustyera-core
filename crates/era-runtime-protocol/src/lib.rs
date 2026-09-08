@@ -90,11 +90,12 @@ pub use presentation::{
     CellAlignment, CellWidthIntent, Color, DisplayLine, DisplayRun, LineAlignment, LogicalLength,
     LogicalRect, MediaPlacement, PresentationDelta, PresentationHistory,
     PresentationHistoryOperation, PresentationLength, PresentationOperation, PresentationSettings,
-    PresentationSnapshot, RationalOpacity, RedrawState, ResourceReplay, SceneAnchorV1,
-    SceneDeltaV1, SceneInteractionV1, SceneLayerV1, SceneOffsetV1, SceneOperationV1,
-    SceneReplayError, SceneScrollPolicyV1, SceneSizeV1, SceneSourceV1, SceneStateV1, SeparatorRole,
-    Shape, SpriteFrameReplay, SpriteReplay, SystemTextArgument, SystemTextKey, SystemTextRef,
-    TextStyle, TooltipFormat, TooltipFormatFlag, TooltipSettings,
+    PresentationSnapshot, RationalOpacity, RedrawState, ResourceReplay, ResourceReplayDelta,
+    ResourceReplayListEdit, SceneAnchorV1, SceneDeltaV1, SceneInteractionV1, SceneLayerV1,
+    SceneOffsetV1, SceneOperationV1, SceneReplayError, SceneScrollPolicyV1, SceneSizeV1,
+    SceneSourceV1, SceneStateV1, SeparatorRole, Shape, SpriteFrameReplay, SpriteReplay,
+    SystemTextArgument, SystemTextKey, SystemTextRef, TextStyle, TooltipFormat, TooltipFormatFlag,
+    TooltipSettings,
 };
 pub use project::{
     ExternalResource, FileCategory, FileChange, FilePayload, FrontendIoError, FrontendIoErrorKind,

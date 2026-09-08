@@ -23,6 +23,7 @@ mod defaults;
 mod delivery;
 mod media;
 mod projection;
+mod resource_delta;
 mod scene;
 #[cfg(test)]
 mod tests;

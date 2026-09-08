@@ -201,7 +201,47 @@ pub struct ResourceReplay {
     pub animation_timer_ms: i32,
 }
 
+/// One nonoverlapping edit in the original resource-list baseline's coordinates.
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ResourceReplayListEdit<T> {
+    #[n(0)]
+    pub start: u32,
+    #[n(1)]
+    pub delete_count: u32,
+    #[n(2)]
+    pub insert: Vec<T>,
+}
+
+/// Lossless edits to the resource lists at the enclosing presentation base revision.
+/// Unchanged entries retain their exact identity and revision; snapshots remain full baselines.
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+#[cbor(map)]
+pub struct ResourceReplayDelta {
+    #[n(0)]
+    pub sprite_edits: Vec<ResourceReplayListEdit<SpriteReplay>>,
+    #[n(1)]
+    pub canvas_edits: Vec<ResourceReplayListEdit<CanvasReplay>>,
+    #[n(2)]
+    pub animation_timer_ms: i32,
+}
+
 impl ResourceReplay {
+    /// Reconstruct a resource delta atomically from its enclosing presentation baseline.
+    ///
+    /// # Errors
+    ///
+    /// Rejects overlapping/out-of-bounds edits and invalid exact resource dependencies.
+    pub fn apply_delta(&self, delta: &ResourceReplayDelta) -> Result<Self, String> {
+        let next = Self {
+            sprites: apply_resource_list_edits(&self.sprites, &delta.sprite_edits)?,
+            canvases: apply_resource_list_edits(&self.canvases, &delta.canvas_edits)?,
+            animation_timer_ms: delta.animation_timer_ms,
+        };
+        next.validate_exact_references()?;
+        Ok(next)
+    }
+
     /// Validate every exact mutable-resource edge as an atomic identity/revision pair.
     ///
     /// # Errors
@@ -290,6 +330,33 @@ impl ResourceReplay {
     }
 }
 
+fn apply_resource_list_edits<T: Clone>(
+    baseline: &[T],
+    edits: &[ResourceReplayListEdit<T>],
+) -> Result<Vec<T>, String> {
+    let mut output = Vec::new();
+    let mut cursor = 0;
+    let mut previous_start = None;
+    for edit in edits {
+        let start = edit.start as usize;
+        let count = edit.delete_count as usize;
+        if start < cursor
+            || previous_start.is_some_and(|previous| start <= previous)
+            || start > baseline.len()
+            || count > baseline.len() - start
+            || (count == 0 && edit.insert.is_empty())
+        {
+            return Err("resource list edit is out of bounds or overlapping".into());
+        }
+        output.extend_from_slice(&baseline[cursor..start]);
+        output.extend_from_slice(&edit.insert);
+        cursor = start + count;
+        previous_start = Some(start);
+    }
+    output.extend_from_slice(&baseline[cursor..]);
+    Ok(output)
+}
+
 fn validate_optional_canvas_pair(
     canvas_id: Option<i64>,
     canvas_revision: Option<u64>,
@@ -328,4 +395,87 @@ pub struct PresentationSnapshot {
     pub html_island: Vec<erabasic_html::HtmlDocument>,
     #[n(10)]
     pub redraw: RedrawState,
+}
+
+#[cfg(test)]
+mod resource_delta_tests {
+    use super::*;
+
+    fn canvas(id: i64) -> CanvasReplay {
+        CanvasReplay {
+            canvas_id: id,
+            size: CanvasSize {
+                width: 1,
+                height: 1,
+            },
+            commands: Vec::new(),
+            revision: 1,
+        }
+    }
+
+    fn delta(edits: Vec<ResourceReplayListEdit<CanvasReplay>>) -> ResourceReplayDelta {
+        ResourceReplayDelta {
+            sprite_edits: Vec::new(),
+            canvas_edits: edits,
+            animation_timer_ms: 25,
+        }
+    }
+
+    #[test]
+    fn resource_delta_cbor_json_and_original_offsets_round_trip() {
+        let original = ResourceReplay {
+            canvases: vec![canvas(1), canvas(2), canvas(3)],
+            ..ResourceReplay::default()
+        };
+        let change = delta(vec![
+            ResourceReplayListEdit {
+                start: 0,
+                delete_count: 1,
+                insert: Vec::new(),
+            },
+            ResourceReplayListEdit {
+                start: 2,
+                delete_count: 1,
+                insert: vec![canvas(4), canvas(5)],
+            },
+        ]);
+        let bytes = era_protocol::encode_canonical(&change).unwrap();
+        assert_eq!(
+            era_protocol::decode_canonical::<ResourceReplayDelta>(&bytes).unwrap(),
+            change
+        );
+        assert_eq!(
+            serde_json::from_slice::<ResourceReplayDelta>(&serde_json::to_vec(&change).unwrap())
+                .unwrap(),
+            change
+        );
+        let next = original.apply_delta(&change).unwrap();
+        assert_eq!(next.canvases, vec![canvas(2), canvas(4), canvas(5)]);
+        assert_eq!(next.animation_timer_ms, 25);
+        assert_eq!(original.canvases, vec![canvas(1), canvas(2), canvas(3)]);
+    }
+
+    #[test]
+    fn invalid_resource_edits_are_atomic() {
+        let original = ResourceReplay {
+            canvases: vec![canvas(1)],
+            ..ResourceReplay::default()
+        };
+        let edit = |start, delete_count, insert| ResourceReplayListEdit {
+            start,
+            delete_count,
+            insert,
+        };
+        for edits in [
+            vec![edit(2, 0, vec![canvas(2)])],
+            vec![edit(0, 2, Vec::new())],
+            vec![edit(0, 0, Vec::new())],
+            vec![edit(0, 0, vec![canvas(2)]), edit(0, 0, vec![canvas(3)])],
+            vec![edit(0, 1, vec![canvas(2)]), edit(0, 1, vec![canvas(3)])],
+            vec![edit(1, 0, vec![canvas(1)])],
+        ] {
+            assert!(original.apply_delta(&delta(edits)).is_err());
+            assert_eq!(original.canvases, vec![canvas(1)]);
+        }
+    }
 }
