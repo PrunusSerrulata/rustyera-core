@@ -377,6 +377,9 @@ impl std::error::Error for TraditionalSaveValidationError {}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeDriveReport {
     pub state: RuntimeDriveState,
+    /// Whether inbound transitions, queued input, or runnable VM work remain after this drive. Unlike
+    /// `OutputReady`, this excludes output delivery itself and blocked external requests.
+    pub immediate_work: bool,
     pub vm_instructions: u64,
     pub runtime_transitions: u32,
     pub queued_envelopes: u32,
@@ -423,4 +426,3 @@ impl From<ProtocolError> for RuntimeError {
         Self::Protocol(value)
     }
 }
-

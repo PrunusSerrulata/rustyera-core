@@ -394,6 +394,7 @@ impl RuntimeSession {
         let state = self.drive_state();
         Ok(RuntimeDriveReport {
             state,
+            immediate_work: self.has_immediate_work(),
             vm_instructions: instructions,
             runtime_transitions: transitions,
             queued_envelopes: u32::try_from(self.outbound.len()).unwrap_or(u32::MAX),
@@ -467,14 +468,19 @@ impl RuntimeSession {
             RuntimeDriveState::Stopped
         } else if !self.outbound.is_empty() {
             RuntimeDriveState::OutputReady
-        } else if !self.inbound.is_empty()
-            || (self.phase == RuntimePhase::Running
-                && self.vm.as_ref().is_some_and(RuntimeVm::has_work))
-        {
+        } else if self.has_immediate_work() {
             RuntimeDriveState::MoreWork
         } else {
             RuntimeDriveState::Idle
         }
+    }
+
+    pub(super) fn has_immediate_work(&self) -> bool {
+        !matches!(self.phase, RuntimePhase::Faulted | RuntimePhase::Stopped)
+            && (!self.inbound.is_empty()
+                || (self.phase == RuntimePhase::WaitingInput && !self.queued_input.is_empty())
+                || (self.phase == RuntimePhase::Running
+                    && self.vm.as_ref().is_some_and(RuntimeVm::has_work)))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

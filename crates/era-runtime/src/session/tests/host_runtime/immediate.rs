@@ -137,6 +137,28 @@ fn run_immediate_query_project_with_budget(
 }
 
 #[test]
+fn output_delivery_does_not_imply_runnable_work_at_an_input_wait() {
+    let (_, report, _) =
+        run_immediate_query_project("@SYSTEM_TITLE\nPRINTL ready\nFORCEWAIT\nRETURN\n");
+    assert_eq!(report.state, RuntimeDriveState::OutputReady);
+    assert!(!report.immediate_work);
+}
+
+#[test]
+fn output_delivery_preserves_runnable_work_after_a_compute_budget() {
+    let (_, report, _) = run_immediate_query_project_with_budget(
+        "@SYSTEM_TITLE\nPRINTL ready\nWHILE 1\nFLAG:0 += 1\nWEND\n",
+        erabasic_compat::CompatibilityIdentity::default(),
+        RuntimeDriveBudget {
+            maximum_vm_instructions: 100,
+            maximum_runtime_transitions: 1024,
+        },
+    );
+    assert_eq!(report.state, RuntimeDriveState::OutputReady);
+    assert!(report.immediate_work);
+}
+
+#[test]
 fn immediate_queries_observe_latest_runtime_state_without_host_boundaries() {
     let source = "@SYSTEM_TITLE\n\
         PRINTL oldest\n\

@@ -313,17 +313,20 @@ fn each_drive_consumes_at_most_one_queued_segment() {
     );
     submit_text(&mut session, 3, "1\\n2\\n3");
 
-    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let first = session.drive(RuntimeDriveBudget::default()).unwrap();
+    assert!(first.immediate_work);
     assert_eq!(runtime_integer(&session, "FIRST"), 1);
     assert_eq!(runtime_integer(&session, "SECOND"), 0);
     assert_eq!(session.queued_input.len(), 2);
 
-    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let second = session.drive(RuntimeDriveBudget::default()).unwrap();
+    assert!(second.immediate_work);
     assert_eq!(runtime_integer(&session, "SECOND"), 2);
     assert_eq!(runtime_integer(&session, "THIRD"), 0);
     assert_eq!(session.queued_input.len(), 1);
 
-    session.drive(RuntimeDriveBudget::default()).unwrap();
+    let third = session.drive(RuntimeDriveBudget::default()).unwrap();
+    assert!(!third.immediate_work);
     assert_eq!(runtime_integer(&session, "THIRD"), 3);
     assert!(session.queued_input.is_empty());
 }
@@ -707,4 +710,3 @@ fn every_vm_snapshot_purpose_rejects_an_active_input_set() {
         )));
     }
 }
-
