@@ -46,6 +46,15 @@ impl RuntimeSession {
                 "SQL snapshot exceeds the fixed connection limit",
             );
         }
+        // Migrate only detached SQL candidates. Never rewrite the validated snapshot bytes,
+        // source identity, durable revision, or the live session before exact Open succeeds.
+        let mut connections = connections;
+        for snapshot in &mut connections {
+            if snapshot.identity.sqlite_version == "3.53.0" && snapshot.identity.format_version == 1
+            {
+                snapshot.identity.sqlite_version = era_runtime_protocol::SQL_SQLITE_VERSION.into();
+            }
+        }
         if let Err(message) = self.validate_exact_sql_restore(&connections) {
             return self.reject(message_id, CommandErrorCode::InvalidValue, message);
         }

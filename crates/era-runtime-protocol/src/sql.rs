@@ -24,7 +24,7 @@ pub const SQL_OPERATION_VERSIONS: VersionRange = VersionRange {
 };
 pub const SQL_LIMITS_POLICY_VERSION: u32 = erabasic_compat::SQL_LIMITS_CONTRACT_VERSION;
 pub const SQL_DATABASE_FORMAT_VERSION: u32 = 1;
-pub const SQL_SQLITE_VERSION: &str = "3.53.0";
+pub const SQL_SQLITE_VERSION: &str = "3.53.4";
 
 /// Fixed limits shared by every batch-3 provider.
 #[derive(Clone, Copy, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]

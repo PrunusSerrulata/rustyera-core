@@ -295,125 +295,310 @@ fn private_envelope_magic_is_rejected_without_mutating_runtime_or_slots() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn exact_restore_failure_keeps_the_active_sql_state_and_cleans_the_candidate() {
-    let mut fixture = SqlHostFixture::new("RESULT:0 = SQL_CONNECT(\"old\")", Vec::new());
-    let (_, old_connection) = fixture.answer_memory_open(Some(revision(1)));
-    assert_eq!(fixture.session.phase(), RuntimePhase::WaitingInput);
-    let old_provider = fixture.session.sql.provider();
-    fixture.messages.clear();
+    for legacy_resource in [false, true] {
+        let seed = b"legacy-resource-seed".to_vec();
+        let mut fixture = SqlHostFixture::new(
+            "RESULT:0 = SQL_CONNECT(\"old\")",
+            vec![("db/seed.db", seed.clone())],
+        );
+        let mut candidate_identity = memory_identity();
+        if legacy_resource {
+            candidate_identity.sqlite_version = "3.53.0".into();
+            candidate_identity.source =
+                SqlDatabaseSourceV1::ResourceSeed(era_runtime_protocol::SqlResourceSeedV1 {
+                    resource_id: "db/seed.db".into(),
+                    sha256: ProtocolBytes::new(Sha256::digest(&seed).to_vec()),
+                });
+        }
+        let (_, old_connection) = fixture.answer_memory_open(Some(revision(1)));
+        assert_eq!(fixture.session.phase(), RuntimePhase::WaitingInput);
+        let old_provider = fixture.session.sql.provider();
+        fixture.messages.clear();
 
-    fixture
-        .session
-        .begin_sql_snapshot_restore(
-            600,
-            b"candidate snapshot bytes".to_vec(),
-            vec![
-                crate::runtime_snapshot::SqlConnectionSnapshot {
-                    logical_name: "alpha".into(),
-                    identity: memory_identity(),
-                    durable_revision: revision(7),
-                },
-                crate::runtime_snapshot::SqlConnectionSnapshot {
-                    logical_name: "beta".into(),
-                    identity: memory_identity(),
-                    durable_revision: revision(8),
-                },
-            ],
-        )
-        .expect("begin exact SQL snapshot candidate");
-    fixture.messages.extend(drain(&mut fixture.session));
-
-    let (alpha_request, alpha_payload) = fixture.take_sql_request();
-    let SqlOperationV1::Open {
-        connection: alpha_connection,
-        logical_name,
-        revision: era_runtime_protocol::SqlOpenRevisionV1::Exact(alpha_revision),
-        ..
-    } = alpha_payload.operation
-    else {
-        panic!("expected first exact SQL Open")
-    };
-    assert_eq!(logical_name, "alpha");
-    assert_eq!(alpha_revision, revision(7));
-    assert_ne!(
-        alpha_payload.provider.service_epoch,
-        old_provider.service_epoch
-    );
-    fixture.respond_sql(
-        &alpha_request,
-        SqlResponseV1 {
-            provider: alpha_payload.provider,
-            database: Some(SqlDatabaseStateV1 {
-                connection: alpha_connection,
-                connected: true,
-                transaction_active: false,
-                durable_revision: Some(revision(7)),
-            }),
-            reader: None,
-            result: SqlResultV1::Opened {
-                sqlite_version: era_runtime_protocol::SQL_SQLITE_VERSION.into(),
-                limits: SqlLimitsV1::FIXED,
-            },
-        },
-    );
-    assert_eq!(
         fixture
+            .session
+            .begin_sql_snapshot_restore(
+                600,
+                b"candidate snapshot bytes".to_vec(),
+                vec![
+                    crate::runtime_snapshot::SqlConnectionSnapshot {
+                        logical_name: "alpha".into(),
+                        identity: candidate_identity.clone(),
+                        durable_revision: revision(7),
+                    },
+                    crate::runtime_snapshot::SqlConnectionSnapshot {
+                        logical_name: "beta".into(),
+                        identity: candidate_identity.clone(),
+                        durable_revision: revision(8),
+                    },
+                ],
+            )
+            .expect("begin exact SQL snapshot candidate");
+        fixture.messages.extend(drain(&mut fixture.session));
+
+        let (alpha_request, alpha_payload) = fixture.take_sql_request();
+        let SqlOperationV1::Open {
+            connection: alpha_connection,
+            logical_name,
+            identity,
+            revision: era_runtime_protocol::SqlOpenRevisionV1::Exact(alpha_revision),
+            ..
+        } = alpha_payload.operation
+        else {
+            panic!("expected first exact SQL Open")
+        };
+        assert_eq!(logical_name, "alpha");
+        assert_eq!(
+            identity.sqlite_version,
+            era_runtime_protocol::SQL_SQLITE_VERSION
+        );
+        assert_eq!(identity.source, candidate_identity.source);
+        assert_eq!(alpha_revision, revision(7));
+        assert_ne!(
+            alpha_payload.provider.service_epoch,
+            old_provider.service_epoch
+        );
+        fixture.respond_sql(
+            &alpha_request,
+            SqlResponseV1 {
+                provider: alpha_payload.provider,
+                database: Some(SqlDatabaseStateV1 {
+                    connection: alpha_connection,
+                    connected: true,
+                    transaction_active: false,
+                    durable_revision: Some(revision(7)),
+                }),
+                reader: None,
+                result: SqlResultV1::Opened {
+                    sqlite_version: era_runtime_protocol::SQL_SQLITE_VERSION.into(),
+                    limits: SqlLimitsV1::FIXED,
+                },
+            },
+        );
+        assert_eq!(
+            fixture
+                .session
+                .sql
+                .connection_by_key("old")
+                .expect("active old connection remains during candidate restore")
+                .handle,
+            old_connection
+        );
+
+        let (beta_request, beta_payload) = fixture.take_sql_request();
+        let SqlOperationV1::Open {
+            logical_name,
+            revision: era_runtime_protocol::SqlOpenRevisionV1::Exact(beta_revision),
+            ..
+        } = beta_payload.operation
+        else {
+            panic!("expected second exact SQL Open")
+        };
+        assert_eq!(logical_name, "beta");
+        assert_eq!(beta_revision, revision(8));
+        fixture.respond_sql(
+            &beta_request,
+            SqlResponseV1 {
+                provider: beta_payload.provider,
+                database: None,
+                reader: None,
+                result: SqlResultV1::Error {
+                    error: SqlErrorV1 {
+                        code: SqlErrorCodeV1::RevisionMissing,
+                        operation: SqlOperationKindV1::Open,
+                        context: Vec::new(),
+                        sqlite_code: None,
+                        sqlite_message: None,
+                    },
+                },
+            },
+        );
+
+        let active = fixture
             .session
             .sql
             .connection_by_key("old")
-            .expect("active old connection remains during candidate restore")
-            .handle,
-        old_connection
-    );
+            .expect("failed restore preserves active SQL state");
+        assert_eq!(active.handle, old_connection);
+        assert_eq!(active.durable_revision.as_ref(), Some(&revision(1)));
+        assert!(fixture.session.sql.connection_by_key("alpha").is_none());
+        assert!(fixture.session.ready_sql_snapshot_restore.is_none());
+        assert!(fixture.messages.iter().any(|message| matches!(
+            message,
+            RuntimeMessage::CommandRejected(rejection)
+                if rejection.code == CommandErrorCode::InvalidValue
+        )));
+        let (_, cleanup_payload) = fixture.take_sql_request();
+        assert_eq!(cleanup_payload.provider, alpha_payload.provider);
+        assert!(matches!(
+            cleanup_payload.operation,
+            SqlOperationV1::Disconnect { connection } if connection == alpha_connection
+        ));
+        assert!(fixture.session.pending_sql_snapshot_restore.is_none());
+    }
+}
 
-    let (beta_request, beta_payload) = fixture.take_sql_request();
-    let SqlOperationV1::Open {
-        logical_name,
-        revision: era_runtime_protocol::SqlOpenRevisionV1::Exact(beta_revision),
-        ..
-    } = beta_payload.operation
-    else {
-        panic!("expected second exact SQL Open")
-    };
-    assert_eq!(logical_name, "beta");
-    assert_eq!(beta_revision, revision(8));
-    fixture.respond_sql(
-        &beta_request,
-        SqlResponseV1 {
-            provider: beta_payload.provider,
-            database: None,
-            reader: None,
-            result: SqlResultV1::Error {
-                error: SqlErrorV1 {
-                    code: SqlErrorCodeV1::RevisionMissing,
-                    operation: SqlOperationKindV1::Open,
-                    context: Vec::new(),
-                    sqlite_code: None,
-                    sqlite_message: None,
-                },
-            },
+fn legacy_sql_snapshot_fixture(resource: bool) -> (SqlHostFixture, SqlConnectionHandleV1) {
+    let seed = b"legacy-resource-seed".to_vec();
+    let mut fixture = SqlHostFixture::new(
+        if resource {
+            "RESULT:0 = SQL_CONNECT(\"db\", \"Data Source=db/seed.db\")"
+        } else {
+            "RESULT:0 = SQL_CONNECT(\"db\")"
+        },
+        if resource {
+            vec![("db/seed.db", seed.clone())]
+        } else {
+            Vec::new()
         },
     );
+    let old_connection = if resource {
+        let storage = fixture.take_storage_request();
+        fixture.respond_storage(&storage, storage_read(&seed));
+        let (request, payload) = fixture.take_sql_request();
+        let SqlOperationV1::Open { connection, .. } = payload.operation else {
+            panic!("expected resource Open");
+        };
+        fixture.respond_sql(
+            &request,
+            SqlResponseV1 {
+                provider: payload.provider,
+                database: Some(SqlDatabaseStateV1 {
+                    connection,
+                    connected: true,
+                    transaction_active: false,
+                    durable_revision: Some(revision(4)),
+                }),
+                reader: None,
+                result: SqlResultV1::Opened {
+                    sqlite_version: era_runtime_protocol::SQL_SQLITE_VERSION.into(),
+                    limits: SqlLimitsV1::FIXED,
+                },
+            },
+        );
+        connection
+    } else {
+        fixture.answer_memory_open(Some(revision(4))).1
+    };
+    (fixture, old_connection)
+}
 
-    let active = fixture
-        .session
-        .sql
-        .connection_by_key("old")
-        .expect("failed restore preserves active SQL state");
-    assert_eq!(active.handle, old_connection);
-    assert_eq!(active.durable_revision.as_ref(), Some(&revision(1)));
-    assert!(fixture.session.sql.connection_by_key("alpha").is_none());
+fn assert_no_pending_sql_candidate(fixture: &SqlHostFixture) {
+    assert!(fixture.session.pending_sql_snapshot_restore.is_none());
     assert!(fixture.session.ready_sql_snapshot_restore.is_none());
-    assert!(fixture.messages.iter().any(|message| matches!(
-        message,
-        RuntimeMessage::CommandRejected(rejection)
-            if rejection.code == CommandErrorCode::InvalidValue
-    )));
-    let (_, cleanup_payload) = fixture.take_sql_request();
-    assert_eq!(cleanup_payload.provider, alpha_payload.provider);
-    assert!(matches!(
-        cleanup_payload.operation,
-        SqlOperationV1::Disconnect { connection } if connection == alpha_connection
-    ));
+    assert!(!fixture.messages.iter().any(|message| matches!(message, RuntimeMessage::ServiceRequest(request) if request.kind == ServiceKind::Sql)));
+}
+
+#[test]
+fn legacy_sql_snapshot_reopens_only_with_the_actual_current_engine() {
+    for resource in [false, true] {
+        for reported_version in ["3.53.4", "3.53.0", "9.0.0"] {
+            let (mut fixture, old_connection) = legacy_sql_snapshot_fixture(resource);
+            fixture.messages.clear();
+            let original = export_snapshot_bytes(&mut fixture, 710);
+            let mut snapshot = crate::runtime_snapshot::decode(&original, usize::MAX).unwrap();
+            snapshot.sql.connections[0].identity.sqlite_version = "3.53.0".into();
+            snapshot.sql.connections[0].identity.format_version = 1;
+            let bytes = crate::runtime_snapshot::encode(&snapshot).unwrap();
+            fixture.session.start_vm_snapshot(711, &bytes).unwrap();
+            fixture.messages.extend(drain(&mut fixture.session));
+            assert_eq!(
+                fixture
+                    .session
+                    .pending_sql_snapshot_restore
+                    .as_ref()
+                    .unwrap()
+                    .bytes,
+                bytes
+            );
+            assert_eq!(
+                fixture.session.sql.connection_by_key("db").unwrap().handle,
+                old_connection
+            );
+            let (request, payload) = fixture.take_sql_request();
+            let SqlOperationV1::Open {
+                connection,
+                identity,
+                revision: era_runtime_protocol::SqlOpenRevisionV1::Exact(exact),
+                ..
+            } = payload.operation
+            else {
+                panic!("expected exact Open");
+            };
+            assert_eq!(identity.sqlite_version, "3.53.4");
+            assert_eq!(identity.format_version, 1);
+            assert_eq!(identity.source, snapshot.sql.connections[0].identity.source);
+            assert_eq!(exact, revision(4));
+            fixture.respond_sql(
+                &request,
+                SqlResponseV1 {
+                    provider: payload.provider,
+                    database: Some(SqlDatabaseStateV1 {
+                        connection,
+                        connected: true,
+                        transaction_active: false,
+                        durable_revision: Some(revision(4)),
+                    }),
+                    reader: None,
+                    result: SqlResultV1::Opened {
+                        sqlite_version: reported_version.into(),
+                        limits: SqlLimitsV1::FIXED,
+                    },
+                },
+            );
+            let active = fixture.session.sql.connection_by_key("db").unwrap();
+            if reported_version == "3.53.4" {
+                assert_eq!(active.handle, connection);
+                assert_eq!(active.identity.sqlite_version, "3.53.4");
+                assert_eq!(active.durable_revision.as_ref(), Some(&revision(4)));
+                assert_eq!(fixture.session.phase(), RuntimePhase::WaitingInput);
+            } else {
+                assert_eq!(active.handle, old_connection);
+                assert!(fixture.messages.iter().any(|message| matches!(
+                    message, RuntimeMessage::CommandRejected(rejection)
+                        if rejection.code == CommandErrorCode::VersionMismatch
+                )));
+                let (_, cleanup) = fixture.take_sql_request();
+                assert_eq!(cleanup.provider, payload.provider);
+                assert!(
+                    matches!(cleanup.operation, SqlOperationV1::Disconnect { connection: cleaned } if cleaned == connection && cleaned != old_connection)
+                );
+                assert_no_pending_sql_candidate(&fixture);
+            }
+            // The caller-owned original container remains a legacy snapshot.
+            let unchanged = crate::runtime_snapshot::decode(&bytes, usize::MAX).unwrap();
+            assert_eq!(
+                unchanged.sql.connections[0].identity.sqlite_version,
+                "3.53.0"
+            );
+            assert_eq!(unchanged.sql.connections[0].durable_revision, revision(4));
+        }
+    }
+}
+
+#[test]
+fn sql_snapshot_migration_rejects_unknown_versions_and_formats_before_open() {
+    for (version, format) in [("3.53.1", 1), ("9.0.0", 1), ("3.53.0", 2), ("3.53.4", 2)] {
+        let mut fixture = SqlHostFixture::new("RESULT:0 = SQL_CONNECT(\"db\")", Vec::new());
+        let (_, old_connection) = fixture.answer_memory_open(Some(revision(4)));
+        let original = export_snapshot_bytes(&mut fixture, 720);
+        let mut snapshot = crate::runtime_snapshot::decode(&original, usize::MAX).unwrap();
+        snapshot.sql.connections[0].identity.sqlite_version = version.into();
+        snapshot.sql.connections[0].identity.format_version = format;
+        let bytes = crate::runtime_snapshot::encode(&snapshot).unwrap();
+        fixture.messages.clear();
+        fixture.session.start_vm_snapshot(721, &bytes).unwrap();
+        fixture.messages.extend(drain(&mut fixture.session));
+        assert_no_pending_sql_candidate(&fixture);
+        assert_eq!(
+            fixture.session.sql.connection_by_key("db").unwrap().handle,
+            old_connection
+        );
+        assert!(fixture.messages.iter().any(|message| matches!(
+            message, RuntimeMessage::CommandRejected(rejection)
+                if rejection.code == CommandErrorCode::InvalidValue
+        )));
+    }
 }
 
 #[test]

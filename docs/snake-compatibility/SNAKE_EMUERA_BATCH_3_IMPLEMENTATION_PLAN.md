@@ -25,6 +25,23 @@
 
 ## 公共接口与行为契约
 
+### 2026-09-08 性能迭代：SQLite 版本升级与旧数据兼容
+
+按用户授权，将实际执行引擎统一为 SQLite 3.53.4：Web/WASM 使用
+`@sqlite.org/sqlite-wasm@3.53.4-build1`，TUI 使用 `apsw==3.53.4.0`。Provider 必须核对
+实际引擎版本，不能仅修改报告值；SQL operation 版本及固定安全限制保持不变。
+
+- v1 持久化链的身份前像继续使用明确命名的 `SQL_STORAGE_IDENTITY_ANCHOR_V1=3.53.0`，
+  它表示存储链沿袭关系，不表示实际引擎版本。既有 Resource 和 Web memory 的
+  current/exact/CAS 路径、不可变 revision 字节及摘要保持不变，不迁移目录、不重编码数据库。
+- Core 仅在恢复 SQL 快照候选时，将 SQLite 3.53.0 / SQL format 1 的旧身份规范化为当前
+  引擎身份，再按原 exact revision 打开。原快照容器和摘要不改，全部候选成功前不替换 live
+  session；未知版本、未知格式及原有项目、artifact、资源、reader/transaction 校验继续拒绝。
+- 历史 seed fixture 的 3.53.0 字段保留为生成来源。新增测试独立验证旧链寻址、实际 3.53.4
+  引擎打开旧数据库、提交/回滚及恢复语义，不把更改 fixture 版本号作为兼容证据。
+- TUI 现有 memory exact restore 不支持项不在本次升级中扩展。升级依赖、契约及迁移属于
+  独立批次，不能单凭版本升级宣称 Tauri 响应时间达标；原生 SQL 后端另行实施和验收。
+
 ### 脚本 API
 
 本批次实现并注册：
@@ -69,7 +86,7 @@
 - 只接受无选项的 `Data Source=<安全项目相对路径>`；拒绝绝对路径、URI、盘符、父级跳转、附加 SQLite 参数和非 Resource 来源。
 - 同名同配置重复连接为成功的幂等操作；同名不同配置返回稳定冲突错误。
 - 派生数据库采用不可变 revision blob 加原子 current pointer：
-  - 身份包含规范化 seed 路径、seed SHA-256、SQLite 版本和格式版本。
+  - 身份包含规范化 seed 路径、seed SHA-256、v1 SQLite 存储链锚点和格式版本。
   - 每次成功 autocommit 写操作或 `COMMIT` 发布新修订；`ROLLBACK` 不发布。
   - 发布使用 expected-revision 比较，冲突时拒绝覆盖。
   - VM 快照记录确切修订；修订缺失时明确拒绝恢复，不能静默切换到较新数据库。
@@ -138,7 +155,7 @@
 
 ### 3.3：Web 与 Tauri 共用 SQLite Provider
 
-- 固定 `@sqlite.org/sqlite-wasm` `3.53.0-build1`，Browser 与 Tauri 均使用同一 Worker provider；不增加第二套 Tauri 原生 SQL 实现。
+- 固定 `@sqlite.org/sqlite-wasm` `3.53.4-build1`，本升级阶段 Browser 与 Tauri 均使用同一 Worker provider；原生 SQL 后端不混入版本迁移批次。
 - Worker 内执行 SQLite；主线程只负责：
   - Resource seed 读取。
   - `Data/sql` revision blob/current pointer 的原子读写。
@@ -154,7 +171,7 @@
 
 ### 3.4：TUI SQLite Provider
 
-- 固定 `apsw==3.53.0.0`，与 Web/Tauri 的 SQLite 3.53.0 对齐，并同步依赖锁及 PyInstaller 收集配置。
+- 固定 `apsw==3.53.4.0`，与 Web/Tauri 的 SQLite 3.53.4 对齐，并同步依赖锁及 PyInstaller 收集配置。
 - 在现有 `RuntimeWorker` 服务路由内实现 SQL provider，不占用 Textual 主线程。
 - 使用与 Web 相同的连接规则、limits、typed values、revision blob/current pointer、原子发布和 epoch 清理。
 - 不允许 Python DB-API 隐式 transaction 改写协议语义；以 APSW/SQLite 实际 autocommit 状态作为权威结果。
@@ -216,6 +233,6 @@
 - 开始实施时重新确认专用 worktree 仍在 `codex/snake-compatibility` 且工作区干净；规划时基线为 core `35dd5a99…`、TUI `69ed1249…`、Web `2158972c…`。
 - 蛇版 TW 规划时为 `667b9cd0…`，已有用户修改的 `emuera.config` 全程保留，不进入提交。
 - `plugins/qol_data.db` 是批次 3 唯一允许的预置数据库来源；当前约 1.3 MiB，实施前复核其已记录摘要和 schema。
-- SQLite 统一固定为 3.53.0：Web/Tauri 使用 `@sqlite.org/sqlite-wasm@3.53.0-build1`，TUI 使用 `apsw==3.53.0.0`。
+- SQLite 当前统一固定为 3.53.4：Web/Tauri 使用 `@sqlite.org/sqlite-wasm@3.53.4-build1`，TUI 使用 `apsw==3.53.4.0`；旧 3.53.0 seed 和存储链按上述兼容契约保留。
 - 批次 3 不修改蛇版 Emuera、蛇版 TW 或游戏资源；reference 与游戏仓库保持只读。
 - “批次 3 完成”不要求补齐缺失的 bbas MAP 文件，也不包含完整标题、新游戏、传统存档或外部蛇版存档兼容。
