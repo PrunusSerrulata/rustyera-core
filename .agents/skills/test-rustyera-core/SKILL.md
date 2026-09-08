@@ -5,6 +5,26 @@ description: Validate rustyera-core changes with scope-appropriate checks, order
 
 # Test RustyEra Core
 
+## Test delegation: execution and collection only
+
+The primary agent owns every planning, selection, interpretation, diagnosis, and next-action decision
+in this skill, except the explicitly authorized in-game choices described below. Before delegation, provide a complete executable
+command or a primary-authored script with its complete invocation: working directory, executable,
+all required environment variables and arguments, inputs/outputs, ordering, timeouts, watchdog,
+deadline, result collection, and stop/cleanup steps. Resolve every placeholder before dispatch.
+
+The test subagent must execute those commands unchanged and collect the specified raw results only.
+It must never guess missing information, choose tests or game inputs, adjust configuration, diagnose
+or repair failures, decide to rebuild/retry, or declare acceptance. Report incomplete or ambiguous
+instructions and execution errors to the primary agent; wait for a new complete command while
+following only the already specified monitoring, stop, and cleanup instructions.
+
+The sole exception is choosing in-game actions when the user explicitly requests autonomous play
+and the primary agent confirms that the phase's prerequisites are met. The primary still supplies
+complete launch commands, action interfaces, boundaries, monitoring and exit instructions. This
+exception never permits autonomous decisions about test procedures, tools, environment, parameters,
+retries, diagnosis or recovery.
+
 ## Enforce the batch budget
 
 Use the batches defined by the root `AGENTS.md`: estimate each requested feature/change/fix first,
@@ -106,11 +126,11 @@ Paths below are relative to the `rustyera-core` repository root. “蛇版emuera
 Resolve bare “蛇版” from context; if its meaning is not reliable, ask the user before selecting
 an engine, game, or oracle. The original reference engine is `../emuera.em`, not a TW game.
 
-| Changed behavior | Required C# oracle(s) |
-| --- | --- |
-| Does not involve snake Emuera | Original `emuera.em` |
-| Involves snake Emuera | Snake Emuera instead of the original-only flow |
-| Involves snake Emuera and compatibility behavior, or also needs comparison with the original | Both snake Emuera and original `emuera.em` |
+| Changed behavior                                                                             | Required C# oracle(s)                          |
+| -------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| Does not involve snake Emuera                                                                | Original `emuera.em`                           |
+| Involves snake Emuera                                                                        | Snake Emuera instead of the original-only flow |
+| Involves snake Emuera and compatibility behavior, or also needs comparison with the original | Both snake Emuera and original `emuera.em`     |
 
 Use the most specific applicable row. This routing applies to feature development, modifications,
 and fixes. It does not expand the
