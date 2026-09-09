@@ -191,8 +191,24 @@ impl ProgramGeneration {
             preparation.advance();
         }
         let mut structured_ranges = Vec::with_capacity(artifact.functions.len());
+        let mut remaining_jump_bytes = scope_transitions::MAXIMUM_STATIC_JUMP_BYTES;
+        let mut remaining_jump_work = scope_transitions::MAXIMUM_STATIC_JUMP_WORK;
+        let mut static_structured_jumps = scope_transitions::allocate_directory(
+            artifact.functions.len(),
+            &mut remaining_jump_bytes,
+        );
+        let cache_jumps = static_structured_jumps.capacity() >= artifact.functions.len();
         for function in &artifact.functions {
-            structured_ranges.push(structured_scope_ranges(function));
+            let ranges = structured_scope_ranges(function);
+            if cache_jumps {
+                static_structured_jumps.push(scope_transitions::plan_static_jumps(
+                    function,
+                    &ranges,
+                    &mut remaining_jump_bytes,
+                    &mut remaining_jump_work,
+                ));
+            }
+            structured_ranges.push(ranges);
             preparation.advance();
         }
         let function_memo_plans = build_function_memo_plans(
@@ -334,6 +350,7 @@ impl ProgramGeneration {
             function_local_indices,
             instruction_source_indices,
             structured_scope_ranges: structured_ranges,
+            static_structured_jumps,
         }
     }
 
@@ -356,42 +373,21 @@ impl ProgramGeneration {
         function: SymbolKey,
         source: usize,
         target: usize,
-    ) -> Option<StructuredJumpTransition> {
-        let ranges = self
-            .structured_scope_ranges
-            .get(*self.function_index(function)?)?;
-        let mut source_ranges = ranges
-            .iter()
-            .filter(|range| range.start <= source && source <= range.end);
-        let mut target_ranges = ranges
-            .iter()
-            .filter(|range| range.start <= target && target <= range.end);
-        let mut retain_loops = 0;
-        let mut retain_selects = 0;
-        let entered = loop {
-            match (source_ranges.next(), target_ranges.next()) {
-                (Some(left), Some(right))
-                    if left.kind == right.kind && left.opener == right.opener =>
-                {
-                    match right.kind {
-                        StructuredScopeKind::Loop => retain_loops += 1,
-                        StructuredScopeKind::Select => retain_selects += 1,
-                    }
-                }
-                (_, Some(first_entered)) => {
-                    break std::iter::once(first_entered)
-                        .chain(target_ranges)
-                        .map(|range| range.kind)
-                        .collect();
-                }
-                (_, None) => break Vec::new(),
-            }
-        };
-        Some(StructuredJumpTransition {
-            retain_loops,
-            retain_selects,
-            entered,
-        })
+    ) -> Option<std::borrow::Cow<'_, StructuredJumpTransition>> {
+        let index = *self.function_index(function)?;
+        if let Some(plan) = self
+            .static_structured_jumps
+            .get(index)
+            .and_then(|plans| sparse_instruction_plan(plans, source))
+            && plan.target == target
+        {
+            return Some(std::borrow::Cow::Borrowed(&plan.transition));
+        }
+        Some(std::borrow::Cow::Owned(scope_transitions::transition(
+            self.structured_scope_ranges.get(index)?,
+            source,
+            target,
+        )))
     }
 
     pub(crate) fn global(&self, key: SymbolKey) -> Option<&erabasic_bytecode::BytecodeGlobal> {
@@ -610,6 +606,181 @@ fn sparse_instruction_plan<T>(plans: &[(u32, T)], instruction: usize) -> Option<
 #[cfg(test)]
 mod compact_generation_index_tests {
     use super::*;
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Shared cache accounting is checked across directory, entries, payloads and work exhaustion."
+    )]
+    fn static_structured_jumps_charge_all_capacity_and_bound_generation_work() {
+        let artifact = Arc::new(compiled_generation_fixture());
+        let generation = ProgramGeneration::new(Arc::clone(&artifact));
+        let directory_bytes =
+            artifact.functions.len() * std::mem::size_of::<Vec<(u32, StaticStructuredJump)>>();
+        let entry_bytes = std::mem::size_of::<(u32, StaticStructuredJump)>();
+        for limit in [
+            0,
+            directory_bytes - 1,
+            directory_bytes,
+            directory_bytes + entry_bytes,
+            directory_bytes + 5 * entry_bytes,
+        ] {
+            let mut remaining = limit;
+            let mut work = usize::MAX;
+            let mut directory =
+                scope_transitions::allocate_directory(artifact.functions.len(), &mut remaining);
+            if directory.capacity() >= artifact.functions.len() {
+                for (index, function) in artifact.functions.iter().enumerate() {
+                    directory.push(scope_transitions::plan_static_jumps(
+                        function,
+                        &generation.structured_scope_ranges[index],
+                        &mut remaining,
+                        &mut work,
+                    ));
+                }
+            }
+            let retained = directory.capacity()
+                * std::mem::size_of::<Vec<(u32, StaticStructuredJump)>>()
+                + directory
+                    .iter()
+                    .map(|plans| {
+                        plans.capacity() * entry_bytes
+                            + plans
+                                .iter()
+                                .map(|(_, plan)| {
+                                    plan.transition.entered.capacity()
+                                        * std::mem::size_of::<StructuredScopeKind>()
+                                })
+                                .sum::<usize>()
+                    })
+                    .sum::<usize>();
+            assert_eq!(retained + remaining, limit);
+            let mut bounded = generation.clone();
+            bounded.static_structured_jumps = directory;
+            for (index, function) in artifact.functions.iter().enumerate() {
+                for source in 0..function.code.len() {
+                    for target in 0..=function.code.len() {
+                        assert_eq!(
+                            *bounded
+                                .structured_jump_transition(function.key, source, target)
+                                .unwrap(),
+                            scope_transitions::transition(
+                                &generation.structured_scope_ranges[index],
+                                source,
+                                target
+                            )
+                        );
+                    }
+                }
+            }
+        }
+        let index = generation
+            .structured_scope_ranges
+            .iter()
+            .position(|ranges| !ranges.is_empty())
+            .unwrap();
+        let ranges = &generation.structured_scope_ranges[index];
+        let mut bytes = scope_transitions::MAXIMUM_STATIC_JUMP_BYTES;
+        let mut work = ranges.len() * 5;
+        let plans = scope_transitions::plan_static_jumps(
+            &artifact.functions[index],
+            ranges,
+            &mut bytes,
+            &mut work,
+        );
+        assert_eq!(plans.len(), 1);
+        assert_eq!(work, 0);
+        assert!(
+            scope_transitions::plan_static_jumps(
+                &artifact.functions[index],
+                ranges,
+                &mut bytes,
+                &mut work
+            )
+            .is_empty()
+        );
+        let mut bounded = generation.clone();
+        bounded.static_structured_jumps[index] = plans;
+        let (source, plan) = &bounded.static_structured_jumps[index][0];
+        assert!(matches!(
+            bounded.structured_jump_transition(
+                artifact.functions[index].key,
+                *source as usize,
+                plan.target
+            ),
+            Some(std::borrow::Cow::Borrowed(_))
+        ));
+
+        // A branch entering a scope needs an additional retained kind, unlike ordinary loop backedges.
+        let mut function = artifact.functions[index].clone();
+        function.code[0] = erabasic_bytecode::EncodedInstruction::new(
+            Opcode::Jump,
+            u32::try_from(ranges[0].start)
+                .unwrap()
+                .to_le_bytes()
+                .to_vec(),
+        );
+        let entries = function
+            .code
+            .iter()
+            .filter(|encoded| {
+                matches!(
+                    Opcode::try_from(encoded.opcode),
+                    Ok(Opcode::Jump | Opcode::JumpIfFalse)
+                )
+            })
+            .count();
+        for extra in [0, std::mem::size_of::<StructuredScopeKind>()] {
+            let mut bytes = entries * entry_bytes + extra;
+            let mut work = usize::MAX;
+            let plans =
+                scope_transitions::plan_static_jumps(&function, ranges, &mut bytes, &mut work);
+            assert_eq!(plans.iter().any(|(source, _)| *source == 0), extra != 0);
+        }
+    }
+
+    #[test]
+    fn static_structured_jumps_match_fallback_for_every_edge_and_respect_capacity() {
+        let artifact = Arc::new(compiled_generation_fixture());
+        let generation = ProgramGeneration::new(Arc::clone(&artifact));
+        assert!(
+            generation
+                .literal_group_match_plans
+                .iter()
+                .flatten()
+                .any(|(_, plan)| {
+                    matches!(plan.candidates, LiteralGroupMatchCandidates::Integers(_))
+                })
+        );
+        let mut cached = 0;
+        for (index, function) in artifact.functions.iter().enumerate() {
+            let ranges = &generation.structured_scope_ranges[index];
+            let mut no_bytes = 0;
+            let mut unlimited_work = usize::MAX;
+            assert!(
+                scope_transitions::plan_static_jumps(
+                    function,
+                    ranges,
+                    &mut no_bytes,
+                    &mut unlimited_work
+                )
+                .is_empty()
+            );
+            for source in 0..function.code.len() {
+                for target in 0..=function.code.len() {
+                    let actual = generation
+                        .structured_jump_transition(function.key, source, target)
+                        .unwrap();
+                    assert_eq!(
+                        *actual,
+                        scope_transitions::transition(ranges, source, target)
+                    );
+                    cached += usize::from(matches!(actual, std::borrow::Cow::Borrowed(_)));
+                }
+            }
+        }
+        assert!(cached > 0, "fixture must exercise real cached branch edges");
+    }
     use erabasic_analyzer::{
         AnalysisInput, AnalyzerOptions, ExtensionRegistry, ProjectSource, SourcePayload,
         analyze_project,
@@ -618,6 +789,18 @@ mod compact_generation_index_tests {
     use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
 
     fn compiled_generation_fixture() -> BytecodeArtifact {
+        compiled_generation_source(
+            "@SYSTEM_TITLE\n#DIMS VALUE\nVALUE '= \"keep\"\n\
+             RESULT = GROUPMATCH(VALUE, \"keep\", \"other\", \"keep\")\n\
+             RESULT:1 = GROUPMATCH(RESULT, 1, 0, 1)\n\
+             CALL CLEAR_ROW(2, 0)\nRETURN\n\
+             @CLEAR_ROW(ARG, VALUE)\n#DIM VALUE\n#LOCALSIZE 1\n\
+             FOR LOCAL, 0, 4\nDA:ARG:LOCAL = 0\nNEXT\nRETURN\n\
+             @REF_VALUES(NUMBERS, TEXTS)\n#DIM REF NUMBERS\n#DIMS REF TEXTS\nRETURN\n",
+        )
+    }
+
+    fn compiled_generation_source(source: &str) -> BytecodeArtifact {
         let project_data = load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
             .data
             .expect("default project data");
@@ -626,15 +809,7 @@ mod compact_generation_index_tests {
                 project_data,
                 sources: vec![ProjectSource {
                     relative_path: "main.erb".into(),
-                    payload: SourcePayload::Utf8(
-                        "@SYSTEM_TITLE\n#DIMS VALUE\nVALUE '= \"keep\"\n\
-                         RESULT = GROUPMATCH(VALUE, \"keep\", \"other\", \"keep\")\n\
-                         CALL CLEAR_ROW(2, 0)\nRETURN\n\
-                         @CLEAR_ROW(ARG, VALUE)\n#DIM VALUE\n#LOCALSIZE 1\n\
-                         FOR LOCAL, 0, 4\nDA:ARG:LOCAL = 0\nNEXT\nRETURN\n\
-                         @REF_VALUES(NUMBERS, TEXTS)\n#DIM REF NUMBERS\n#DIMS REF TEXTS\nRETURN\n"
-                            .into(),
-                    ),
+                    payload: SourcePayload::Utf8(source.into()),
                 }],
             },
             &AnalyzerOptions::analysis_mode(),

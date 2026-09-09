@@ -49,10 +49,17 @@ pub(crate) struct StructuredScopeRange {
     end: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StructuredJumpTransition {
     pub retain_loops: usize,
     pub retain_selects: usize,
     pub entered: Vec<StructuredScopeKind>,
+}
+
+#[derive(Clone, Debug)]
+struct StaticStructuredJump {
+    target: usize,
+    transition: StructuredJumpTransition,
 }
 
 type SymbolMap<T> = HashMap<SymbolKey, T, BuildHasherDefault<SymbolKeyHasher>>;
@@ -87,7 +94,10 @@ pub(crate) struct ProgramGeneration {
     function_local_indices: SymbolMap<Vec<usize>>,
     instruction_source_indices: Vec<Vec<u32>>,
     structured_scope_ranges: Vec<Vec<StructuredScopeRange>>,
+    static_structured_jumps: Vec<Vec<(u32, StaticStructuredJump)>>,
 }
+
+mod scope_transitions;
 
 const NO_SOURCE_MAP_ENTRY: u32 = u32::MAX;
 const NO_GLOBAL_INDEX: u32 = u32::MAX;
