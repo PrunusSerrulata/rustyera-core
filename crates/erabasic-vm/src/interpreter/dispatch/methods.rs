@@ -4,6 +4,11 @@ use crate::state::user_calls::{
     PendingUserCall, ResolvedUserCall, UserArgumentBinding, UserCallOrigin, resolve_user_call,
 };
 use erabasic_bytecode::{UserArgumentAdvance, UserArgumentSpec, UserCallSpec};
+use std::borrow::Cow;
+
+#[cfg(test)]
+#[path = "methods_tests.rs"]
+mod tests;
 
 fn invalid(message: impl Into<String>) -> StepError {
     StepError::new(VmFaultCode::InvalidInstruction, message)
@@ -122,7 +127,7 @@ impl Vm {
         position: &InstructionPosition<'_>,
         opcode: Opcode,
         program: &ProgramGeneration,
-        operands: &UserConsumer,
+        operands: &UserConsumer<'_>,
     ) -> Result<(), StepError> {
         let slot = operands.slot;
         let spec = &operands.spec;
@@ -216,7 +221,7 @@ impl Vm {
 
 fn advance_user_actual(
     fiber: &mut Fiber,
-    operands: &UserConsumer,
+    operands: &UserConsumer<'_>,
     payload: &[u8],
 ) -> Result<(), StepError> {
     let slot = operands.slot;
@@ -252,8 +257,8 @@ fn advance_user_actual(
     Ok(())
 }
 
-struct UserConsumer {
-    spec: UserCallSpec,
+struct UserConsumer<'program> {
+    spec: Cow<'program, UserCallSpec>,
     slot: usize,
     call: ResolvedUserCall,
 }
@@ -272,10 +277,10 @@ fn checked_user_target(
     Ok(())
 }
 
-fn user_origin(
+fn user_origin<'program>(
     position: &InstructionPosition<'_>,
-    program: &ProgramGeneration,
-) -> Result<(usize, UserCallSpec), StepError> {
+    program: &'program ProgramGeneration,
+) -> Result<(usize, Cow<'program, UserCallSpec>), StepError> {
     let resolve = read_u32(position.encoded.payload, 0)? as usize;
     let instruction = program
         .function(position.function)
@@ -284,18 +289,19 @@ fn user_origin(
             instruction.opcode == Opcode::ResolveUserCall as u16 && resolve < position.instruction
         })
         .ok_or_else(|| invalid("user consumer has no earlier resolve origin"))?;
-    Ok((
-        resolve,
-        UserCallSpec::decode(&instruction.payload).map_err(invalid)?,
-    ))
+    let spec = match program.cached_user_call_spec(position.function, resolve) {
+        Some(spec) => Cow::Borrowed(spec),
+        None => Cow::Owned(UserCallSpec::decode(&instruction.payload).map_err(invalid)?),
+    };
+    Ok((resolve, spec))
 }
 
-fn decode_user_consumer(
+fn decode_user_consumer<'program>(
     caller: &crate::state::Frame,
     position: &InstructionPosition<'_>,
     opcode: Opcode,
-    program: &ProgramGeneration,
-) -> Result<UserConsumer, StepError> {
+    program: &'program ProgramGeneration,
+) -> Result<UserConsumer<'program>, StepError> {
     let expected_len = match opcode {
         Opcode::GuardUserArgument | Opcode::SelectUserArgument => 10,
         Opcode::CaptureUserArgument | Opcode::AdvanceUserArgument => 7,

@@ -75,6 +75,7 @@ pub(crate) struct ProgramGeneration {
     // Lookup-only membership for the per-access REF guard; rebuilt for every generation.
     reference_variable_keys: HashSet<SymbolKey, BuildHasherDefault<SymbolKeyHasher>>,
     variable_global_indices: Vec<Vec<u32>>,
+    decoded_user_call_specs: user_call_specs::DecodedUserCallSpecs,
     bulk_fill_loop_plans: Vec<Vec<(u32, BulkFillLoopPlan)>>,
     literal_group_match_plans: Vec<Vec<(u32, LiteralGroupMatchPlan)>>,
     function_memo_plans: Vec<Option<FunctionMemoPlan>>,
@@ -99,6 +100,7 @@ pub(crate) struct ProgramGeneration {
 }
 
 mod scope_transitions;
+mod user_call_specs;
 
 const NO_SOURCE_MAP_ENTRY: u32 = u32::MAX;
 const NO_GLOBAL_INDEX: u32 = u32::MAX;

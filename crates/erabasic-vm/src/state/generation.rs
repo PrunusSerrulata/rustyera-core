@@ -2,6 +2,12 @@
 use super::*;
 impl ProgramGeneration {
     #[cfg(test)]
+    pub(crate) fn disable_user_call_specs_for_test(&mut self) {
+        self.decoded_user_call_specs =
+            user_call_specs::DecodedUserCallSpecs::with_limits(&[], 0, 0, 0, || {});
+    }
+
+    #[cfg(test)]
     pub(crate) fn disable_bulk_fill_for_test(&mut self) {
         self.bulk_fill_loop_plans.clear();
     }
@@ -49,7 +55,7 @@ impl ProgramGeneration {
         let function_work = u64::try_from(artifact.functions.len()).unwrap_or(u64::MAX);
         let global_work = u64::try_from(artifact.globals.len()).unwrap_or(u64::MAX);
         let total_work = function_work
-            .saturating_mul(10)
+            .saturating_mul(11)
             .saturating_add(global_work.saturating_mul(4))
             .max(1);
         let mut preparation = PreparationReporter::new(progress, total_work);
@@ -339,6 +345,10 @@ impl ProgramGeneration {
             preparation.advance();
         }
         debug_assert_eq!(source_cursor, source_entries.len());
+        let decoded_user_call_specs =
+            user_call_specs::DecodedUserCallSpecs::new(&artifact.functions, || {
+                preparation.advance();
+            });
         preparation.finish();
         Self {
             artifact,
@@ -347,6 +357,7 @@ impl ProgramGeneration {
             global_indices,
             reference_variable_keys,
             variable_global_indices,
+            decoded_user_call_specs,
             bulk_fill_loop_plans,
             literal_group_match_plans,
             function_memo_plans,
@@ -376,6 +387,15 @@ impl ProgramGeneration {
 
     pub(crate) fn function_index(&self, key: SymbolKey) -> Option<&usize> {
         self.function_indices.get(&key)
+    }
+
+    pub(crate) fn cached_user_call_spec(
+        &self,
+        function: SymbolKey,
+        instruction: usize,
+    ) -> Option<&erabasic_bytecode::UserCallSpec> {
+        self.decoded_user_call_specs
+            .get(*self.function_index(function)?, instruction)
     }
 
     pub(crate) fn function_by_name(&self, name: &str) -> Option<&BytecodeFunction> {
@@ -643,6 +663,97 @@ fn sparse_instruction_plan<T>(plans: &[(u32, T)], instruction: usize) -> Option<
 #[cfg(test)]
 mod compact_generation_index_tests {
     use super::*;
+
+    #[test]
+    fn decoded_user_call_specs_preserve_origin_limits_and_generation_identity() {
+        let artifact = Arc::new(compiled_generation_source(
+            "@SYSTEM_TITLE\nTRYCALLFORM TARGET(1, 2)\nRETURN\n@TARGET(ARG, ARG:1)\nRETURN\n",
+        ));
+        let (function_index, function) = artifact
+            .functions
+            .iter()
+            .enumerate()
+            .find(|(_, function)| function.name == "SYSTEM_TITLE")
+            .unwrap();
+        let resolve = function
+            .code
+            .iter()
+            .position(|instruction| instruction.opcode == Opcode::ResolveUserCall as u16)
+            .unwrap();
+        let expected =
+            erabasic_bytecode::UserCallSpec::decode(&function.code[resolve].payload).unwrap();
+        assert_eq!(expected.arguments.len(), 2);
+        let generation = ProgramGeneration::new(Arc::clone(&artifact));
+        let cached = generation
+            .cached_user_call_spec(function.key, resolve)
+            .unwrap();
+        assert_eq!(cached, &expected);
+        assert!(std::ptr::eq(
+            cached,
+            generation
+                .cached_user_call_spec(function.key, resolve)
+                .unwrap()
+        ));
+        assert!(
+            generation
+                .cached_user_call_spec(function.key, resolve + 1)
+                .is_none()
+        );
+        assert!(
+            generation
+                .cached_user_call_spec(function.key, usize::MAX)
+                .is_none()
+        );
+        assert!(
+            generation
+                .cached_user_call_spec(SymbolKey([0xff; 16]), resolve)
+                .is_none()
+        );
+
+        let no_calls = user_call_specs::DecodedUserCallSpecs::with_limits(
+            &artifact.functions,
+            2,
+            0,
+            10,
+            || {},
+        );
+        assert!(no_calls.get(function_index, resolve).is_none());
+        let no_arguments = user_call_specs::DecodedUserCallSpecs::with_limits(
+            &artifact.functions,
+            2,
+            10,
+            1,
+            || {},
+        );
+        assert!(no_arguments.get(function_index, resolve).is_none());
+        let exact =
+            user_call_specs::DecodedUserCallSpecs::with_limits(&artifact.functions, 2, 1, 2, || {});
+        assert_eq!(exact.get(function_index, resolve), Some(&expected));
+
+        let mut changed = (*artifact).clone();
+        let mut changed_spec = expected.clone();
+        changed_spec.arguments.clear();
+        changed.functions[function_index].code[resolve] =
+            erabasic_bytecode::opcode::resolve_user_call(&changed_spec);
+        let next = ProgramGeneration::new(Arc::new(changed));
+        assert_eq!(
+            next.cached_user_call_spec(function.key, resolve),
+            Some(&changed_spec)
+        );
+        assert_eq!(
+            generation.cached_user_call_spec(function.key, resolve),
+            Some(&expected)
+        );
+
+        let mut malformed = (*artifact).clone();
+        malformed.functions[function_index].code[resolve].payload = vec![0xff].into();
+        let malformed = ProgramGeneration::new(Arc::new(malformed));
+        assert!(
+            malformed
+                .cached_user_call_spec(function.key, resolve)
+                .is_none()
+        );
+    }
 
     #[test]
     fn literal_groupmatch_planning_uses_call_suffix_once_and_ignores_other_calls() {
