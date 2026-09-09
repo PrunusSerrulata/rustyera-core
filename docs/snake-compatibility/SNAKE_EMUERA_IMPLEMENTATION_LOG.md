@@ -45,7 +45,7 @@ core SHA、库/bundle 路径及后续发布绑定变更，须在对应实施批�
 | [1](#batch-1) | 完整摄取与参考能力阻塞项 | 已完成 | 2026-08-28 / Codex | 1A–1D分项提交及必要验收完成；参考/像素差异与后置资源阻塞见验收汇总，不代表蛇版TW完整可玩 |
 | [2](#batch-2) | 确定性 API、输入与兼容差异骨架 | 功能验收完成；规模证据有缺口 | 2026-08-30 / Codex | 2A–2F 产品与三端行为已交付；峰值 RSS 因沙箱权限未取得，后续性能批次补采 |
 | [3](#batch-3) | 安全 SQL（蛇版 TW P0） | 待登记 | 待填写 | 待填写 |
-| [4](#batch-4) | 主玩法 presentation、图像、scene 与自身存档闭环 | 分项结果见记录 | 2026-09-09 / Codex | 多列图层 Web 修复通过原快照验证；Tauri 本次未复验，非整批验收完成 |
+| [4](#batch-4) | 主玩法 presentation、图像、scene 与自身存档闭环 | 分项结果见记录 | 2026-09-10 / Codex | 新快照文字重叠修复通过 Tauri/Chromium；既有图层项仍按原记录，非整批验收完成 |
 | [5](#batch-5) | 蛇版存档互操作与音频 | 已完成确认范围 | 2026-09-04 / Codex | 标准 1808、音频、存档页及整包导出修复完成；Browser/Tauri 蛇版 TW 导出文件一致，TUI 真实 TW 保留像素能力限制 |
 | [6](#batch-6) | 完整蛇版语言 | 待登记 | 待填写 | 待填写 |
 | [7](#batch-7) | 可选 extension 与渲染能力 | 待登记 | 待填写 | 待填写 |
@@ -1140,6 +1140,71 @@ HTML_PRINT 流程构造 41 个槽位。Web/Tauri 使用 HTML 版本；TUI 的存
 - 用户 core 批次 5 计划修改、Web 工作锁保持原样；未修改 master、未推送/合并。根
   `CHANGELOG_PENDING.md` 分项登记本批行为修复。任务测试进程已结束，暂停续做材料按规则
   保留在 W 和已记录的专属游戏副本中，不删除用户数据或为文档/提交调整重跑产品。
+
+### 2026-09-10 蛇版 TW 历史行更新后文字重叠修复
+
+本次单一修复批次针对 `runtime_20260909-233643.snapshot`：选择命令 12 后左键推进两次，
+菜单/后续文字重叠，滚动较远后恢复。修改仅在 Web 共享展示层及验收工具；core、协议、
+发布 pin、游戏和两个参考仓库均无源码修改。前项图像消失已由用户确认是陈旧编译缓存，
+不作为本项 runtime 错误。
+
+#### 实际改动与参考核对
+
+- Web `a84bfa3`（`fix: invalidate virtual row positions when history changes`）：新增内部
+  `lineLayoutRevision`，在历史操作及快照应用时更新；通过独立 computed 更换虚拟列表的
+  `getItemKey` 回调，使行数不变时也失效位置缓存。稳定行键、已测尺寸及媒体节点保留，
+  底部跟随仍由原 `historyRevision` 控制，普通输入/资源 revision 不扫描全部历史。
+- 增加真实 TanStack Virtualizer 的等长替换、尺寸保留和 5000 行无额外扫描回归；增加
+  Chromium/Tauri 快照场景。原生构建缓存支持此场景的精确 state/fixture 环境绑定，
+  最终原生测试使用 `--require-reuse-build`，不放宽来源检查。
+- 真实脚本链：`SHOW_USERCOM` → LOOK_AT/筛选头 → `QOL_SHOW_USERCOM` → `HTML_PRINTC`；
+  标题通过 `HTML_POPPRINTINGSTR` 后重印。`COMF12` 更新变量并返回 1，`SOURCE_CHECK`
+  输出经验并条件等待；最终 Tauri 观察 wait ID 为 1(integer_value) → 7 → 8 → 9(enter_key)。
+  `HTML_FILL_LINE` 仅横向补齐；`删除立绘履历` 的调用已被注释，不列作实际触发路径。
+- 蛇版 `EmueraConsole.Print.cs` 的 PrintHtmlC 按列宽换行；两个参考实现的普通打印/删除
+  均维护物理行并按 `Config.LineHeight` 绘制。原版无 HTML_PRINTC，仅比较共有行语义，
+  未声称其执行同一蛇版脚本。参考 CLI 本次未运行；对照为源代码分析。
+- 参考语义基准：原版 `26a35dc9334bb67590b96f7b8efbefbf199e391e`，蛇版
+  `fc4fb21416768c17256d0e82f997e5f99c9bba91`；当前 wrapper 分别为
+  `058b9f17aa827755a145f819c84d0e44e53fbb6a`、`a5d9f48d40c348ab540925c57affddba2d790a1a`。
+  脚本摘要及对照结论见证据 `reference-evidence.json`。
+
+#### 唯一审查及最终验收
+
+首条测试前完成一次独立重构审查，已落实其要求：将布局失效与普通 revision 分离，
+使用真实 Virtualizer 回归并对真实场景作相邻行几何验收。未追加审查或重复全量。
+测试墙钟为 2026-09-09 23:58:46 至 2026-09-10 00:48:40+0800，49 分 54 秒。
+所有动态测试在相关静态门禁后执行；每 5 秒完整 DOM/runtime 看门狗保留。
+
+| 阶段 | 首次结果 | 后续定向验证与边界 |
+|---|---|---|
+| 最小 / 唯一全量 Vitest | 64 项通过；全量 130 文件 / 2023 项通过，退出 0 | 未重跑全量；新增原生缓存支持定向 136 项通过 |
+| 静态与构建 | typecheck、lint、format、Web/WASM 构建退出 0 | 原生构建退出 0；每次原生 spec 修改后定向 lint/format 通过 |
+| Chromium 原快照 | runner 退出 0，但滚回后未稳定的零尺寸行导致几何比较失败，保留原 verdict | 按用户要求每动作间隔 3 秒；`chromium-paced` 及比较器退出 0，两次各 65 对相邻行最大重叠 0 |
+| Tauri 原快照 | 首轮第二次视口中心点击命中旧菜单，wait 8 未推进，看门狗退出 7 | 改为可见普通行原生左键并间隔 3 秒，wait 推进到 9，文字正常 |
+| Tauri 滚动阶段 | 两轮 PageUp 方式未达到三页距离，退出 7；不登记通过 | `tauri-viewport` 退出 0：真实 Tauri/WKWebView，原生按钮/左键；WebView scrollBy/scrollTo 验证上移至少三页及返回底部，两次各 56 行、普通相邻行最大重叠 0，fault=null/canInteract=true |
+| Firefox / Safari | 官方兼容流程分别退出 0 | 使用默认兼容 fixture，未声称两者执行本次蛇版快照 |
+
+Tauri 原生 provider 不支持 wheel；PageUp 未完成距离断言。最终滚动使用真实 WebView 的
+滚动 API，不改 runtime/Pinia、不合成游戏输入；不声称通过原生滚轮/PageUp 测试。
+用户现场目测文字正常，与最终几何及截图一致。首次失败记录未改写为通过。
+
+#### 提交绑定、证据与收尾
+
+两个 host 均隔离构建，实际 core pin 为 `463a54fed023efb59311fec8ae9db4d27426eeff`。
+原快照 SHA256 为 `c6fc94ccd9f13b151e93901f16c1bddc6d1da52f8577423c63e00130feec8c67`。
+原生产物 60,257,664 字节，SHA256 为
+`f7fbac5736d8b168802ed72edb8a1e2dc260fdc999384c5df4ea8189c852e478`。
+测试源与主仓逐文件摘要一致；未复用其他任务依赖或产物、未下载工具。
+
+证据入口为 Web 已忽略目录 `.rustyera/test-runs/text-overlap-20260909/`：
+`provenance.json`、`native-build-manifest.json`、各 `*.result.json`、`layout-verdict*.json`、
+`tauri-viewport-layout.json` 与两张截图、参考摘要、执行脚本及压缩完整状态记录。
+压缩前后摘要见 `compressed-evidence.json`。命令、环境及 fixture 路径保留在脚本/结果中；
+本项已完成，临时游戏副本、存储、provider、隔离工作树/依赖及 target 清理，证据保留。
+Web 产品修复独立提交，core 仅本最终记录，根 CHANGELOG_PENDING 追加产品条目；
+用户原有 Cargo.lock 修改保留。未修改 TUI，不重跑无关 Rust 测试或 reference CLI。
+本项验收完成，不扩展为批次 4 的整体完成声明。
 
 ### 2026-09-09 蛇版 TW 多列图层与浏览器测试启动修复
 
