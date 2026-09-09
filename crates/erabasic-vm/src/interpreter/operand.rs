@@ -168,12 +168,59 @@ pub(super) fn unary_value(operation: u8, value: VmValue) -> Result<VmValue, Step
     }))
 }
 
-#[allow(clippy::too_many_lines)]
+/// Comparisons do not consume their operands. SELECTCASE retains its selector
+/// across cases, so borrowing here avoids copying that string for every case.
+#[inline]
+pub(super) fn comparison_value(
+    operation: u8,
+    left: &VmValue,
+    right: &VmValue,
+) -> Result<i64, StepError> {
+    match (left, right) {
+        (VmValue::Integer(left), VmValue::Integer(right)) => Ok(match operation {
+            7 => i64::from(left < right),
+            8 => i64::from(left <= right),
+            9 => i64::from(left > right),
+            10 => i64::from(left >= right),
+            11 => i64::from(left == right),
+            12 => i64::from(left != right),
+            13 => left & right,
+            _ => {
+                return Err(StepError::new(
+                    VmFaultCode::InvalidInstruction,
+                    "unknown binary operation",
+                ));
+            }
+        }),
+        (VmValue::String(left), VmValue::String(right)) => Ok(match operation {
+            7 => i64::from(left < right),
+            8 => i64::from(left <= right),
+            9 => i64::from(left > right),
+            10 => i64::from(left >= right),
+            11 => i64::from(left == right),
+            12 => i64::from(left != right),
+            _ => {
+                return Err(StepError::new(
+                    VmFaultCode::TypeMismatch,
+                    "binary operation is not defined for strings",
+                ));
+            }
+        }),
+        _ => Err(StepError::new(
+            VmFaultCode::TypeMismatch,
+            "binary operands have different types",
+        )),
+    }
+}
+
 pub(super) fn binary_value(
     operation: u8,
     left: VmValue,
     right: VmValue,
 ) -> Result<VmValue, StepError> {
+    if (7..=13).contains(&operation) {
+        return comparison_value(operation, &left, &right).map(VmValue::Integer);
+    }
     match (left, right) {
         (VmValue::Integer(left), VmValue::Integer(right)) => {
             let value = match operation {
@@ -200,13 +247,6 @@ pub(super) fn binary_value(
                 4 => left.wrapping_sub(right),
                 5 => left.wrapping_shl(u32::try_from(right & 63).unwrap_or(0)),
                 6 => left.wrapping_shr(u32::try_from(right & 63).unwrap_or(0)),
-                7 => i64::from(left < right),
-                8 => i64::from(left <= right),
-                9 => i64::from(left > right),
-                10 => i64::from(left >= right),
-                11 => i64::from(left == right),
-                12 => i64::from(left != right),
-                13 => left & right,
                 14 => left ^ right,
                 15 => left | right,
                 16 => i64::from(left != 0 && right != 0),
@@ -225,12 +265,6 @@ pub(super) fn binary_value(
         }
         (VmValue::String(left), VmValue::String(right)) => Ok(match operation {
             3 => VmValue::String(left + &right),
-            7 => VmValue::Integer(i64::from(left < right)),
-            8 => VmValue::Integer(i64::from(left <= right)),
-            9 => VmValue::Integer(i64::from(left > right)),
-            10 => VmValue::Integer(i64::from(left >= right)),
-            11 => VmValue::Integer(i64::from(left == right)),
-            12 => VmValue::Integer(i64::from(left != right)),
             _ => {
                 return Err(StepError::new(
                     VmFaultCode::TypeMismatch,
@@ -298,6 +332,64 @@ pub(super) fn map_vm_error(error: VmError) -> StepError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn borrowed_comparisons_preserve_values_ordering_and_failures() {
+        for (left, right, expected) in [
+            (
+                VmValue::Integer(-2),
+                VmValue::Integer(1),
+                [1, 1, 0, 0, 0, 1],
+            ),
+            (
+                VmValue::String("界".into()),
+                VmValue::String("界".into()),
+                [0, 1, 0, 1, 1, 0],
+            ),
+            (
+                VmValue::String("界".into()),
+                VmValue::String("a".into()),
+                [0, 0, 1, 1, 0, 1],
+            ),
+        ] {
+            let original = (left.clone(), right.clone());
+            for (operation, expected) in (7..=12).zip(expected) {
+                assert_eq!(
+                    comparison_value(operation, &left, &right).unwrap(),
+                    expected
+                );
+                assert_eq!(
+                    binary_value(operation, left.clone(), right.clone()).unwrap(),
+                    VmValue::Integer(expected)
+                );
+            }
+            assert_eq!((left, right), original);
+        }
+        assert_eq!(
+            comparison_value(13, &VmValue::Integer(6), &VmValue::Integer(3)).unwrap(),
+            2
+        );
+        assert_eq!(
+            comparison_value(
+                13,
+                &VmValue::String("a".into()),
+                &VmValue::String("a".into())
+            )
+            .unwrap_err(),
+            StepError::new(
+                VmFaultCode::TypeMismatch,
+                "binary operation is not defined for strings"
+            )
+        );
+        assert_eq!(
+            comparison_value(11, &VmValue::Integer(0), &VmValue::String(String::new()))
+                .unwrap_err(),
+            StepError::new(
+                VmFaultCode::TypeMismatch,
+                "binary operands have different types"
+            )
+        );
+    }
 
     #[test]
     fn concat_strings_preserves_order_and_reuses_the_first_allocation() {

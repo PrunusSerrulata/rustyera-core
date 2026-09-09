@@ -395,13 +395,10 @@ impl Vm {
                         "CASE comparison operation is missing",
                     )
                 })?;
-                let selector = fiber
-                    .frames
-                    .last()
-                    .and_then(|frame| frame.select_values.last())
-                    .cloned();
-                if selector.as_ref().is_some_and(is_bypassed_select_value) {
-                    let stack = &mut fiber.frames.last_mut().expect("frame exists").stack;
+                let frame = fiber.frames.last_mut().expect("frame exists");
+                let selector = frame.select_values.last();
+                let stack = &mut frame.stack;
+                if selector.is_some_and(is_bypassed_select_value) {
                     let operands = match operation {
                         6 => 2,
                         8 => 0,
@@ -419,22 +416,13 @@ impl Vm {
                         "CASE is outside SELECTCASE",
                     )
                 })?;
-                let stack = &mut fiber.frames.last_mut().expect("frame exists").stack;
                 let matched = if operation == 8 {
                     true
                 } else if operation == 6 {
                     let upper = pop(stack)?;
                     let lower = pop(stack)?;
-                    let VmValue::Integer(lower_match) =
-                        self.binary_value(position.generation, 10, selector.clone(), lower)?
-                    else {
-                        unreachable!("comparison produces integer")
-                    };
-                    let VmValue::Integer(upper_match) =
-                        self.binary_value(position.generation, 8, selector, upper)?
-                    else {
-                        unreachable!("comparison produces integer")
-                    };
+                    let lower_match = operand::comparison_value(10, selector, &lower)?;
+                    let upper_match = operand::comparison_value(8, selector, &upper)?;
                     lower_match != 0 && upper_match != 0
                 } else {
                     let operand = pop(stack)?;
@@ -453,15 +441,7 @@ impl Vm {
                             ));
                         }
                     };
-                    let VmValue::Integer(value) = self.binary_value(
-                        position.generation,
-                        binary_operation,
-                        selector,
-                        operand,
-                    )?
-                    else {
-                        unreachable!("comparison produces integer")
-                    };
+                    let value = operand::comparison_value(binary_operation, selector, &operand)?;
                     value != 0
                 };
                 fiber

@@ -1,4 +1,40 @@
 use super::*;
+
+#[test]
+fn borrowed_select_comparisons_preserve_nested_string_and_range_cases() {
+    let artifact = compile_source(
+        r#"@SYSTEM_TITLE
+#DIMS KEY
+KEY '= "界"
+SELECTCASE KEY
+CASE "a"
+    RETURN -1
+CASE IS < "a"
+    RETURN -2
+CASE "界"
+    KEY '= "changed"
+    SELECTCASE KEY
+    CASE "a" TO "z"
+        RESULT:1 = 7
+    CASEELSE
+        RETURN -3
+    ENDSELECT
+CASEELSE
+    RETURN -4
+ENDSELECT
+SELECTCASE RESULT:1
+CASE 1 TO 6
+    RETURN -5
+CASE 7
+    RETURN 42
+CASEELSE
+    RETURN -6
+ENDSELECT
+"#,
+    );
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(42));
+}
+
 #[test]
 fn while_false_branch_skips_past_wend_and_finite_loops_terminate() {
     let artifact = compile_source(
