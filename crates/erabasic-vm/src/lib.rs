@@ -15,7 +15,11 @@ mod failure;
 mod fault;
 mod host;
 mod hot_reload;
+#[cfg(feature = "vm-instruction-profile")]
+mod instruction_profile;
 mod interpreter;
+#[cfg(feature = "vm-instruction-profile")]
+pub use instruction_profile::InstructionProfileSnapshot;
 mod memory;
 mod regex_compat;
 mod runtime_port;

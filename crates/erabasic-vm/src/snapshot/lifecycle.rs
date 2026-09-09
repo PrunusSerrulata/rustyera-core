@@ -249,6 +249,8 @@ impl Vm {
             path_memo_retained_bytes: 0,
             active_path_memo_fiber: std::cell::Cell::new(None),
             active_path_memo: std::cell::RefCell::new(None),
+            #[cfg(feature = "vm-instruction-profile")]
+            instruction_profile: crate::instruction_profile::InstructionProfile::default(),
             #[cfg(test)]
             path_memo_replays: 0,
         };

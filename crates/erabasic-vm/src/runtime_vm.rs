@@ -31,6 +31,15 @@ pub struct RuntimeVm {
     pending_completion_events: Vec<VmPortEvent>,
 }
 
+#[cfg(feature = "vm-instruction-profile")]
+impl RuntimeVm {
+    /// Read diagnostic counters without changing runtime or debugger state.
+    #[must_use]
+    pub fn instruction_profile_snapshot(&self) -> crate::InstructionProfileSnapshot {
+        self.vm.instruction_profile_snapshot()
+    }
+}
+
 /// Distinguish an unforked runtime from a fork whose artifact has no structured services.
 #[derive(Clone, Copy)]
 enum CandidateColumnBase {

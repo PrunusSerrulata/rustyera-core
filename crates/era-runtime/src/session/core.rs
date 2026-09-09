@@ -5,6 +5,15 @@
 use super::*;
 
 impl RuntimeSession {
+    /// Read opt-in dispatch counters; unavailable before a VM has been constructed.
+    #[cfg(feature = "vm-instruction-profile")]
+    #[must_use]
+    pub fn instruction_profile_snapshot(&self) -> Option<erabasic_vm::InstructionProfileSnapshot> {
+        self.vm
+            .as_ref()
+            .map(RuntimeVm::instruction_profile_snapshot)
+    }
+
     /// Return the current project's selectable traditional-save slot count.
     #[must_use]
     pub fn traditional_save_slot_count(&self) -> Option<u32> {

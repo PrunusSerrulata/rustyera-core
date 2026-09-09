@@ -162,6 +162,8 @@ impl Fiber {
 
 #[derive(Clone)]
 pub struct Vm {
+    #[cfg(feature = "vm-instruction-profile")]
+    pub(crate) instruction_profile: crate::instruction_profile::InstructionProfile,
     pub(crate) config: VmConfig,
     pub(crate) generations: BTreeMap<GenerationId, Arc<ProgramGeneration>>,
     pub(crate) current_generation: GenerationId,

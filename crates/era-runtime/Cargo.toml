@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+vm-instruction-profile = ["erabasic-vm/vm-instruction-profile"]
+
 [dependencies]
 erabasic-compat = { path = "../erabasic-compat" }
 blake3.workspace = true

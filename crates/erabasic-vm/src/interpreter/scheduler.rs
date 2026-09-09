@@ -147,6 +147,9 @@ impl Vm {
                     budget_exhausted = true;
                     break;
                 }
+                #[cfg(feature = "vm-instruction-profile")]
+                self.instruction_profile
+                    .observe(position.generation, position.function);
                 let host_before = report.host_calls;
                 let policy = ExecutionPolicy {
                     allow_function_memo: !debug_checks_active,

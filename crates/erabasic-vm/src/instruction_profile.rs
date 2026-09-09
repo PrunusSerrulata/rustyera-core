@@ -1,0 +1,245 @@
+//! Opt-in dispatch-frequency diagnosis, absent from ordinary builds and snapshots.
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use erabasic_bytecode::SymbolKey;
+use serde::Serialize;
+
+use crate::{GenerationId, Vm};
+
+const INTERVAL: u64 = 1024;
+const MAXIMUM_FUNCTIONS: usize = 4096;
+static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug)]
+pub(crate) struct InstructionProfile {
+    instance: u64,
+    dispatches: u64,
+    dropped_samples: u64,
+    incomplete: bool,
+    counts: BTreeMap<(GenerationId, SymbolKey), u64>,
+}
+
+impl Default for InstructionProfile {
+    fn default() -> Self {
+        Self {
+            instance: allocate_instance(&NEXT_INSTANCE),
+            dispatches: 0,
+            dropped_samples: 0,
+            incomplete: false,
+            counts: BTreeMap::new(),
+        }
+    }
+}
+
+fn allocate_instance(counter: &AtomicU64) -> u64 {
+    counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            value.checked_add(1)
+        })
+        .unwrap_or(0)
+}
+
+// Candidate/fork execution must not inherit or mutate the live VM's counters.
+impl Clone for InstructionProfile {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl InstructionProfile {
+    #[inline]
+    pub(crate) fn observe(&mut self, generation: GenerationId, function: SymbolKey) {
+        let Some(next) = self.dispatches.checked_add(1) else {
+            self.incomplete = true;
+            return;
+        };
+        self.dispatches = next;
+        if self.dispatches.is_multiple_of(INTERVAL) {
+            self.sample(generation, function);
+        }
+    }
+
+    #[cold]
+    fn sample(&mut self, generation: GenerationId, function: SymbolKey) {
+        let key = (generation, function);
+        if let Some(count) = self.counts.get_mut(&key) {
+            self.incomplete |= *count == u64::MAX;
+            *count = count.saturating_add(1);
+        } else if self.counts.len() < MAXIMUM_FUNCTIONS {
+            self.counts.insert(key, 1);
+        } else {
+            self.incomplete = true;
+            self.dropped_samples = self.dropped_samples.saturating_add(1);
+        }
+    }
+}
+
+/// Cumulative, read-only diagnostic counters. Frequency is not CPU time; memo/bulk
+/// logical instructions are deliberately not expanded into physical dispatch samples.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstructionProfileSnapshot {
+    schema_version: u32,
+    instance: String,
+    interval: u64,
+    dispatches: String,
+    dropped_samples: String,
+    incomplete: bool,
+    counts: Vec<FunctionCount>,
+    symbols: Vec<FunctionSymbol>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FunctionCount {
+    generation: String,
+    function: SymbolKey,
+    samples: String,
+}
+
+#[derive(Debug, Serialize)]
+struct FunctionSymbol {
+    generation: String,
+    function: SymbolKey,
+    name: String,
+}
+
+impl Vm {
+    /// Inspect bounded counters outside the measured action. No game state is changed.
+    #[must_use]
+    pub fn instruction_profile_snapshot(&self) -> InstructionProfileSnapshot {
+        let profile = &self.instruction_profile;
+        let counts = profile
+            .counts
+            .iter()
+            .map(|(&(generation, function), count)| FunctionCount {
+                generation: generation.0.to_string(),
+                function,
+                samples: count.to_string(),
+            })
+            .collect();
+        let mut ranked: Vec<_> = profile.counts.iter().collect();
+        ranked.sort_by_key(|(key, count)| (std::cmp::Reverse(**count), **key));
+        let symbols = ranked
+            .into_iter()
+            .take(128)
+            .map(|(&(generation, function), _)| {
+                let name = self
+                    .generations
+                    .get(&generation)
+                    .and_then(|program| program.function(function))
+                    .map_or("<reclaimed generation>", |function| function.name.as_str());
+                FunctionSymbol {
+                    generation: generation.0.to_string(),
+                    function,
+                    name: name.chars().take(64).collect(),
+                }
+            })
+            .collect();
+        InstructionProfileSnapshot {
+            schema_version: 1,
+            instance: profile.instance.to_string(),
+            interval: INTERVAL,
+            dispatches: profile.dispatches.to_string(),
+            dropped_samples: profile.dropped_samples.to_string(),
+            incomplete: profile.incomplete || profile.instance == 0,
+            counts,
+            symbols,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn instruction_profile_overflow_is_explicit_without_reusing_identity() {
+        let counter = AtomicU64::new(u64::MAX - 1);
+        assert_eq!(allocate_instance(&counter), u64::MAX - 1);
+        assert_eq!(allocate_instance(&counter), 0);
+        assert_eq!(allocate_instance(&counter), 0);
+        let key = SymbolKey::derive("profile.test", b"overflow");
+        let mut profile = InstructionProfile {
+            dispatches: u64::MAX,
+            ..Default::default()
+        };
+        profile.observe(GenerationId(1), key);
+        assert!(profile.incomplete);
+        assert!(profile.counts.is_empty());
+        profile.incomplete = false;
+        profile.counts.insert((GenerationId(1), key), u64::MAX);
+        profile.sample(GenerationId(1), key);
+        assert!(profile.incomplete);
+    }
+
+    #[test]
+    fn instruction_profile_worst_serialization_fits_record_budget() {
+        let counts = (0..MAXIMUM_FUNCTIONS)
+            .map(|index| FunctionCount {
+                generation: u64::MAX.to_string(),
+                function: SymbolKey::derive("profile.test", &index.to_le_bytes()),
+                samples: u64::MAX.to_string(),
+            })
+            .collect();
+        let symbols = (0..128usize)
+            .map(|index| FunctionSymbol {
+                generation: u64::MAX.to_string(),
+                function: SymbolKey::derive("profile.test", &index.to_le_bytes()),
+                name: "\u{0000}".repeat(64),
+            })
+            .collect();
+        let snapshot = InstructionProfileSnapshot {
+            schema_version: 1,
+            instance: u64::MAX.to_string(),
+            interval: INTERVAL,
+            dispatches: u64::MAX.to_string(),
+            dropped_samples: u64::MAX.to_string(),
+            incomplete: true,
+            counts,
+            symbols,
+        };
+        // Leave room for the bounded JSONL boundary envelope.
+        assert!(serde_json::to_vec(&snapshot).unwrap().len() < 1024 * 1024 - 1024);
+    }
+
+    #[test]
+    fn instruction_profile_samples_physical_dispatches_across_intervals() {
+        let mut profile = InstructionProfile::default();
+        let key = SymbolKey::derive("profile.test", b"first");
+        for _ in 0..1023 {
+            profile.observe(GenerationId(1), key);
+        }
+        assert!(profile.counts.is_empty());
+        profile.observe(GenerationId(1), key);
+        assert_eq!(profile.counts[&(GenerationId(1), key)], 1);
+        for _ in 0..1024 {
+            profile.observe(GenerationId(2), key);
+        }
+        assert_eq!(profile.counts[&(GenerationId(2), key)], 1);
+        assert_eq!(profile.dispatches, 2048);
+        let clone = profile.clone();
+        assert_ne!(clone.instance, profile.instance);
+        assert_eq!(clone.dispatches, 0);
+        assert!(clone.counts.is_empty());
+    }
+
+    #[test]
+    fn instruction_profile_is_bounded_and_reports_lost_new_keys() {
+        let mut profile = InstructionProfile::default();
+        for index in 0..MAXIMUM_FUNCTIONS {
+            profile.sample(
+                GenerationId(1),
+                SymbolKey::derive("profile.test", &index.to_le_bytes()),
+            );
+        }
+        let extra = SymbolKey::derive("profile.test", b"extra");
+        profile.sample(GenerationId(1), extra);
+        assert_eq!(profile.counts.len(), MAXIMUM_FUNCTIONS);
+        assert_eq!(profile.dropped_samples, 1);
+        let existing = SymbolKey::derive("profile.test", &0usize.to_le_bytes());
+        profile.sample(GenerationId(1), existing);
+        assert_eq!(profile.counts[&(GenerationId(1), existing)], 2);
+    }
+}

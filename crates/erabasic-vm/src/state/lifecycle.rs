@@ -162,6 +162,8 @@ impl Vm {
         let generation = GenerationId(1);
         Self {
             config,
+            #[cfg(feature = "vm-instruction-profile")]
+            instruction_profile: crate::instruction_profile::InstructionProfile::default(),
             generations: BTreeMap::from([(generation, program)]),
             current_generation: generation,
             memory,
