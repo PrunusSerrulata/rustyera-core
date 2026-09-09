@@ -252,6 +252,7 @@ fn resource_delta_delivery_resets_its_baseline_after_resynchronization() {
     model.set_projection(true, true, true, true, true);
     let resources = ResourceReplay {
         sprites: (0..4).map(|index| era_runtime_protocol::SpriteReplay {
+            current_alias: None,
             name: format!("S{index}"), size: [1, 1], position: [0, 0], frames: Vec::new(),
             canvas_id: None, canvas_rectangle: None, revision: 1, canvas_revision: None,
         }).collect(),
@@ -692,4 +693,23 @@ fn temporary_empty_lines_can_be_replaced_without_frontend_state() {
             .collect::<String>(),
         "invalid"
     );
+}
+
+#[test]
+fn legacy_resource_alias_detection_ignores_unique_and_explicit_history() {
+    let mut model = PresentationModel::default();
+    let sprite = era_runtime_protocol::SpriteReplay {
+        name: "S".into(), size: [1, 1], position: [0, 0], frames: Vec::new(),
+        canvas_id: None, canvas_rectangle: None, revision: 1, canvas_revision: None,
+        current_alias: None,
+    };
+    model.resources.sprites.push(sprite.clone());
+    assert!(!model.has_ambiguous_legacy_resource_aliases());
+    let mut historical = sprite;
+    historical.revision = 2;
+    model.resources.sprites.push(historical);
+    assert!(model.has_ambiguous_legacy_resource_aliases());
+    model.resources.sprites[0].current_alias = Some(true);
+    model.resources.sprites[1].current_alias = Some(false);
+    assert!(!model.has_ambiguous_legacy_resource_aliases());
 }

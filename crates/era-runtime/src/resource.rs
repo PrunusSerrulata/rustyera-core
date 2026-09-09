@@ -16,6 +16,9 @@ pub(crate) struct ResourceGraph {
     images: BTreeMap<String, ResourceImage>,
     sprites: BTreeMap<String, SpriteDefinition>,
     canvases: BTreeMap<i64, CanvasSurface>,
+    /// Delivery-only reverse index, rebuilt once after deserialization or graph replacement.
+    #[serde(skip, default)]
+    live_canvas_sprites: Option<BTreeMap<i64, BTreeSet<String>>>,
     /// Immutable definitions retained only while an exact revision is referenced.
     #[serde(default)]
     exact_revisions: ExactRevisionStore,
@@ -44,6 +47,7 @@ impl Default for ResourceGraph {
             images: BTreeMap::new(),
             sprites: BTreeMap::new(),
             canvases: BTreeMap::new(),
+            live_canvas_sprites: None,
             exact_revisions: ExactRevisionStore::default(),
             retained_canvas_command_bytes: 0,
             animation_timer_ms: 0,

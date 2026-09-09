@@ -13,12 +13,13 @@ impl ResourceGraph {
         if width == 0 || height == 0 || width > 8_192 || height > 8_192 {
             return Err("canvas dimensions are out of range");
         }
+        let revision = self.canvas_creation_revision(id, 0);
         self.canvases.insert(
             id,
             CanvasSurface {
                 width,
                 height,
-                revision: 0,
+                revision,
                 commands: Vec::new(),
                 polygon_points: Vec::new(),
                 retained_command_bytes: 0,
@@ -32,6 +33,7 @@ impl ResourceGraph {
                 font_style: self.canvas_defaults.font_style,
             },
         );
+        self.refresh_live_canvas_sprites(Some(id));
         Ok(true)
     }
 
@@ -68,12 +70,13 @@ impl ResourceGraph {
         ) {
             return false;
         }
+        let revision = self.canvas_creation_revision(id, 1);
         self.canvases.insert(
             id,
             CanvasSurface {
                 width,
                 height,
-                revision: 1,
+                revision,
                 commands: vec![command],
                 polygon_points: Vec::new(),
                 retained_command_bytes,
@@ -90,6 +93,7 @@ impl ResourceGraph {
         self.retained_canvas_command_bytes = self
             .retained_canvas_command_bytes
             .saturating_add(retained_command_bytes);
+        self.refresh_live_canvas_sprites(Some(id));
         true
     }
 
@@ -122,12 +126,13 @@ impl ResourceGraph {
         ) {
             return false;
         }
+        let revision = self.canvas_creation_revision(id, 1);
         self.canvases.insert(
             id,
             CanvasSurface {
                 width,
                 height,
-                revision: 1,
+                revision,
                 commands: vec![CanvasCommand::LoadEncodedImage {
                     content_digest: digest.as_bytes().to_vec(),
                     encoded,
@@ -147,11 +152,24 @@ impl ResourceGraph {
         self.retained_canvas_command_bytes = self
             .retained_canvas_command_bytes
             .saturating_add(retained_command_bytes);
+        self.refresh_live_canvas_sprites(Some(id));
         true
     }
 
     pub(crate) fn dispose_canvas(&mut self, id: i64) -> bool {
         self.ensure_canvas_retained_bytes();
+        if self.canvas_has_live_sprites(id) {
+            let Some(canvas) = self.canvases.get(&id) else {
+                return false;
+            };
+            let source = era_runtime_protocol::SceneSourceV1::Canvas {
+                canvas_id: id,
+                resource_revision: canvas.revision,
+            };
+            if !self.retain_scene_source(&source) {
+                return false;
+            }
+        }
         let Some(canvas) = self.canvases.remove(&id) else {
             return false;
         };
@@ -245,6 +263,7 @@ impl ResourceGraph {
             canvas.commands = checkpoint;
             canvas.retained_command_bytes = retained;
             canvas.revision = canvas.revision.saturating_add(1);
+            self.refresh_live_canvas_sprites(Some(id));
             return true;
         }
         if !self.push_canvas_command(id, command) {
@@ -252,6 +271,7 @@ impl ResourceGraph {
         }
         let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
         canvas.revision = canvas.revision.saturating_add(1);
+        self.refresh_live_canvas_sprites(Some(id));
         true
     }
 
@@ -295,6 +315,7 @@ impl ResourceGraph {
         let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
         canvas.revision = canvas.revision.saturating_add(1);
         self.exact_revisions = exact_revisions;
+        self.refresh_live_canvas_sprites(Some(id));
         true
     }
 
@@ -321,6 +342,7 @@ impl ResourceGraph {
             return false;
         }
         bump_canvas(canvas);
+        self.refresh_live_canvas_sprites(Some(id));
         true
     }
 
@@ -340,6 +362,7 @@ impl ResourceGraph {
             return false;
         }
         bump_canvas(canvas);
+        self.refresh_live_canvas_sprites(Some(id));
         true
     }
 
@@ -358,6 +381,7 @@ impl ResourceGraph {
         }
         canvas.brush_argb = brush_argb;
         bump_canvas(canvas);
+        self.refresh_live_canvas_sprites(Some(id));
         true
     }
 
@@ -380,6 +404,7 @@ impl ResourceGraph {
         canvas.pen_argb = pen_argb;
         canvas.pen_width = width;
         bump_canvas(canvas);
+        self.refresh_live_canvas_sprites(Some(id));
         true
     }
 
@@ -398,6 +423,7 @@ impl ResourceGraph {
         canvas.dash_style = style;
         canvas.dash_cap = cap;
         bump_canvas(canvas);
+        self.refresh_live_canvas_sprites(Some(id));
         true
     }
 
@@ -430,6 +456,7 @@ impl ResourceGraph {
         canvas.font_size = size;
         canvas.font_style = style_bits;
         bump_canvas(canvas);
+        self.refresh_live_canvas_sprites(Some(id));
         true
     }
 
@@ -453,6 +480,7 @@ impl ResourceGraph {
         let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
         canvas.polygon_points.push(point);
         bump_canvas(canvas);
+        self.refresh_live_canvas_sprites(Some(id));
         true
     }
 
@@ -463,6 +491,7 @@ impl ResourceGraph {
         let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
         canvas.polygon_points.clear();
         bump_canvas(canvas);
+        self.refresh_live_canvas_sprites(Some(id));
         true
     }
 
@@ -487,6 +516,7 @@ impl ResourceGraph {
         }
         let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
         bump_canvas(canvas);
+        self.refresh_live_canvas_sprites(Some(id));
         Ok(true)
     }
 
@@ -503,6 +533,7 @@ impl ResourceGraph {
             return false;
         }
         bump_canvas(canvas);
+        self.refresh_live_canvas_sprites(Some(id));
         true
     }
 
@@ -519,6 +550,7 @@ impl ResourceGraph {
             return false;
         }
         bump_canvas(canvas);
+        self.refresh_live_canvas_sprites(Some(id));
         true
     }
 
@@ -586,7 +618,7 @@ impl ResourceGraph {
         let canvas = self.canvases.get_mut(&id).expect("canvas was checked");
         bump_canvas(canvas);
         self.exact_revisions = exact_revisions;
+        self.refresh_live_canvas_sprites(Some(id));
         true
     }
-
 }

@@ -54,6 +54,11 @@ pub struct SpriteReplay {
     /// Exact canvas revision used by a canvas-backed sprite.
     #[n(7)]
     pub canvas_revision: Option<u64>,
+    /// True only for the current name alias; false for immutable historical definitions.
+    /// Missing on older replays, whose names are usable only when unambiguous.
+    #[n(8)]
+    #[serde(default)]
+    pub current_alias: Option<bool>,
 }
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
@@ -246,15 +251,21 @@ impl ResourceReplay {
     ///
     /// # Errors
     ///
-    /// Returns an error when the replay contains duplicate exact identities, an incomplete
+    /// Returns an error when the replay contains duplicate exact identities/current aliases, an incomplete
     /// canvas identity/revision pair, or a reference whose exact definition is absent.
     pub fn validate_exact_references(&self) -> Result<(), String> {
         let mut sprites = BTreeSet::new();
+        let mut current_aliases = BTreeSet::new();
         let mut canvases = BTreeSet::new();
         for sprite in &self.sprites {
             let key = (sprite.name.to_ascii_uppercase(), sprite.revision);
             if !sprites.insert(key) {
                 return Err("duplicate exact sprite identity in resource replay".into());
+            }
+            if sprite.current_alias == Some(true)
+                && !current_aliases.insert(sprite.name.to_ascii_uppercase())
+            {
+                return Err("duplicate current sprite alias in resource replay".into());
             }
             validate_optional_canvas_pair(sprite.canvas_id, sprite.canvas_revision, "sprite")?;
             for frame in &sprite.frames {

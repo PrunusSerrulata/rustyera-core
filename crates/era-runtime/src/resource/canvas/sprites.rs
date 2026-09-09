@@ -1,4 +1,135 @@
 impl ResourceGraph {
+    fn ensure_live_canvas_sprite_index(&mut self) {
+        if self.live_canvas_sprites.is_some() {
+            return;
+        }
+        let mut index =
+            std::collections::BTreeMap::<i64, std::collections::BTreeSet<String>>::new();
+        for (name, sprite) in &self.sprites {
+            for id in sprite
+                .canvas_id
+                .into_iter()
+                .chain(sprite.frames.iter().filter_map(|frame| frame.canvas_id))
+            {
+                index.entry(id).or_default().insert(name.clone());
+            }
+        }
+        self.live_canvas_sprites = Some(index);
+    }
+
+    fn index_live_canvas_sprite(&mut self, name: &str, canvas_id: i64) {
+        if let Some(index) = &mut self.live_canvas_sprites {
+            index.entry(canvas_id).or_default().insert(name.to_owned());
+        }
+    }
+
+    fn unindex_live_canvas_sprite(&mut self, name: &str) {
+        let Some(index) = &mut self.live_canvas_sprites else {
+            return;
+        };
+        let Some(sprite) = self.sprites.get(name) else {
+            return;
+        };
+        for id in sprite
+            .canvas_id
+            .into_iter()
+            .chain(sprite.frames.iter().filter_map(|frame| frame.canvas_id))
+        {
+            if let Some(names) = index.get_mut(&id) {
+                names.remove(name);
+                if names.is_empty() {
+                    index.remove(&id);
+                }
+            }
+        }
+    }
+
+    fn canvas_has_live_sprites(&mut self, id: i64) -> bool {
+        self.ensure_live_canvas_sprite_index();
+        self.live_canvas_sprites
+            .as_ref()
+            .is_some_and(|index| index.contains_key(&id))
+    }
+
+    pub(crate) fn has_stale_live_canvas_sprites(&mut self) -> bool {
+        self.ensure_live_canvas_sprite_index();
+        self.live_canvas_sprites
+            .as_ref()
+            .into_iter()
+            .flat_map(|index| index.iter())
+            .any(|(id, names)| {
+                self.canvases.get(id).is_some_and(|canvas| {
+                    names.iter().any(|name| {
+                        let sprite = &self.sprites[name];
+                        (sprite.canvas_id == Some(*id)
+                            && sprite.canvas_revision != Some(canvas.revision))
+                            || sprite.frames.iter().any(|frame| {
+                                frame.canvas_id == Some(*id)
+                                    && frame.canvas_revision != Some(canvas.revision)
+                            })
+                    })
+                })
+            })
+    }
+
+    /// `SpriteG` and animation frames refer to a live `GraphicsImage` in both reference engines.
+    /// Only current definitions follow its contents; retained draw/scene edges stay exact.
+    /// A known mutation visits aliases of one canvas, without scanning the static manifest.
+    pub(crate) fn refresh_live_canvas_sprites(&mut self, canvas_id: Option<i64>) -> bool {
+        self.ensure_live_canvas_sprite_index();
+        let index = self
+            .live_canvas_sprites
+            .as_ref()
+            .expect("index was prepared");
+        let names = match canvas_id {
+            Some(id) => index.get(&id).cloned().unwrap_or_default(),
+            None => index.values().flatten().cloned().collect(),
+        };
+        let mut changed = false;
+        for name in names {
+            let sprite = &self.sprites[&name];
+            let stale = |id: Option<i64>, revision: Option<u64>| {
+                id.and_then(|id| self.canvases.get(&id))
+                    .is_some_and(|canvas| revision != Some(canvas.revision))
+            };
+            if !stale(sprite.canvas_id, sprite.canvas_revision)
+                && !sprite
+                    .frames
+                    .iter()
+                    .any(|frame| stale(frame.canvas_id, frame.canvas_revision))
+            {
+                continue;
+            }
+            let revision = self.allocate_sprite_revision();
+            let sprite = self
+                .sprites
+                .get_mut(&name)
+                .expect("live sprite was checked");
+            if let Some(canvas) = sprite.canvas_id.and_then(|id| self.canvases.get(&id)) {
+                sprite.canvas_revision = Some(canvas.revision);
+            }
+            for frame in &mut sprite.frames {
+                if let Some(canvas) = frame.canvas_id.and_then(|id| self.canvases.get(&id)) {
+                    frame.canvas_revision = Some(canvas.revision);
+                }
+            }
+            sprite.revision = revision;
+            changed = true;
+        }
+        changed
+    }
+
+    // Recreating an ID must not reuse an identity held by an immutable drawing edge.
+    fn canvas_creation_revision(&self, id: i64, initial: u64) -> u64 {
+        self.exact_revisions
+            .canvases
+            .get(&id)
+            .and_then(|revisions| revisions.last_key_value())
+            .map_or(initial, |(revision, _)| {
+                revision.saturating_add(1).max(initial)
+            })
+    }
+
     pub(crate) fn create_canvas_sprite(
         &mut self,
         name: &str,
@@ -41,7 +172,7 @@ impl ResourceGraph {
         self.sprites.insert(
             key.clone(),
             SpriteDefinition {
-                name: key,
+                name: key.clone(),
                 revision,
                 width: size[0],
                 height: size[1],
@@ -55,6 +186,7 @@ impl ResourceGraph {
             },
         );
         self.exact_revisions = exact_revisions;
+        self.index_live_canvas_sprite(&key, canvas_id);
         true
     }
 
@@ -147,6 +279,7 @@ impl ResourceGraph {
         });
         sprite.revision = revision;
         self.exact_revisions = exact_revisions;
+        self.index_live_canvas_sprite(&key, canvas_id);
         true
     }
 
@@ -155,11 +288,13 @@ impl ResourceGraph {
         if self.sprites.get(&key).is_none_or(|sprite| !sprite.dynamic) {
             return false;
         }
+        self.unindex_live_canvas_sprite(&key);
         self.sprites.remove(&key).is_some()
     }
 
     pub(crate) fn dispose_sprites(&mut self, include_static: bool) -> usize {
         let before = self.sprites.len();
+        self.live_canvas_sprites = Some(std::collections::BTreeMap::new());
         self.sprites
             .retain(|_, sprite| !sprite.dynamic && !include_static);
         before.saturating_sub(self.sprites.len())
@@ -213,6 +348,7 @@ impl ResourceGraph {
                 candidate.sprites.insert(name.clone(), sprite.clone());
             }
         }
+        candidate.live_canvas_sprites = None;
         candidate.ensure_canvas_retained_bytes();
         let _ = candidate.replay_for_roots(roots)?;
         if candidate.total_canvas_bytes_with(&candidate.exact_revisions)
@@ -226,6 +362,7 @@ impl ResourceGraph {
 
     pub(crate) fn reset_runtime_graph(&mut self) {
         self.canvases = std::collections::BTreeMap::default();
+        self.live_canvas_sprites = Some(std::collections::BTreeMap::new());
         self.exact_revisions = ExactRevisionStore::default();
         self.retained_canvas_command_bytes = 0;
         self.animation_timer_ms = 0;

@@ -103,6 +103,32 @@ impl RuntimeSession {
                 &format!("runtime snapshot resources do not match the loaded project: {error}"),
             );
         }
+        // Older snapshots froze live canvas sprites at their creation revision. Only
+        // rebuild affected projections, preserving unrelated presentation revisions.
+        if payload.resource_graph.has_stale_live_canvas_sprites()
+            || payload.presentation.has_ambiguous_legacy_resource_aliases()
+        {
+            let roots = payload.presentation.resource_roots();
+            if !payload.resource_graph.retain_scene_sources(&roots) {
+                return self.reject(
+                    message_id,
+                    CommandErrorCode::InvalidValue,
+                    "runtime snapshot exact resource roots are invalid",
+                );
+            }
+            payload.resource_graph.refresh_live_canvas_sprites(None);
+            let replay = match payload.resource_graph.replay_for_roots(&roots) {
+                Ok(replay) => replay,
+                Err(error) => {
+                    return self.reject(
+                        message_id,
+                        CommandErrorCode::InvalidValue,
+                        &format!("runtime snapshot resource replay is invalid: {error}"),
+                    );
+                }
+            };
+            payload.presentation.set_resource_replay(replay);
+        }
         let mut system_menu = match payload.system_menu {
             0 => SystemMenuState::Title,
             1 => SystemMenuState::LoadSlots,

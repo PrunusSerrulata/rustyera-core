@@ -175,7 +175,8 @@ fn snapshot_identity_mismatches_preserve_the_live_vm_and_wait() {
         "outer_artifact",
         "inner_artifact",
     ] {
-        let mut payload = runtime_snapshot::decode(&bytes.copy_range(0..bytes.len()), usize::MAX).unwrap();
+        let mut payload =
+            runtime_snapshot::decode(&bytes.copy_range(0..bytes.len()), usize::MAX).unwrap();
         match mismatch {
             "outer_profile" => payload.compatibility = snake.clone(),
             "outer_artifact" => payload.artifact_id = erabasic_bytecode::Digest([7; 32]),
@@ -354,9 +355,7 @@ fn binary_save_adapter_encodes_zero_length_saved_arrays() {
         runtime_host_authorizations: Vec::new(),
         runtime_staged_authorizations: Vec::new(),
         runtime_variables: vec![erabasic_bytecode::RuntimeVariableSymbol {
-            match_name_rejection: Some(
-                erabasic_bytecode::MatchNameRejectionKind::Internal,
-            ),
+            match_name_rejection: Some(erabasic_bytecode::MatchNameRejectionKind::Internal),
             character_disposal: erabasic_bytecode::CharacterArrayDisposal::Preserve,
             key,
             reference: false,
@@ -449,9 +448,7 @@ fn runtime_drive_reinstalls_the_vm_before_propagating_host_event_errors() {
             files: vec![SubmittedFile {
                 relative_path: "invalid-save.erb".into(),
                 category: FileCategory::Erb,
-                payload: FilePayload::Utf8(
-                    "@SYSTEM_TITLE\nLOADDATA 0\nRETURN\n".into(),
-                ),
+                payload: FilePayload::Utf8("@SYSTEM_TITLE\nLOADDATA 0\nRETURN\n".into()),
                 content_hash: None,
             }],
         }),
@@ -469,15 +466,20 @@ fn runtime_drive_reinstalls_the_vm_before_propagating_host_event_errors() {
 
     // Complete Start before exhausting the journal, so the error arises while
     // dispatching the real storage Host event with the VM taken out of the session.
-    session.drive(RuntimeDriveBudget {
-        maximum_vm_instructions: 0,
-        maximum_runtime_transitions: 1,
-    }).unwrap();
+    session
+        .drive(RuntimeDriveBudget {
+            maximum_vm_instructions: 0,
+            maximum_runtime_transitions: 1,
+        })
+        .unwrap();
     drain(&mut session);
     let journal_limit = session.options.limits.maximum_journal_entries;
     session.options.limits.maximum_journal_entries = 0;
     let error = session.drive(RuntimeDriveBudget::default()).unwrap_err();
-    assert!(matches!(error, RuntimeError::ResourceLimit("outbound journal is full")));
+    assert!(matches!(
+        error,
+        RuntimeError::ResourceLimit("outbound journal is full")
+    ));
     assert!(session.vm.is_some(), "host error must not remove the VM");
 
     session.options.limits.maximum_journal_entries = journal_limit;
@@ -494,3 +496,132 @@ fn runtime_drive_reinstalls_the_vm_before_propagating_host_event_errors() {
     }));
 }
 
+#[test]
+fn old_snapshot_repairs_live_canvas_sprite_before_first_presentation() {
+    let mut client = capabilities();
+    client.graphics = true;
+    let mut session = super::key_macro_input::start_snake_input_project(
+        "@SYSTEM_TITLE\nINPUT\nRETURN\n",
+        client,
+    );
+    session
+        .export_state(
+            100,
+            StateExportRequest {
+                kind: StateExportKind::VmSnapshot,
+                snapshot_purpose: SnapshotExportPurpose::Normal,
+            },
+        )
+        .unwrap();
+    let bytes = session.outbound_transfer.take().unwrap().bytes;
+    let mut payload =
+        runtime_snapshot::decode(&bytes.copy_range(0..bytes.len()), usize::MAX).unwrap();
+    let graph = &mut payload.resource_graph;
+    assert!(graph.create_canvas(1, 2, 2).unwrap());
+    assert!(graph.create_canvas_sprite("live", 1, None, [0, 0], None));
+    let old_revision = graph.sprite_revision("live").unwrap();
+    payload
+        .presentation
+        .set_resource_replay(graph.replay_for_roots(&[]).unwrap());
+    assert!(graph.set_canvas_pixel(1, 0xffff_0000, [0, 0]));
+    // Reproduce the old container's stale alias while retaining the newer canvas pixels.
+    let mut old = serde_json::to_value(&*graph).unwrap();
+    old["sprites"]["LIVE"]["canvas_revision"] = serde_json::json!(0);
+    old["sprites"]["LIVE"]["revision"] = serde_json::json!(old_revision);
+    *graph = serde_json::from_value(old).unwrap();
+    let encoded = runtime_snapshot::encode(&payload).unwrap();
+    drain(&mut session);
+    session.start_vm_snapshot(101, &encoded).unwrap();
+    let messages = drain(&mut session);
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::CommandRejected(_))),
+        "{messages:?}"
+    );
+    let replay = session.presentation.snapshot().resources;
+    let sprite = replay
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "LIVE")
+        .unwrap();
+    assert_eq!(sprite.canvas_revision, Some(1));
+    assert_ne!(sprite.revision, old_revision);
+    assert!(replay.canvases.iter().any(|canvas| canvas.canvas_id == 1
+        && canvas.revision == 1
+        && !canvas.commands.is_empty()));
+}
+
+#[test]
+fn old_snapshot_labels_ambiguous_current_and_historical_sprite_aliases() {
+    let mut client = capabilities();
+    client.graphics = true;
+    let mut session = super::key_macro_input::start_snake_input_project(
+        "@SYSTEM_TITLE\nINPUT\nRETURN\n",
+        client,
+    );
+    session
+        .export_state(
+            100,
+            StateExportRequest {
+                kind: StateExportKind::VmSnapshot,
+                snapshot_purpose: SnapshotExportPurpose::Normal,
+            },
+        )
+        .unwrap();
+    let bytes = session.outbound_transfer.take().unwrap().bytes;
+    let mut payload =
+        runtime_snapshot::decode(&bytes.copy_range(0..bytes.len()), usize::MAX).unwrap();
+    let graph = &mut payload.resource_graph;
+    assert!(graph.create_canvas(1, 2, 2).unwrap());
+    assert!(graph.create_canvas(2, 2, 2).unwrap());
+    assert!(graph.create_canvas_sprite("live", 1, None, [0, 0], None));
+    assert!(graph.draw_sprite(2, "live", None, None));
+    assert!(graph.set_canvas_pixel(1, 0xffff_0000, [0, 0]));
+    assert!(!graph.has_stale_live_canvas_sprites());
+    let current_revision = graph.sprite_revision("live").unwrap();
+    let mut legacy_replay = graph.replay_for_roots(&[]).unwrap();
+    for sprite in &mut legacy_replay.sprites {
+        sprite.current_alias = None;
+    }
+    payload.presentation.set_resource_replay(legacy_replay);
+    let encoded = runtime_snapshot::encode(&payload).unwrap();
+    drain(&mut session);
+    session.start_vm_snapshot(101, &encoded).unwrap();
+    let messages = drain(&mut session);
+    assert!(
+        !messages
+            .iter()
+            .any(|message| matches!(message, RuntimeMessage::CommandRejected(_))),
+        "{messages:?}"
+    );
+    let replay = session.presentation.snapshot().resources;
+    let aliases = replay
+        .sprites
+        .iter()
+        .filter(|sprite| sprite.name == "LIVE")
+        .collect::<Vec<_>>();
+    assert_eq!(aliases.len(), 2);
+    assert_eq!(
+        aliases
+            .iter()
+            .filter(|sprite| sprite.current_alias == Some(true))
+            .count(),
+        1
+    );
+    assert_eq!(
+        aliases
+            .iter()
+            .find(|sprite| sprite.current_alias == Some(true))
+            .unwrap()
+            .revision,
+        current_revision
+    );
+    assert_eq!(
+        aliases
+            .iter()
+            .filter(|sprite| sprite.current_alias == Some(false))
+            .count(),
+        1
+    );
+}

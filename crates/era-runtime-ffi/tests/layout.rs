@@ -130,14 +130,14 @@ fn checked_header_matches_version_function_table_and_reserved_slots() {
     assert!(header.contains("#define ERA_RUNTIME_ABI_MAJOR 3u"));
     assert!(header.contains("#define ERA_RUNTIME_ABI_MINOR 9u"));
     assert!(header.contains("#define ERA_RUNTIME_PROTOCOL_MAJOR 47u"));
-    assert!(header.contains("#define ERA_RUNTIME_PROTOCOL_MINOR 0u"));
+    assert!(header.contains("#define ERA_RUNTIME_PROTOCOL_MINOR 1u"));
     assert!(header.contains(ERA_RUNTIME_GET_API_SYMBOL));
     assert_eq!(
         ERA_RUNTIME_ABI_VERSION,
         EraAbiVersion { major: 3, minor: 9 }
     );
     assert_eq!(ERA_RUNTIME_PROTOCOL_MAJOR, 47);
-    assert_eq!(ERA_RUNTIME_PROTOCOL_MINOR, 0);
+    assert_eq!(ERA_RUNTIME_PROTOCOL_MINOR, 1);
     assert_eq!(
         (ERA_RUNTIME_PROTOCOL_MAJOR, ERA_RUNTIME_PROTOCOL_MINOR,),
         (

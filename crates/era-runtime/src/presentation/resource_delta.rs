@@ -123,6 +123,7 @@ mod tests {
 
     fn sprite(index: usize) -> SpriteReplay {
         SpriteReplay {
+            current_alias: None,
             name: format!("SPRITE{index:06}"),
             size: [1, 1],
             position: [0, 0],

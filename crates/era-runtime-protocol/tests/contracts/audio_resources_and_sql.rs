@@ -47,7 +47,7 @@ fn sql_current_row_projection_round_trips_with_missing_conversions() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn protocol_46_audio_targets_effects_and_observations_are_exact() {
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(47, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(47, 1));
     assert_eq!(AUDIO_OBSERVATION_OPERATION, "audio_observation");
     assert_eq!(
         AUDIO_OBSERVATION_OPERATION_VERSION,
@@ -260,6 +260,7 @@ fn resource_replay_is_a_renderer_independent_protocol_value() {
 
     let replay = ResourceReplay {
         sprites: vec![SpriteReplay {
+            current_alias: None,
             name: "FILE".into(),
             size: [2, 1],
             position: [0, 0],
@@ -369,6 +370,7 @@ fn resource_replay_is_a_renderer_independent_protocol_value() {
         ]
     );
     let sprite = SpriteReplay {
+        current_alias: None,
         name: "S".into(),
         size: [1, 1],
         position: [0, 0],
@@ -382,7 +384,7 @@ fn resource_replay_is_a_renderer_independent_protocol_value() {
         serde_json::to_value(&sprite).unwrap(),
         serde_json::json!({
             "name":"S", "size":[1,1], "position":[0,0], "frames":[],
-            "canvas_id":2, "canvas_rectangle":null, "revision":4, "canvas_revision":3
+            "canvas_id":2, "canvas_rectangle":null, "revision":4, "canvas_revision":3, "current_alias":null
         })
     );
     assert_eq!(
@@ -689,7 +691,7 @@ fn protocol_41_carries_safe_sql_v1_without_native_paths_or_handles() {
     );
     assert_eq!(SqlLimitsV1::FIXED.maximum_connections, 8);
     assert_eq!(SqlLimitsV1::FIXED.execution_budget_ms, 5_000);
-    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(47, 0));
+    assert_eq!(RUNTIME_PROTOCOL_VERSION, ProtocolVersion::new(47, 1));
     let schema = include_str!("../../schema/runtime.cddl");
     assert!(schema.contains("sql-request-v1"));
     assert!(schema.contains("sql-response-v1"));
@@ -821,4 +823,28 @@ fn safe_sql_v1_round_trips_every_operation_and_result_variant() {
         let encoded = encode_canonical(&result).unwrap();
         assert_eq!(decode_canonical::<SqlResultV1>(&encoded).unwrap(), result);
     }
+}
+
+#[test]
+fn sprite_current_alias_is_optional_and_independent_of_revision_order() {
+    let legacy = vec![
+        0xa5, 0x00, 0x61, b'S', 0x01, 0x82, 0x01, 0x01,
+        0x02, 0x82, 0x00, 0x00, 0x03, 0x80, 0x06, 0x01,
+    ];
+    let mut sprite: SpriteReplay = decode_canonical(&legacy).unwrap();
+    assert_eq!(sprite.current_alias, None);
+    let mut json = serde_json::to_value(&sprite).unwrap();
+    json.as_object_mut().unwrap().remove("current_alias");
+    assert_eq!(serde_json::from_value::<SpriteReplay>(json).unwrap(), sprite);
+    sprite.current_alias = Some(true);
+    let encoded = encode_canonical(&sprite).unwrap();
+    assert_eq!(encoded.last(), Some(&0xf5));
+    assert_eq!(decode_canonical::<SpriteReplay>(&encoded), Ok(sprite.clone()));
+    let mut historical = sprite.clone();
+    historical.revision = u64::MAX;
+    historical.current_alias = Some(false);
+    let mut replay = ResourceReplay { sprites: vec![historical, sprite], ..ResourceReplay::default() };
+    assert!(replay.validate_exact_references().is_ok());
+    replay.sprites[0].current_alias = Some(true);
+    assert!(replay.validate_exact_references().is_err());
 }

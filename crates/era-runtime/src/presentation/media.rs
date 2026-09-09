@@ -104,6 +104,15 @@ impl PresentationModel {
         self.project_audio
     }
 
+    pub(crate) fn has_ambiguous_legacy_resource_aliases(&self) -> bool {
+        let mut names = std::collections::BTreeSet::new();
+        self.resources
+            .sprites
+            .iter()
+            .filter(|sprite| sprite.current_alias.is_none())
+            .any(|sprite| !names.insert(sprite.name.to_ascii_uppercase()))
+    }
+
     pub(crate) fn set_resource_replay(&mut self, resources: ResourceReplay) {
         self.resources = resources;
         self.resource_replay_stale = false;

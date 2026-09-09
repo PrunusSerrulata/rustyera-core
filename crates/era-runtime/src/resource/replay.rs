@@ -328,6 +328,11 @@ impl ResourceGraph {
             .filter_map(|key| self.sprite_definition_at(key))
             .map(|sprite| SpriteReplay {
                 name: sprite.name.clone(),
+                current_alias: Some(
+                    self.sprites
+                        .get(&sprite.name)
+                        .is_some_and(|current| current.revision == sprite.revision),
+                ),
                 revision: sprite.revision,
                 size: [sprite.width, sprite.height],
                 position: [sprite.position_x, sprite.position_y],
@@ -401,6 +406,7 @@ impl ResourceGraph {
                             };
                             sprites.push(SpriteReplay {
                                 name: name.clone(),
+                                current_alias: Some(false),
                                 revision: canvas.revision,
                                 size: [metadata.width, metadata.height],
                                 position: [0, 0],

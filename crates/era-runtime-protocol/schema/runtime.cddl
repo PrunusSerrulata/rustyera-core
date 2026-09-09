@@ -1,4 +1,4 @@
-; Runtime channel version: 47.0.
+; Runtime channel version: 47.1.
 ; RuntimeMessage is encoded as a minicbor enum [stable-tag, typed-body].
 runtime-message =
   [0, client-hello] /
@@ -305,7 +305,8 @@ canvas-replay = {
 sprite-replay = {
   ; 4 and 7 are an atomic exact canvas reference and must appear together.
   0: tstr, 1: [uint, uint], 2: [int, int], 3: [* sprite-frame-replay],
-  ? 4: int, ? 5: canvas-rect, 6: uint, ? 7: uint
+  ; 8 identifies the current name alias independently of revision ordering.
+  ? 4: int, ? 5: canvas-rect, 6: uint, ? 7: uint, ? 8: bool
 }
 resource-replay = { 0: [* sprite-replay], 1: [* canvas-replay], 2: int }
 ; Ordered edits refer to the original baseline, never intermediate list offsets.

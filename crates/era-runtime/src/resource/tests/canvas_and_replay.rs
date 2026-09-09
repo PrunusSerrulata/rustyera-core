@@ -488,3 +488,197 @@ fn missing_exact_dependency_is_rejected_without_mutating_the_graph() {
     }));
     assert_eq!(serde_json::to_value(&graph).unwrap(), before);
 }
+
+#[test]
+fn live_canvas_sprites_follow_draws_without_rewriting_exact_history() {
+    let mut graph = ResourceGraph::default();
+    assert!(graph.create_canvas(1, 2, 2).unwrap());
+    assert!(graph.create_canvas(2, 2, 2).unwrap());
+    assert!(graph.create_canvas_sprite("live", 1, None, [0, 0], None));
+    assert!(graph.create_animation_sprite("anim", 2, 2));
+    assert!(graph.add_animation_frame("anim", 1, [0, 0, 2, 2], [0, 0], 10));
+    let empty_revision = graph.sprite_revision("live").unwrap();
+    assert!(graph.set_canvas_pixel(1, 0xffff_0000, [0, 0]));
+    let red_revision = graph.sprite_revision("live").unwrap();
+    assert_ne!(empty_revision, red_revision);
+    assert_eq!(
+        graph.sprite("anim").unwrap().frames[0].canvas_revision,
+        Some(1)
+    );
+    assert!(graph.draw_sprite(2, "live", None, None));
+    assert!(graph.set_canvas_pixel(1, 0xff00_ff00, [0, 0]));
+    let green_revision = graph.sprite_revision("live").unwrap();
+    assert_ne!(red_revision, green_revision);
+    assert!(graph.draw_sprite(2, "live", None, None));
+    let replay = graph.replay_for_roots(&[]).unwrap();
+    let versions = replay
+        .sprites
+        .iter()
+        .filter(|sprite| sprite.name == "LIVE")
+        .map(|sprite| (sprite.revision, sprite.canvas_revision))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        versions,
+        [(red_revision, Some(1)), (green_revision, Some(2))]
+    );
+    let aliases = replay
+        .sprites
+        .iter()
+        .filter(|sprite| sprite.name == "LIVE")
+        .map(|sprite| (sprite.revision, sprite.current_alias))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        aliases,
+        [(red_revision, Some(false)), (green_revision, Some(true))]
+    );
+    let drawn = &graph.canvases[&2].commands;
+    assert!(
+        matches!(&drawn[0], CanvasCommand::DrawSprite { resource_revision, .. } if *resource_revision == red_revision)
+    );
+    assert!(
+        matches!(&drawn[1], CanvasCommand::DrawSprite { resource_revision, .. } if *resource_revision == green_revision)
+    );
+    let old_canvas = replay
+        .canvases
+        .iter()
+        .find(|canvas| canvas.canvas_id == 1 && canvas.revision == 1)
+        .unwrap();
+    assert_eq!(old_canvas.commands.len(), 1);
+}
+
+#[test]
+fn live_canvas_sprite_self_draw_captures_previous_contents() {
+    let mut graph = ResourceGraph::default();
+    assert!(graph.create_canvas(1, 2, 2).unwrap());
+    assert!(graph.create_canvas_sprite("self", 1, None, [0, 0], None));
+    assert!(graph.set_canvas_pixel(1, 0xffff_0000, [0, 0]));
+    let previous = graph.sprite_revision("self").unwrap();
+    assert!(graph.draw_sprite(1, "self", Some([1, 0, 1, 1]), None));
+    assert_ne!(graph.sprite_revision("self").unwrap(), previous);
+    let replay = graph.replay_for_roots(&[]).unwrap();
+    let source = replay
+        .sprites
+        .iter()
+        .find(|sprite| sprite.name == "SELF" && sprite.revision == previous)
+        .unwrap();
+    assert_eq!(source.canvas_revision, Some(1));
+    assert_eq!(graph.sprite("self").unwrap().canvas_revision, Some(2));
+    assert!(replay.validate_exact_references().is_ok());
+}
+
+#[test]
+fn recreated_canvas_alias_uses_new_identity_and_preserves_old_draws() {
+    let mut graph = ResourceGraph::default();
+    assert!(graph.create_canvas(1, 2, 2).unwrap());
+    assert!(graph.create_canvas(2, 2, 2).unwrap());
+    assert!(graph.create_canvas_sprite("live", 1, None, [0, 0], None));
+    assert!(graph.set_canvas_pixel(1, 0xffff_0000, [0, 0]));
+    let old_sprite = graph.sprite_revision("live").unwrap();
+    assert!(graph.draw_sprite(2, "live", None, None));
+    assert!(graph.dispose_canvas(1));
+    assert!(graph.create_canvas(1, 2, 2).unwrap());
+    assert_eq!(graph.canvas_observation(1), Some((2, 2, 2)));
+    assert_eq!(graph.sprite("live").unwrap().canvas_revision, Some(2));
+    assert_ne!(graph.sprite_revision("live").unwrap(), old_sprite);
+    assert!(graph.set_canvas_pixel(1, 0xff00_ff00, [0, 0]));
+    let replay = graph.replay_for_roots(&[]).unwrap();
+    let old = replay
+        .sprites
+        .iter()
+        .find(|sprite| sprite.revision == old_sprite)
+        .unwrap();
+    assert_eq!(old.canvas_revision, Some(1));
+    let canvas = replay
+        .canvases
+        .iter()
+        .find(|canvas| canvas.canvas_id == 1 && canvas.revision == 1)
+        .unwrap();
+    assert!(matches!(
+        canvas.commands[0],
+        era_runtime_protocol::CanvasReplayCommand::SetPixel {
+            argb: 0xffff_0000,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn live_canvas_index_survives_sprite_lifecycle_and_snapshot_rebuild() {
+    let mut graph = ResourceGraph::default();
+    assert!(graph.create_canvas(1, 2, 2).unwrap());
+    assert!(graph.create_canvas(2, 2, 2).unwrap());
+    assert!(graph.create_canvas_sprite("live", 1, None, [0, 0], None));
+    assert!(graph.set_canvas_pixel(1, 1, [0, 0]));
+    assert!(graph.dispose_sprite("live"));
+    assert!(graph.create_canvas_sprite("live", 2, None, [0, 0], None));
+    let revision = graph.sprite_revision("live").unwrap();
+    assert!(graph.set_canvas_pixel(1, 2, [0, 0]));
+    assert_eq!(graph.sprite_revision("live"), Some(revision));
+    assert!(graph.set_canvas_pixel(2, 3, [0, 0]));
+    assert_ne!(graph.sprite_revision("live"), Some(revision));
+    let serialized = serde_json::to_value(&graph).unwrap();
+    assert!(serialized.get("live_canvas_sprites").is_none());
+    graph = serde_json::from_value(serialized).unwrap();
+    assert!(!graph.has_stale_live_canvas_sprites());
+    assert!(graph.set_canvas_pixel(2, 4, [0, 0]));
+    assert_eq!(graph.sprite("live").unwrap().canvas_revision, Some(2));
+    let mut reloaded = ResourceGraph::default();
+    reloaded.inherit_runtime_graph(&graph, &[]).unwrap();
+    assert!(reloaded.set_canvas_pixel(2, 5, [0, 0]));
+    assert_eq!(reloaded.sprite("live").unwrap().canvas_revision, Some(3));
+    graph = reloaded;
+    assert_eq!(graph.dispose_sprites(false), 1);
+    assert!(graph.dispose_canvas(2));
+    assert!(
+        !graph
+            .exact_revisions
+            .canvases
+            .get(&2)
+            .is_some_and(|versions| versions.contains_key(&3))
+    );
+}
+
+#[test]
+fn sprite_replay_accepts_the_legacy_eight_field_snapshot_array() {
+    let old = (
+        "S",
+        [1_u32, 1],
+        [0_i32, 0],
+        Vec::<era_runtime_protocol::SpriteFrameReplay>::new(),
+        Option::<i64>::None,
+        Option::<era_runtime_protocol::CanvasRect>::None,
+        1_u64,
+        Option::<u64>::None,
+    );
+    let encoded = rmp_serde::to_vec(&old).unwrap();
+    let sprite: era_runtime_protocol::SpriteReplay = rmp_serde::from_slice(&encoded).unwrap();
+    assert_eq!(sprite.current_alias, None);
+    assert_eq!(sprite.name, "S");
+}
+
+#[test]
+fn rejected_live_canvas_draw_preserves_alias_and_exact_history() {
+    let mut graph = ResourceGraph::default();
+    assert!(graph.create_canvas(1, 2, 2).unwrap());
+    assert!(graph.create_canvas_sprite("live", 1, None, [0, 0], None));
+    let original = graph.sprite_revision("live").unwrap();
+    let source = era_runtime_protocol::SceneSourceV1::Sprite {
+        sprite_name: "LIVE".into(),
+        resource_revision: original,
+    };
+    assert!(graph.retain_scene_source(&source));
+    let before = serde_json::to_value(&graph).unwrap();
+    assert!(!graph.draw_sprite(1, "missing", Some([0, 0, 2, 2]), None));
+    assert_eq!(serde_json::to_value(&graph).unwrap(), before);
+    let text = "x".repeat(super::canvas::MAXIMUM_CANVAS_COMMAND_BYTES);
+    assert!(!graph.draw_canvas_text(1, text, [0, 0]));
+    assert_eq!(serde_json::to_value(&graph).unwrap(), before);
+    assert!(graph.set_canvas_pixel(1, 0xffff_0000, [0, 0]));
+    assert_ne!(graph.sprite_revision("live"), Some(original));
+    let replay = graph.replay_for_roots(&[source]).unwrap();
+    replay.validate_exact_references().unwrap();
+    assert!(
+        graph.total_canvas_bytes_with(&graph.exact_revisions)
+            <= super::canvas::MAXIMUM_CANVAS_COMMAND_BYTES
+    );
+}

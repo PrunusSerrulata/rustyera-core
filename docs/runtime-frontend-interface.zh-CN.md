@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `47.0`。源码入口：
+> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `47.1`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -20,7 +20,7 @@
 | ------------------------- | ---------------------------------------- | ------------------------------------------- |
 | C ABI 3.9                 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权      |
 | 公共信封 2.0              | 公开、版本化                             | Runtime 与 Debug 共用的确定性 CBOR 封装     |
-| Runtime 协议 47.0         | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输  |
+| Runtime 协议 47.1         | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输  |
 | `RuntimeSession` Rust API | 内部接口                                 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
 
 破坏性变更必须提升相应版本，并同步 Schema、C 头、文档与测试。数字消息标记已经是
@@ -93,7 +93,7 @@ get_api → create → ClientHello → ServerHello
 
 所有结构均为 C 布局；未写入的 `reserved` 必须置零。`EraCallHeader` 字段是
 `struct_size: uint32_t` 和 `abi_version: { major: uint16_t, minor: uint16_t }`。
-头文件同时公开 `ERA_RUNTIME_PROTOCOL_MAJOR=47`、`ERA_RUNTIME_PROTOCOL_MINOR=0`；协议升级
+头文件同时公开 `ERA_RUNTIME_PROTOCOL_MAJOR=47`、`ERA_RUNTIME_PROTOCOL_MINOR=1`；协议升级
 不改变 C 函数表形状，C 调用方仍通过 `session_submit/session_poll` 传输统一 CBOR 信封。
 
 | 类型               | 字段及含义                                                                                                 | 所有权/约束                                            |
@@ -646,7 +646,7 @@ scene 是所有背景与独立图层的唯一权威来源：
   引用（包括尚未附到图层的 CBG button map）可达的历史依赖闭包。runtime 以显式工作队列
   完整收集并验证闭包后才原子发布/剪枝；缺少任一精确边时拒绝发布；
 - `SpriteReplay {name,size,position,frames,canvas_id?,canvas_rectangle?,revision,
-canvas_revision?}`；scene 中的
+canvas_revision?,current_alias?}`；scene 中的
   Sprite source 必须绑定该 revision，不得只按同名资源取“最新值”；
 - `SpriteFrameReplay {resource_id,source_rectangle[4],offset[2],delay_ms,
 destination_size?,canvas_id?,content_digest?,canvas_revision?}`；文件资源必须携带精确
@@ -661,6 +661,11 @@ destination_size?,canvas_id?,content_digest?,canvas_revision?}`；文件资源�
   分别携带精确 canvas revision，5×5 值为 1/256 定点，rotation 是 millidegrees。
   `SpriteReplay`、`SpriteFrameReplay` 的 canvas_id/canvas_revision，以及 DrawCanvas 的
   mask_canvas_id/mask_revision 都是不可拆分的成对字段；两者只出现一个即为非法 replay。
+  Runtime 47.1 在 `SpriteReplay` 末尾追加可选 `current_alias`（CBOR key 8）：true 是
+  当前名称别名，false 仅供精确历史引用。前端按名称绘图须选择显式 true；旧数据无此字段
+  时仅允许同名唯一项，不得按 revision 数值大小推断当前项（静态 revision 是内容摘要）。
+  画布 sprite 与动画帧随当前画布更新，但已捕获的绘制/scene 引用保留精确旧版本。
+  新 Web 必须绑定支持该字段的 core；旧 Web 不声明支持新增 live 别名路径。
   当前与历史 canvas 命令按 `(canvas_id,revision)` 去重后共同受 64 MiB 保留预算约束；
   多边形点列是 canvas 重放状态：PolygonPointAdd/Clear 依次更新它，后续 DrawPolygon 与
   FillPolygon 消费当时的完整点列；前端不得把四类命令当作彼此独立的无状态增量。
