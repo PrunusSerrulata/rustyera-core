@@ -12,6 +12,92 @@ use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
 use erabasic_validator::{ValidationContext, validate_bytecode};
 struct RejectHost;
 
+#[test]
+fn repeated_path_memo_reads_preserve_dependency_identity_and_retained_storage() {
+    let (mut vm, artifact) = compile_vm("@READ\n#FUNCTION\nRETURNF FLAG:2\n");
+    let function = artifact
+        .functions
+        .iter()
+        .find(|item| item.name == "READ")
+        .unwrap();
+    let definition = artifact
+        .globals
+        .iter()
+        .find(|item| item.name == "FLAG")
+        .unwrap();
+    let id = vm.spawn_entry(function.key, Vec::new()).unwrap();
+    let fiber = vm.fibers.get(&id).unwrap().clone();
+    // The scheduler removes the active fiber before beginning observation.
+    vm.runnable.clear();
+    let frame = fiber.frames.last().unwrap().id;
+    vm.begin_path_memo(
+        &fiber,
+        frame,
+        function,
+        PathMemoHead {
+            generation: vm.current_generation,
+            function: function.key,
+        },
+        &[],
+        10_000,
+    );
+    let read = |indices: &[u64], character: usize| {
+        vm.observe_path_memo_read(
+            id,
+            vm.current_generation,
+            definition,
+            character,
+            false,
+            indices,
+            &VmValue::Integer(7),
+        );
+    };
+    read(&[2], 0);
+    let initial_bytes = vm
+        .active_path_memo
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .retained_bytes;
+    for _ in 0..100 {
+        read(&[2], 0);
+    }
+    {
+        let active = vm.active_path_memo.borrow();
+        let active = active.as_ref().unwrap();
+        assert_eq!(active.dependencies.len(), 1);
+        assert_eq!(active.retained_bytes, initial_bytes);
+        assert_eq!(active.repeated_value_dependencies, BTreeSet::from([0]));
+    }
+    read(&[3], 0);
+    read(&[2], 1);
+    read(&[2, 0], 0);
+    let mut other_variable = definition.clone();
+    other_variable.key = SymbolKey::derive("test", b"other dependency");
+    vm.observe_path_memo_read(
+        id,
+        vm.current_generation,
+        &other_variable,
+        0,
+        false,
+        &[2],
+        &VmValue::Integer(7),
+    );
+    vm.observe_path_memo_read(
+        id,
+        GenerationId(vm.current_generation.0 + 1),
+        definition,
+        0,
+        false,
+        &[2],
+        &VmValue::Integer(7),
+    );
+    let active = vm.active_path_memo.borrow();
+    let active = active.as_ref().unwrap();
+    assert_eq!(active.dependencies.len(), 6);
+    assert!(active.valid);
+}
+
 impl VmHost for RejectHost {
     fn call(&mut self, _request: HostCallRequest) -> HostCallResult {
         HostCallResult::Error("unexpected host call".into())

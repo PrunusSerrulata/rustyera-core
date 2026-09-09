@@ -319,12 +319,6 @@ impl Vm {
         {
             return;
         }
-        let place = PathMemoPlace {
-            generation,
-            variable: definition.key,
-            character,
-            indices: indices.to_vec(),
-        };
         let mut active = self.active_path_memo.borrow_mut();
         let Some(active) = active.as_mut().filter(|active| active.fiber == fiber) else {
             return;
@@ -338,12 +332,23 @@ impl Vm {
                 PathMemoDependency::Value {
                     place: observed,
                     ..
-                } if *observed == place
+                } if observed.generation == generation
+                    && observed.variable == definition.key
+                    && observed.character == character
+                    && observed.indices == indices
             )
         }) {
             active.repeated_value_dependencies.insert(index);
             return;
         }
+        // Repeated reads only mark the existing dependency. Retain an owned index
+        // path once, when a new dependency actually needs to be stored.
+        let place = PathMemoPlace {
+            generation,
+            variable: definition.key,
+            character,
+            indices: indices.to_vec(),
+        };
         if active
             .mutations
             .iter()
