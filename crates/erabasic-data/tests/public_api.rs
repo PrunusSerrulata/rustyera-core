@@ -69,6 +69,37 @@ fn serde_contract_is_round_trip_stable() {
 }
 
 #[test]
+fn legacy_character_width_matches_allocating_encoder() {
+    use erabasic_data::LegacyEncoding;
+
+    for (legacy, encoding) in [
+        (LegacyEncoding::Japanese, encoding_rs::SHIFT_JIS),
+        (LegacyEncoding::Korean, encoding_rs::EUC_KR),
+        (LegacyEncoding::ChineseHans, encoding_rs::GBK),
+        (LegacyEncoding::ChineseHant, encoding_rs::BIG5),
+    ] {
+        // Exhaust the BMP (including encoding-specific mappings), then sample
+        // supplementary planes and their terminal values, including emoji.
+        for scalar in (0..=0xffff)
+            .chain((0x10000..=0x0010_ffff).step_by(997))
+            .chain([0x1f600, 0x20000, 0x0010_ffff])
+        {
+            let Some(character) = char::from_u32(scalar) else {
+                continue;
+            };
+            let mut utf8 = [0; 4];
+            let (bytes, _, errors) = encoding.encode(character.encode_utf8(&mut utf8));
+            let expected = if errors { 1 } else { bytes.len() };
+            assert_eq!(
+                legacy.encoded_char_len(character),
+                expected,
+                "{legacy:?} U+{scalar:X}"
+            );
+        }
+    }
+}
+
+#[test]
 fn save_compatibility_matches_reference_wildcards() {
     let compatibility = SaveCompatibility {
         unique_code: 42,

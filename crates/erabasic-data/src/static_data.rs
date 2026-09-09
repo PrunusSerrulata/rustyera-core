@@ -399,8 +399,21 @@ impl LegacyEncoding {
             Self::ChineseHant => encoding_rs::BIG5,
         };
         let mut utf8 = [0; 4];
-        let (bytes, _, had_errors) = encoding.encode(character.encode_utf8(&mut utf8));
-        if had_errors { 1 } else { bytes.len() }
+        // These four stateless encodings emit at most two bytes per scalar. Use
+        // caller-owned storage instead of allocating an encoded string per character.
+        let mut bytes = [0; 8];
+        let (result, _, written) = encoding.new_encoder().encode_from_utf8_without_replacement(
+            character.encode_utf8(&mut utf8),
+            &mut bytes,
+            true,
+        );
+        match result {
+            encoding_rs::EncoderResult::InputEmpty => written,
+            encoding_rs::EncoderResult::Unmappable(_) => 1,
+            encoding_rs::EncoderResult::OutputFull => {
+                unreachable!("one scalar fits in eight bytes")
+            }
+        }
     }
 }
 
