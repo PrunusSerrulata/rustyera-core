@@ -1,4 +1,86 @@
 use super::*;
+#[cfg(feature = "vm-instruction-profile")]
+#[test]
+fn instruction_profile_reads_do_not_change_vm_state_or_slice_accounting() {
+    let key = SymbolKey::derive("profile.fixture", b"entry");
+    let mut code = vec![erabasic_bytecode::EncodedInstruction::new(Opcode::Nop, Vec::new()); 2048];
+    code.push(opcode::return_value(false));
+    let artifact = artifact(vec![function(key, "PROFILE_ENTRY", code)], Vec::new());
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let mut natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 7);
+    vm.spawn_entry(key, Vec::new()).unwrap();
+    let mut instructions = 0;
+    while instructions < 2049 {
+        let report = vm.run_slice(
+            &mut ReadyHost::default(),
+            &mut natives,
+            RunBudget {
+                maximum_instructions: 257,
+                ..RunBudget::default()
+            },
+        );
+        assert!(report.instructions > 0);
+        assert!(
+            !report
+                .events
+                .iter()
+                .any(|event| matches!(event, VmEvent::FiberFaulted { .. }))
+        );
+        instructions += report.instructions;
+        let before = vm.encode_unrestricted_snapshot(&natives).unwrap();
+        let profile = serde_json::to_value(vm.instruction_profile_snapshot()).unwrap();
+        assert_eq!(profile["dispatches"], instructions.to_string());
+        assert_eq!(vm.encode_unrestricted_snapshot(&natives).unwrap(), before);
+        assert_eq!(
+            serde_json::to_value(vm.instruction_profile_snapshot()).unwrap(),
+            profile
+        );
+    }
+    assert_eq!(instructions, 2049);
+    let profile = serde_json::to_value(vm.instruction_profile_snapshot()).unwrap();
+    assert_eq!(profile["counts"][0]["samples"], "2");
+    assert_eq!(profile["symbols"][0]["name"], "PROFILE_ENTRY");
+    let bytes = vm.encode_unrestricted_snapshot(&natives).unwrap();
+    let cloned = vm.clone();
+    let mut restored_natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 7);
+    let restored = Vm::restore_snapshot(
+        validated(&artifact),
+        VmConfig::default(),
+        VmSnapshot::decode(&bytes, 16 * 1024 * 1024).unwrap(),
+        &mut ReadyHost::default(),
+        &mut restored_natives,
+    )
+    .unwrap();
+    // Restore normally retires terminal fibers. Compare observation against the
+    // restored state itself, not the pre-retirement snapshot container.
+    let restored_bytes = restored
+        .encode_unrestricted_snapshot(&restored_natives)
+        .unwrap();
+    let clone_profile = serde_json::to_value(cloned.instruction_profile_snapshot()).unwrap();
+    let restored_profile = serde_json::to_value(restored.instruction_profile_snapshot()).unwrap();
+    for fresh in [&clone_profile, &restored_profile] {
+        assert_ne!(fresh["instance"], profile["instance"]);
+        assert_eq!(fresh["dispatches"], "0");
+        assert_eq!(fresh["counts"], serde_json::json!([]));
+    }
+    assert_ne!(clone_profile["instance"], restored_profile["instance"]);
+    assert_eq!(
+        cloned.encode_unrestricted_snapshot(&natives).unwrap(),
+        bytes
+    );
+    assert_eq!(
+        restored
+            .encode_unrestricted_snapshot(&restored_natives)
+            .unwrap(),
+        restored_bytes
+    );
+    assert_eq!(vm.encode_unrestricted_snapshot(&natives).unwrap(), bytes);
+    assert_eq!(
+        serde_json::to_value(vm.instruction_profile_snapshot()).unwrap(),
+        profile
+    );
+}
+
 #[test]
 #[expect(
     clippy::too_many_lines,
