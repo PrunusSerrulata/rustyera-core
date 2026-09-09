@@ -151,21 +151,16 @@ impl Vm {
             return Err(VmError::InvalidState("place is immutable".into()));
         }
         if definition.storage == BytecodeStorage::FunctionLocal {
-            let bound = find_frame(fiber, frame, definition.owner)?
+            let cell = find_frame_mut(fiber, frame, definition.owner)?
                 .locals
-                .get(&definition.key)
-                .and_then(VariableCell::first_place)
-                .map(std::borrow::Cow::into_owned);
+                .get_mut(&definition.key)
+                .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?;
+            let bound = cell.first_place().map(std::borrow::Cow::into_owned);
             if let Some(mut target) = bound {
                 target.indices.extend_from_slice(indices);
                 return self.write_place_internal(fiber, &target, value, false);
             }
-            return find_frame_mut(fiber, frame, definition.owner)?
-                .locals
-                .get_mut(&definition.key)
-                .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?
-                .write(indices, value)
-                .map_err(VmError::InvalidState);
+            return cell.write(indices, value).map_err(VmError::InvalidState);
         }
         let character = if definition.storage == BytecodeStorage::Character {
             character.map_or_else(

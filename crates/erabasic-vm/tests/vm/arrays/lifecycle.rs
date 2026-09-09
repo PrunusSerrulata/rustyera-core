@@ -1,4 +1,24 @@
 use super::*;
+
+#[test]
+fn local_write_lookup_preserves_bound_reference_array_updates() {
+    let artifact = compile_source_with_options(
+        r"@SYSTEM_TITLE
+#DIM VALUES, 3
+VALUES:1 = 5
+RESULT:10 = CHANGE(VALUES)
+RETURN VALUES:1 * 10 + RESULT:10
+@CHANGE(ITEMS)
+#FUNCTION
+#DIM REF ITEMS
+ITEMS:1 += 2
+RETURNF ITEMS:1
+",
+        &bit_options(),
+    );
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(77));
+}
+
 #[test]
 fn nested_bit_candidate_commit_preserves_inherited_roots_and_parent_atomicity() {
     let artifact = compile_source_with_options(

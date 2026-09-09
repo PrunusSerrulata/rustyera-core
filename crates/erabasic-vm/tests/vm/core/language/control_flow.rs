@@ -36,6 +36,28 @@ ENDSELECT
 }
 
 #[test]
+fn local_write_lookup_preserves_recursive_frames_and_compound_updates() {
+    let artifact = compile_source(
+        r#"@SYSTEM_TITLE
+RETURN ACCUMULATE(4)
+@ACCUMULATE(DEPTH)
+#FUNCTION
+#DIM DEPTH
+#DIM DYNAMIC VALUE, 2
+#DIMS DYNAMIC TEXT
+VALUE:1 = DEPTH
+TEXT '= "frame"
+IF DEPTH > 0
+    VALUE:1 += ACCUMULATE(DEPTH - 1)
+ENDIF
+SIF TEXT != "frame"
+    RETURNF -100
+RETURNF VALUE:1
+"#,
+    );
+    assert_eq!(run_compiled_result(&artifact), VmValue::Integer(10));
+}
+#[test]
 fn while_false_branch_skips_past_wend_and_finite_loops_terminate() {
     let artifact = compile_source(
         "@SYSTEM_TITLE\n#DIM ITERATIONS\nWHILE ITERATIONS < 3\nITERATIONS ++\nWEND\nWHILE 0\nITERATIONS = 99\nWEND\nRETURN ITERATIONS\n",
