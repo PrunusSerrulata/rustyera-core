@@ -45,7 +45,7 @@ core SHA、库/bundle 路径及后续发布绑定变更，须在对应实施批�
 | [1](#batch-1) | 完整摄取与参考能力阻塞项 | 已完成 | 2026-08-28 / Codex | 1A–1D分项提交及必要验收完成；参考/像素差异与后置资源阻塞见验收汇总，不代表蛇版TW完整可玩 |
 | [2](#batch-2) | 确定性 API、输入与兼容差异骨架 | 功能验收完成；规模证据有缺口 | 2026-08-30 / Codex | 2A–2F 产品与三端行为已交付；峰值 RSS 因沙箱权限未取得，后续性能批次补采 |
 | [3](#batch-3) | 安全 SQL（蛇版 TW P0） | 待登记 | 待填写 | 待填写 |
-| [4](#batch-4) | 主玩法 presentation、图像、scene 与自身存档闭环 | 分项结果见记录 | 2026-09-10 / Codex | 新快照文字重叠修复通过 Tauri/Chromium；既有图层项仍按原记录，非整批验收完成 |
+| [4](#batch-4) | 主玩法 presentation、图像、scene 与自身存档闭环 | 分项结果见记录 | 2026-09-10 / Codex | 标题按钮与断面组件修复完成定向验收；断面通过四客户端及双 oracle；完整 smoke/Windows 限制见记录，非整批验收完成 |
 | [5](#batch-5) | 蛇版存档互操作与音频 | 已完成确认范围 | 2026-09-04 / Codex | 标准 1808、音频、存档页及整包导出修复完成；Browser/Tauri 蛇版 TW 导出文件一致，TUI 真实 TW 保留像素能力限制 |
 | [6](#batch-6) | 完整蛇版语言 | 待登记 | 待填写 | 待填写 |
 | [7](#batch-7) | 可选 extension 与渲染能力 | 待登记 | 待填写 | 待填写 |
@@ -1140,6 +1140,81 @@ HTML_PRINT 流程构造 41 个槽位。Web/Tauri 使用 HTML 版本；TUI 的存
 - 用户 core 批次 5 计划修改、Web 工作锁保持原样；未修改 master、未推送/合并。根
   `CHANGELOG_PENDING.md` 分项登记本批行为修复。任务测试进程已结束，暂停续做材料按规则
   保留在 W 和已记录的专属游戏副本中，不删除用户数据或为文档/提交调整重跑产品。
+
+### 2026-09-10 蛇版 TW 分割线按钮及断面组件修复
+
+本次两个独立修复批次分别针对 `runtime_20260910-010736.snapshot` 与
+`runtime_20260910-010855.snapshot`。按钮项限 Web 交互生命周期；图像项涉及 core
+资源语义、47.1 协议及 Web 两种 host，故独立审查、预算与提交。TUI 未修改，两个参考
+仓库及真实游戏均只读；不是批次 4 整体验收完成。
+
+#### 实際改动、真实脚本与提交绑定
+
+- Web `5f2bf05`（`fix: preserve header choices across message continuation waits`）：
+  消息推进等待保留既有 interaction generation，数值输入及结果不确定的提交仍及时失效
+  旧 capability。真实 `INFO.ERB` 使用 `PRINTBUTTON_EX` 打印标题；两个参考引擎
+  `EmueraConsole` 的 `NeedValue=false` 路径均不退休这些按钮。修复后恢复 010736，
+  间隔 3 秒通过可见普通行左键推进，四类标题按钮保持 enabled。
+- Core `1fc00ac236532937248e1072db7e1d1902c17f3e`
+  （`fix: follow live canvas mutations through current sprite aliases`）：成功修改画布后
+  更新当前精灵别名，历史绘制保持精确 revision；同 ID 重建维持身份隔离，失败操作不改变
+  图形资源。旧快照恢复修复陈旧别名并重建投影，新增 `SpriteReplay.current_alias`，
+  runtime 协议由 47.0 升至 47.1，旧八字段 replay 可解码。
+- Web `f801bbe`（`fix: render current canvas sprite aliases in snake TW snapshots`）：
+  HTML 绘制、宽度计算及测量统一解析当前别名，不按最大 revision 猜测；精确历史绘制不变。
+  所有 Git 依赖、发布锁及 `rustyera-core.rev` 绑定上述完整 core SHA。
+- 真实 `ALTER_IMAGE_SET.ERB` 的 `AAZ_IMAGE_PREPARE_SINGLE` 先 `GCREATE`、注册精灵，
+  再 `GDRAWSPRITE`。旧实现冻结注册时空画布；两个参考实现 `SpriteG` 则持有活画布。
+  010855 的 V/A 使用动态画布 16380000/16380001，W 为静态图；透明占位宽 36px，
+  与 180px 颜绘组合总宽 216px，V/A 相对纵偏移分别为 36/144px。
+
+#### 唯一审查与验证
+
+各批首条测试前各完成一次独立重构审查并落实全部要求；包括资源索引集中维护、当前别名
+解析复用、保留精确历史身份，以及三客户端共用像素/几何验收。未追加重构审查或重跑全量。
+
+| 批次 / 首次全量 | 结果 | 定向复验及边界 |
+|---|---|---|
+| 按钮 Vitest | 130 文件，2026/2027 通过；不确定提交响应回归失败 | 修复 fail-closed 分支后最小相关集通过；未重跑全量 |
+| 按钮静态 / 构建 | 类型、lint、格式、Web/WASM/Tauri 构建通过 | 点击目标与初始推进场景修正后定向测试通过 |
+| 按钮真实客户端 | Tauri 与 Chromium 原快照通过；Firefox 默认兼容 fixture 通过 | Safari 默认兼容 fixture 在接收导出操作序列阶段静止失败，未把它记为按钮验证通过 |
+| 图像 core 全量 | 1619 项通过 | 初始检查中的测试字段、图形能力和文档 lint 修正后定向检查通过；唯一全量随后通过 |
+| 图像 Web 全量 | Vitest 133 文件 / 2046 项；Rust workspace 154 项，均通过 | 类型、lint、格式、Web/WASM/原生构建、core pin、最终输入摘要检查通过 |
+| 图像真实 010855 | Tauri、Chromium、Firefox 155.0.1、Safari 均退出 0 | 每个 host 的 V/A/W 全部像素差异为 0，36px 占位、216px 居中及可见裁剪检查通过 |
+| 原版 oracle | 首次全量 smoke 初始化失败（124），未重跑 | 最小 fixture 标题未引用函数导致两次错误；按官方 IF 0 CALL 建立解析依赖后，定向差分退出 0 |
+| 蛇版 oracle | 首次全量 smoke 在 Wine prefix 初始化阶段静止失败（124），未重跑 | 初始化后仅运行当前别名同输入定向比较，退出 0 |
+
+原版首次 smoke 还早于最终 Web 原生构建门禁，属于无效基础设施尝试，不计动态验收。
+全部最终客户端与同输入差分在静态门禁通过后执行。按钮测试窗口从 01:36:07 开始，
+未超过 02:36:07 截止；图像测试从 02:17:45 开始，主要动态验收于 03:11:02 完成，
+最终源码检查及文档差异检查仍受 03:17:45 截止约束。浏览器/Tauri 每 5 秒完整
+DOM/runtime 静止看门狗未放宽。原始失败 verdict 全部保留。
+
+两个 reference CLI 均验证 schema 2 及固定基准：原版
+`26a35dc9334bb67590b96f7b8efbefbf199e391e`，蛇版
+`fc4fb21416768c17256d0e82f997e5f99c9bba91`；wrapper 分别为
+`058b9f17aa827755a145f819c84d0e44e53fbb6a`、`a5d9f48d40c348ab540925c57affddba2d790a1a`。
+同一绘制 ERB（seed 123456）在真实 WASM 和两个 oracle 上均获得 15 个成功返回值、
+初始透明像素 0、红色 4294901760、更新后绿色 4278255360，终态正确且 diagnostics=[]。
+配置使用各参考引擎支持的绘图 provider；固定 fixture 的 ABL 数组长度加载警告保留。
+CLI 不暴露历史资源 revision，历史不可变性依据 core 回归，不以此次 oracle 冒充证明。
+
+#### 证据、限制与收尾
+
+证据入口：Web 已忽略目录 `.rustyera/test-runs/header-xray-20260910/`。
+`buttons/`、`xray/` 保留执行脚本、结果及失败日志；`analysis/` 保留真实脚本/快照对照。
+`xray/final-source-check.result.json` 为主仓与两个隔离构建输入逐文件摘要；
+`xray/delivered-artifacts.json` 绑定实际 WASM/原生二进制及上述 core/Web 提交。
+WASM SHA256 `300b8ef43a4e0021ef99c484da4f56ec69b30042422a2a51161e46fc0eaf522c`；
+Tauri SHA256 `44bed5ef6cc04f960854ec256d38888cd62d3df59f6b79d96f20dbb77cd73895`。
+客户端嵌套测试输出收拢到各批 `client-evidence/`，压缩与路径迁移见收尾证据索引。
+
+Windows Tauri 未在本机执行；Chromium 覆盖相同绘制及占位逻辑，但不冒充 WebView2
+原生验证。按钮 Safari 默认导出流程失败仍列为未通过的外围检查；本次 Safari 真实
+010855 断面用例通过。两个参考首次全量 smoke 未通过，不宣称全量 oracle 健康验收。
+临时大游戏副本、隔离工作树/依赖、target 与原生 provider 在收尾清理；固定最小 fixture、
+摘要和必要证据保留。用户原有 Web Cargo.lock 删除改动保持未提交。根
+`CHANGELOG_PENDING.md` 分别记录两个产品修复，源码按功能分项提交。
 
 ### 2026-09-10 蛇版 TW 历史行更新后文字重叠修复
 
