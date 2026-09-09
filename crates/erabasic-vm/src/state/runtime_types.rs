@@ -270,8 +270,38 @@ pub(crate) struct BulkFillLoopPlan {
 
 #[derive(Clone, Debug)]
 pub(crate) struct LiteralGroupMatchPlan {
-    pub candidates: Vec<Arc<str>>,
+    pub candidates: LiteralGroupMatchCandidates,
     pub after_call: usize,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum LiteralGroupMatchCandidates {
+    Strings(Vec<Arc<str>>),
+    Integers(Vec<i64>),
+}
+
+impl LiteralGroupMatchCandidates {
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Strings(values) => values.len(),
+            Self::Integers(values) => values.len(),
+        }
+    }
+
+    pub(crate) fn match_count(&self, needle: &VmValue) -> Option<usize> {
+        match (self, needle) {
+            (Self::Strings(values), VmValue::String(needle)) => Some(
+                values
+                    .iter()
+                    .filter(|value| value.as_ref() == needle)
+                    .count(),
+            ),
+            (Self::Integers(values), VmValue::Integer(needle)) => {
+                Some(values.iter().filter(|value| *value == needle).count())
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -70,6 +70,15 @@ impl Vm {
             function: function_key,
             instruction,
             variable: cursor.program.instruction_global(cursor.index, instruction),
+            literal_group_match: if encoded.opcode == Opcode::PushInteger as u16
+                || encoded.opcode == Opcode::PushString as u16
+            {
+                cursor
+                    .program
+                    .literal_group_match_plan(cursor.index, instruction)
+            } else {
+                None
+            },
             encoded: DispatchInstruction {
                 opcode: encoded.opcode,
                 payload: &encoded.payload,

@@ -315,10 +315,7 @@ impl Vm {
         if !policy.allow_function_memo {
             return None;
         }
-        let plan = self
-            .generations
-            .get(&position.generation)?
-            .literal_group_match_plan(position.function, position.instruction)?;
+        let plan = position.literal_group_match?;
         let logical_instructions = u64::try_from(plan.candidates.len()).ok()?.saturating_add(1);
         if logical_instructions > policy.remaining_instructions
             || logical_instructions > u64::from(policy.remaining_quantum)
@@ -326,14 +323,14 @@ impl Vm {
             return None;
         }
         let frame = fiber.frames.last_mut()?;
-        let VmValue::String(value) = frame.stack.last()? else {
+        // Preserve the intermediate stack peak and its exact failure position by
+        // falling back when ordinary literal pushes could exhaust the stack.
+        if frame.operand_slots()?.checked_add(plan.candidates.len())?
+            > self.config.maximum_operand_stack
+        {
             return None;
-        };
-        let matches = plan
-            .candidates
-            .iter()
-            .filter(|candidate| candidate.as_ref() == value)
-            .count();
+        }
+        let matches = plan.candidates.match_count(frame.stack.last()?)?;
         frame.stack.pop();
         frame
             .stack

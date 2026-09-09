@@ -121,27 +121,9 @@ pub(super) fn literal_group_match(
     instruction: usize,
     native_import_indices: &SymbolMap<usize>,
     normalized_native_names: &[Arc<str>],
-) -> Option<LiteralGroupMatchPlan> {
-    let mut candidates = Vec::new();
-    let mut cursor = instruction;
-    while let Some(encoded) = function.code.get(cursor)
-        && Opcode::try_from(encoded.opcode).ok()? == Opcode::PushString
-    {
-        let length = read_payload_u32(&encoded.payload, 0)? as usize;
-        let bytes = encoded.payload.get(4..4 + length)?;
-        if encoded.payload.len() != 4 + length {
-            return None;
-        }
-        candidates.push(Arc::<str>::from(std::str::from_utf8(bytes).ok()?));
-        cursor += 1;
-    }
-    if candidates.is_empty() {
-        return None;
-    }
-    let call = function.code.get(cursor)?;
-    if Opcode::try_from(call.opcode).ok()? != Opcode::CallNative
-        || usize::from(read_payload_u16(&call.payload, 4)?) != candidates.len() + 1
-    {
+) -> Option<(usize, LiteralGroupMatchPlan)> {
+    let call = function.code.get(instruction)?;
+    if Opcode::try_from(call.opcode).ok()? != Opcode::CallNative {
         return None;
     }
     let import_index = read_payload_u32(&call.payload, 0)? as usize;
@@ -155,10 +137,45 @@ pub(super) fn literal_group_match(
     {
         return None;
     }
-    Some(LiteralGroupMatchPlan {
-        candidates,
-        after_call: cursor + 1,
-    })
+    let count = usize::from(read_payload_u16(&call.payload, 4)?).checked_sub(1)?;
+    if count == 0 {
+        return None;
+    }
+    let first = instruction.checked_sub(count)?;
+    let literals = function.code.get(first..instruction)?;
+    let literal_opcode = Opcode::try_from(literals.first()?.opcode).ok()?;
+    let mut candidates = match literal_opcode {
+        Opcode::PushString => LiteralGroupMatchCandidates::Strings(Vec::new()),
+        Opcode::PushInteger => LiteralGroupMatchCandidates::Integers(Vec::new()),
+        _ => return None,
+    };
+    for encoded in literals {
+        if Opcode::try_from(encoded.opcode).ok()? != literal_opcode {
+            return None;
+        }
+        match &mut candidates {
+            LiteralGroupMatchCandidates::Strings(values) => {
+                let length = read_payload_u32(&encoded.payload, 0)? as usize;
+                let bytes = encoded.payload.get(4..4 + length)?;
+                if encoded.payload.len() != 4 + length {
+                    return None;
+                }
+                values.push(Arc::<str>::from(std::str::from_utf8(bytes).ok()?));
+            }
+            LiteralGroupMatchCandidates::Integers(values) => {
+                values.push(i64::from_le_bytes(
+                    encoded.payload.as_ref().try_into().ok()?,
+                ));
+            }
+        }
+    }
+    Some((
+        first,
+        LiteralGroupMatchPlan {
+            candidates,
+            after_call: instruction + 1,
+        },
+    ))
 }
 
 pub(super) fn memoized_indexed_read(

@@ -105,6 +105,7 @@ impl Vm {
                                 function: SymbolKey::default(),
                                 instruction: 0,
                                 variable: None,
+                                literal_group_match: None,
                                 encoded: DispatchInstruction::trap(),
                             },
                             |frame| InstructionPosition {
@@ -112,6 +113,7 @@ impl Vm {
                                 function: frame.function,
                                 instruction: frame.instruction,
                                 variable: None,
+                                literal_group_match: None,
                                 encoded: DispatchInstruction::trap(),
                             },
                         );
@@ -387,6 +389,7 @@ impl Vm {
                                 function: SymbolKey::default(),
                                 instruction: 0,
                                 variable: None,
+                                literal_group_match: None,
                                 encoded: DispatchInstruction::trap(),
                             });
                         let fault = self.make_fault(
@@ -418,6 +421,7 @@ impl Vm {
                     function: frame.map_or(SymbolKey::default(), |frame| frame.function),
                     instruction: frame.map_or(0, |frame| frame.instruction),
                     variable: None,
+                    literal_group_match: None,
                     encoded: DispatchInstruction::trap(),
                 };
                 let fault = self.make_classified_fault(fiber.id, &position, error);

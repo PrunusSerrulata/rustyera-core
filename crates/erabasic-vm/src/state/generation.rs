@@ -183,8 +183,9 @@ impl ProgramGeneration {
                             &native_import_indices,
                             &normalized_native_names,
                         )
-                        .zip(u32::try_from(instruction).ok())
-                        .map(|(plan, index)| (index, plan))
+                        .and_then(|(first, plan)| {
+                            u32::try_from(first).ok().map(|index| (index, plan))
+                        })
                     })
                     .collect(),
             );
@@ -449,10 +450,9 @@ impl ProgramGeneration {
 
     pub(crate) fn literal_group_match_plan(
         &self,
-        function: SymbolKey,
+        index: usize,
         instruction: usize,
     ) -> Option<&LiteralGroupMatchPlan> {
-        let index = *self.function_index(function)?;
         sparse_instruction_plan(self.literal_group_match_plans.get(index)?, instruction)
     }
 
@@ -606,6 +606,25 @@ fn sparse_instruction_plan<T>(plans: &[(u32, T)], instruction: usize) -> Option<
 #[cfg(test)]
 mod compact_generation_index_tests {
     use super::*;
+
+    #[test]
+    fn literal_groupmatch_planning_uses_call_suffix_once_and_ignores_other_calls() {
+        let literals = std::iter::repeat_n("7", 2048)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let artifact = Arc::new(compiled_generation_source(&format!(
+            "@SYSTEM_TITLE\nRESULT = GROUPMATCH(7, {literals})\nRESULT:1 = MAX({literals})\nRETURN\n"
+        )));
+        let generation = ProgramGeneration::new(artifact);
+        let plans = &generation.literal_group_match_plans[0];
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].1.candidates.len(), 2048);
+        assert_eq!(
+            plans[0].1.candidates.match_count(&VmValue::Integer(7)),
+            Some(2048)
+        );
+        assert_eq!(plans[0].1.after_call - plans[0].0 as usize, 2049);
+    }
 
     #[test]
     #[allow(

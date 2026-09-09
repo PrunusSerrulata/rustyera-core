@@ -91,6 +91,10 @@ impl RuntimeFormContinuation {
         }
         Ok(true)
     }
+    #[allow(
+        clippy::too_many_lines,
+        reason = "The input Host transaction keeps validation, origin capture and submission in order."
+    )]
     pub(super) fn call_input_host(
         &mut self,
         vm: &mut Vm,
@@ -149,6 +153,7 @@ impl RuntimeFormContinuation {
             function: self.function,
             instruction: self.instruction,
             variable: None,
+            literal_group_match: None,
             encoded: crate::interpreter::DispatchInstruction {
                 opcode: opening.opcode,
                 payload: &opening.payload,

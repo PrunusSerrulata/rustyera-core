@@ -26,6 +26,8 @@ mod extended_ops;
 mod fastpaths;
 pub(crate) mod fault_hooks;
 mod host_calls;
+#[cfg(test)]
+mod literal_groupmatch_tests;
 mod lookup;
 pub(crate) mod map_calls;
 pub(crate) mod matching;
@@ -96,6 +98,7 @@ struct InstructionPosition<'a> {
     function: SymbolKey,
     instruction: usize,
     variable: Option<&'a erabasic_bytecode::BytecodeGlobal>,
+    literal_group_match: Option<&'a crate::state::LiteralGroupMatchPlan>,
     encoded: DispatchInstruction<'a>,
 }
 
@@ -147,7 +150,7 @@ impl Vm {
                 format!("unknown opcode {opcode}"),
             )
         })?;
-        if opcode == Opcode::PushString
+        if position.literal_group_match.is_some()
             && let Some(additional_instructions) =
                 self.try_literal_group_match(fiber, position, policy)
         {

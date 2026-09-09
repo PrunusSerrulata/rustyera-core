@@ -1,4 +1,122 @@
 use super::*;
+use erabasic_vm::VmRunStop;
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "The same fixture compares complete events across both profiles, slice budgets and stack limits."
+)]
+fn literal_groupmatch_batch_preserves_budgets_debugging_duplicates_and_stack_faults() {
+    fn execute(
+        artifact: &BytecodeArtifact,
+        debugging: bool,
+        budget: u64,
+        stack_limit: usize,
+    ) -> (u64, Vec<VmEvent>, VmValue) {
+        let function = |name: &str| {
+            artifact
+                .functions
+                .iter()
+                .find(|item| item.name == name)
+                .unwrap()
+                .key
+        };
+        let result = artifact
+            .globals
+            .iter()
+            .find(|item| item.name == "RESULT")
+            .unwrap()
+            .key;
+        let mut vm = Vm::new(
+            validated(artifact),
+            VmConfig {
+                maximum_operand_stack: stack_limit,
+                maximum_consecutive_budget_exhaustions: 10_000,
+                ..VmConfig::default()
+            },
+        );
+        if debugging {
+            vm.update_breakpoints(
+                &[VmBreakpoint {
+                    id: 1,
+                    enabled: true,
+                    hit_count: 0,
+                    location: VmBreakpointLocation::Function(function("UNUSED")),
+                }],
+                &[],
+            )
+            .unwrap();
+        }
+        let mut natives = NativeServiceRegistry::for_artifact(artifact);
+        vm.spawn_entry(function("SYSTEM_TITLE"), Vec::new())
+            .unwrap();
+        let mut instructions = 0;
+        let mut events = Vec::new();
+        for _ in 0..10_000 {
+            let report = vm.run_slice(
+                &mut ReadyHost::default(),
+                &mut natives,
+                RunBudget {
+                    maximum_instructions: budget,
+                    ..RunBudget::default()
+                },
+            );
+            assert!(report.instructions <= budget);
+            instructions += report.instructions;
+            events.extend(report.events);
+            if report.stop == VmRunStop::Idle {
+                return (
+                    instructions,
+                    events,
+                    vm.read_variable(result, &[0], None).unwrap(),
+                );
+            }
+        }
+        panic!("bounded GROUPMATCH fixture did not terminate");
+    }
+    for snake in [false, true] {
+        let mut options = AnalyzerOptions::analysis_mode();
+        if snake {
+            options.compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+                erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+            );
+        }
+        for (declaration, assignment, candidates) in [
+            ("#DIM VALUE", "VALUE = 7", "7, 0, 7, 9223372036854775807"),
+            ("#DIM VALUE", "VALUE = -7", "-7, 0, -7, 9223372036854775807"),
+            (
+                "#DIMS VALUE",
+                "VALUE '= \"漢字\"",
+                "\"漢字\", \"\", \"漢字\", \"other\"",
+            ),
+        ] {
+            let artifact = compile_source_with_options(
+                &format!(
+                    "@SYSTEM_TITLE\n{declaration}\n{assignment}\nRESULT = GROUPMATCH(VALUE, {candidates})\nRETURN RESULT\n@UNUSED\nRETURN\n"
+                ),
+                &options,
+            );
+            let ordinary = execute(&artifact, true, 10_000, 1024);
+            assert_eq!(ordinary.2, VmValue::Integer(2));
+            assert!(
+                !ordinary
+                    .1
+                    .iter()
+                    .any(|event| matches!(event, VmEvent::FiberFaulted { .. }))
+            );
+            for budget in [1, 2, 4, 5, 10_000] {
+                assert_eq!(execute(&artifact, false, budget, 1024), ordinary);
+            }
+            for limit in [2, 4, 5] {
+                assert_eq!(
+                    execute(&artifact, false, 10_000, limit),
+                    execute(&artifact, true, 10_000, limit)
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn pure_function_memoization_skips_repeated_work_and_tracks_dependency_writes() {
     fn run_instructions(calls: &str) -> u64 {

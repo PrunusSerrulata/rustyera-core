@@ -126,10 +126,10 @@ pub use runtime_types::Vm;
 pub(crate) use runtime_types::{
     ActivePathMemo, BulkFillLoopPlan, EventDispatch, EventDispatchEntry, Fiber, FiberState,
     FindElementCacheKey, FindElementNeedle, ForLoopState, Frame, FunctionMemoEntry,
-    FunctionMemoKey, FunctionMemoPlan, LiteralGroupMatchPlan, MemoValue, MemoizedIndexedReadPlan,
-    PathMemoBaseKey, PathMemoCache, PathMemoDependency, PathMemoEntry, PathMemoHead,
-    PathMemoMutation, PathMemoMutationGroup, PathMemoPlace, PathMemoResultReadPlan,
-    PendingFaultHook, WaitingHost,
+    FunctionMemoKey, FunctionMemoPlan, LiteralGroupMatchCandidates, LiteralGroupMatchPlan,
+    MemoValue, MemoizedIndexedReadPlan, PathMemoBaseKey, PathMemoCache, PathMemoDependency,
+    PathMemoEntry, PathMemoHead, PathMemoMutation, PathMemoMutationGroup, PathMemoPlace,
+    PathMemoResultReadPlan, PendingFaultHook, WaitingHost,
 };
 
 pub(crate) use frames::{
