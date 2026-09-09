@@ -262,10 +262,14 @@ pub(crate) struct PathMemoResultReadPlan {
 #[derive(Clone, Debug)]
 pub(crate) struct BulkFillLoopPlan {
     pub prefix: SymbolKey,
+    pub prefix_indices: Vec<u64>,
     pub counter: SymbolKey,
+    pub counter_indices: Vec<u64>,
     pub target: SymbolKey,
     pub value: VmValue,
     pub after_loop: usize,
+    pub iteration_instructions: u64,
+    pub stack_peak: usize,
 }
 
 #[derive(Clone, Debug)]

@@ -224,79 +224,77 @@ impl Vm {
         if !policy.allow_function_memo
             || step != 1
             || counter.character.is_some()
-            || !counter.indices.is_empty()
+            || counter.backing.is_some()
         {
             return Ok(None);
         }
-        let Some(plan) = self
-            .generations
-            .get(&position.generation)
-            .and_then(|generation| {
-                generation.bulk_fill_loop_plan(position.function, position.instruction)
-            })
-            .cloned()
+        let Some((program, _)) = position.resolved_program else {
+            return Ok(None);
+        };
+        let Some(plan) = program.bulk_fill_loop_plan(position.function, position.instruction)
         else {
             return Ok(None);
         };
-        if counter.variable != plan.counter {
+        if counter.variable != plan.counter || counter.indices != plan.counter_indices {
             return Ok(None);
         }
         let iterations = u64::try_from(end.wrapping_sub(start)).unwrap_or(u64::MAX);
-        let logical_instructions = iterations.saturating_mul(7).saturating_add(2);
-        if logical_instructions > policy.remaining_instructions
-            || logical_instructions > u64::from(policy.remaining_quantum)
-            || fiber
-                .backward_branches_without_progress
-                .saturating_add(iterations.saturating_sub(1))
-                > self.config.maximum_backward_branches_without_progress
+        let Some(logical_instructions) =
+            bulk_fill_work(fiber, plan, iterations, policy, &self.config)
+        else {
+            return Ok(None);
+        };
+        let Some(prefix) = program.global(plan.prefix) else {
+            return Ok(None);
+        };
+        let Some(target) = program.global(plan.target) else {
+            return Ok(None);
+        };
+        let frame = fiber.frames.last().expect("frame exists");
+        let Ok(VmValue::Integer(prefix_index)) = self.read_variable_resolved(
+            fiber,
+            position.generation,
+            prefix,
+            &plan.prefix_indices,
+            None,
+            (prefix.storage == BytecodeStorage::FunctionLocal).then_some(frame.id),
+        ) else {
+            return Ok(None);
+        };
+        let Some((character, flat_start, flat_end)) =
+            bulk_fill_target_range(target, prefix_index, start, end)
+        else {
+            return Ok(None);
+        };
+        // Preflight without mutating storage, so invalid characters/cells retain the ordinary
+        // StoreVariable failure position and all earlier per-instruction effects.
+        if self
+            .validate_script_character(target.storage, character.unwrap_or(0))
+            .is_err()
+            || self
+                .memory
+                .cell(position.generation, target, character.unwrap_or(0))
+                .is_none_or(|cell| {
+                    flat_end > cell.len()
+                        || cell.value_type != BytecodeType::Integer
+                        || (plan.value != VmValue::Integer(0) && cell.integers().is_none())
+                })
         {
             return Ok(None);
         }
-        let (prefix, target) = {
-            let generation = self
-                .generations
-                .get(&position.generation)
-                .expect("validated frame generation exists");
-            let Some(prefix) = generation.global(plan.prefix).cloned() else {
-                return Ok(None);
-            };
-            let Some(target) = generation.global(plan.target).cloned() else {
-                return Ok(None);
-            };
-            (prefix, target)
-        };
-        let frame = fiber.frames.last().expect("frame exists");
-        let VmValue::Integer(prefix_index) = self
-            .read_variable_resolved(
-                fiber,
-                position.generation,
-                &prefix,
-                &[],
-                None,
-                (prefix.storage == BytecodeStorage::FunctionLocal).then_some(frame.id),
-            )
-            .map_err(map_vm_error)?
-        else {
-            return Ok(None);
-        };
-        let Some((flat_start, flat_end)) =
-            bulk_fill_flat_range(&target.dimensions, prefix_index, start, end)
-        else {
-            return Ok(None);
-        };
         self.fill_place_array_range(
             fiber,
             &PlaceDescriptor {
                 backing: None,
                 variable: target.key,
                 indices: Vec::new(),
-                character: None,
+                character: character.and_then(|value| u64::try_from(value).ok()),
                 fiber: Some(fiber.id),
                 frame: None,
             },
             flat_start,
             flat_end,
-            plan.value,
+            plan.value.clone(),
         )
         .map_err(map_vm_error)?;
         self.write_place(fiber, counter, VmValue::Integer(end))
@@ -416,6 +414,31 @@ impl Vm {
         format!("{opcode:?}")
     }
 }
+fn bulk_fill_work(
+    fiber: &Fiber,
+    plan: &crate::state::BulkFillLoopPlan,
+    iterations: u64,
+    policy: ExecutionPolicy,
+    config: &crate::VmConfig,
+) -> Option<u64> {
+    let logical = iterations
+        .saturating_mul(plan.iteration_instructions)
+        .saturating_add(2);
+    let stack_peak = fiber
+        .frames
+        .last()?
+        .operand_slots()?
+        .checked_add(plan.stack_peak)?;
+    (logical <= policy.remaining_instructions
+        && logical <= u64::from(policy.remaining_quantum)
+        && fiber
+            .backward_branches_without_progress
+            .saturating_add(iterations.saturating_sub(1))
+            <= config.maximum_backward_branches_without_progress
+        && stack_peak <= config.maximum_operand_stack)
+        .then_some(logical)
+}
+
 fn bulk_fill_flat_range(
     dimensions: &[u64],
     prefix: i64,
@@ -428,12 +451,38 @@ fn bulk_fill_flat_range(
     let prefix = u64::try_from(prefix).ok()?;
     let start = u64::try_from(start).ok()?;
     let end = u64::try_from(end).ok()?;
-    if prefix >= rows || end > columns {
+    if prefix >= rows || start > end || end > columns {
         return None;
     }
     let row = prefix.checked_mul(columns)?;
     Some((
         usize::try_from(row.checked_add(start)?).ok()?,
         usize::try_from(row.checked_add(end)?).ok()?,
+    ))
+}
+
+fn bulk_fill_target_range(
+    target: &erabasic_bytecode::BytecodeGlobal,
+    prefix: i64,
+    start: i64,
+    end: i64,
+) -> Option<(Option<usize>, usize, usize)> {
+    if target.storage == BytecodeStorage::Project {
+        let (start, end) = bulk_fill_flat_range(&target.dimensions, prefix, start, end)?;
+        return Some((None, start, end));
+    }
+    let &[length] = target.dimensions.as_slice() else {
+        return None;
+    };
+    let character = usize::try_from(prefix).ok()?;
+    let start = u64::try_from(start).ok()?;
+    let end = u64::try_from(end).ok()?;
+    if start > end || end > length {
+        return None;
+    }
+    Some((
+        Some(character),
+        usize::try_from(start).ok()?,
+        usize::try_from(end).ok()?,
     ))
 }

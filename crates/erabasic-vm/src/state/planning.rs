@@ -52,68 +52,8 @@ pub(super) fn structured_scope_ranges(function: &BytecodeFunction) -> Vec<Struct
     ranges
 }
 
-pub(super) fn simple_bulk_fill_loop(
-    artifact: &BytecodeArtifact,
-    function_index: usize,
-    instruction: usize,
-    variable_global_indices: &[Vec<u32>],
-) -> Option<BulkFillLoopPlan> {
-    let function = artifact.functions.get(function_index)?;
-    let code = function
-        .code
-        .get(instruction..instruction.checked_add(9)?)?;
-    let opcodes = code
-        .iter()
-        .map(|encoded| Opcode::try_from(encoded.opcode).ok())
-        .collect::<Option<Vec<_>>>()?;
-    if opcodes
-        != [
-            Opcode::ForStart,
-            Opcode::JumpIfFalse,
-            Opcode::LoadVariable,
-            Opcode::LoadVariable,
-            Opcode::PushInteger,
-            Opcode::StoreVariable,
-            Opcode::ForNext,
-            Opcode::Unary,
-            Opcode::JumpIfFalse,
-        ]
-        || read_payload_u32(&code[1].payload, 0)? as usize != instruction + 9
-        || read_payload_u32(&code[8].payload, 0)? as usize != instruction + 2
-        || code[7].payload.as_ref() != [2]
-        || read_payload_u16(&code[2].payload, 16)? != 0
-        || read_payload_u16(&code[3].payload, 16)? != 0
-        || read_payload_u16(&code[5].payload, 16)? != 2
-        || code[5].payload.get(18).copied()? != 0
-    {
-        return None;
-    }
-    let globals = variable_global_indices.get(function_index)?;
-    let prefix_index = compact_global_index(globals, instruction + 2)?;
-    let counter_index = compact_global_index(globals, instruction + 3)?;
-    let target_index = compact_global_index(globals, instruction + 5)?;
-    let prefix = artifact.globals.get(prefix_index)?;
-    let counter = artifact.globals.get(counter_index)?;
-    let target = artifact.globals.get(target_index)?;
-    if prefix.value_type != BytecodeType::Integer
-        || prefix.storage == BytecodeStorage::Character
-        || counter.value_type != BytecodeType::Integer
-        || target.storage != BytecodeStorage::Project
-        || target.value_type != BytecodeType::Integer
-        || target.dimensions.len() != 2
-        || !target.mutable
-    {
-        return None;
-    }
-    let value = i64::from_le_bytes(code[4].payload.as_ref().try_into().ok()?);
-    Some(BulkFillLoopPlan {
-        prefix: prefix.key,
-        counter: counter.key,
-        target: target.key,
-        value: VmValue::Integer(value),
-        after_loop: instruction + 9,
-    })
-}
+mod bulk_fill;
+pub(super) use bulk_fill::simple_bulk_fill_loop;
 
 pub(super) fn literal_group_match(
     artifact: &BytecodeArtifact,

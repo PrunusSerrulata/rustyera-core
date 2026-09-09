@@ -212,7 +212,7 @@ fn assert_cursor_matches(actual: &FunctionCursor, expected: &FunctionCursor) {
     assert!(Arc::ptr_eq(&actual.program, &expected.program));
 }
 
-fn compile_cursor_fixture(source: String) -> erabasic_bytecode::BytecodeArtifact {
+pub(super) fn compile_cursor_fixture(source: String) -> erabasic_bytecode::BytecodeArtifact {
     let analysis = analyze_project(
         AnalysisInput {
             project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default())

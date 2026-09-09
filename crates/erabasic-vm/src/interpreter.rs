@@ -16,6 +16,8 @@ use crate::{
 
 mod arithmetic;
 pub(crate) mod bit_calls;
+#[cfg(test)]
+mod bulk_fill_tests;
 mod character_ops;
 pub(crate) mod compatibility_diagnostics;
 mod dispatch;

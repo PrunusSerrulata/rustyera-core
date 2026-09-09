@@ -1,6 +1,11 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 impl ProgramGeneration {
+    #[cfg(test)]
+    pub(crate) fn disable_bulk_fill_for_test(&mut self) {
+        self.bulk_fill_loop_plans.clear();
+    }
+
     pub(crate) fn runtime_variable(
         &self,
         key: SymbolKey,
@@ -170,6 +175,7 @@ impl ProgramGeneration {
                             function_index,
                             instruction,
                             &variable_global_indices,
+                            &reference_variable_keys,
                         )
                         .zip(u32::try_from(instruction).ok())
                         .map(|(plan, index)| (index, plan))
