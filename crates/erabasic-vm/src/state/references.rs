@@ -597,10 +597,8 @@ impl Vm {
             .locals
             .get(&definition.key)
             .ok_or_else(|| invalid("REF local storage is missing"))?;
-        match cell.first() {
-            Some(VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound))
-                if bound.backing.is_some() =>
-            {
+        match cell.first_place() {
+            Some(bound) if bound.backing.is_some() => {
                 self.array_backing_record(fiber, &bound)?;
                 Ok(())
             }

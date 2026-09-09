@@ -2,6 +2,85 @@ use erabasic_bytecode::{BytecodePersistence, BytecodeStorage};
 
 use super::*;
 
+#[test]
+fn first_place_matches_value_inspection_for_dense_and_sparse_storage() {
+    for value_type in [
+        BytecodeType::Integer,
+        BytecodeType::String,
+        BytecodeType::IntegerPlace,
+        BytecodeType::StringPlace,
+    ] {
+        for length in [0, 1, 256] {
+            for sparse in [false, true] {
+                let values = if sparse {
+                    VariableValues::with_lazy_default(value_type, length)
+                } else {
+                    VariableValues::with_default(value_type, length)
+                };
+                let mut cell = VariableCell {
+                    value_type,
+                    dimensions: vec![u64::try_from(length).unwrap()],
+                    values,
+                    revision: 0,
+                };
+                for initialized in [false, true] {
+                    if initialized && length > 0 {
+                        let place = PlaceDescriptor {
+                            variable: SymbolKey::derive("memory.binding", b"target"),
+                            indices: vec![7, 11],
+                            character: Some(3),
+                            ..PlaceDescriptor::default()
+                        };
+                        let value = match value_type {
+                            BytecodeType::Integer => VmValue::Integer(17),
+                            BytecodeType::String => VmValue::String("retained text".repeat(100)),
+                            BytecodeType::IntegerPlace => VmValue::IntegerPlace(Box::new(place)),
+                            BytecodeType::StringPlace => VmValue::StringPlace(Box::new(place)),
+                        };
+                        cell.set(0, value).unwrap();
+                    }
+                    let expected = match cell.first() {
+                        Some(VmValue::IntegerPlace(place) | VmValue::StringPlace(place)) => {
+                            Some(*place)
+                        }
+                        _ => None,
+                    };
+                    let before = serde_json::to_vec(&cell).unwrap();
+                    let revision = cell.revision();
+                    assert_eq!(cell.first_place().map(Cow::into_owned), expected);
+                    assert_eq!(serde_json::to_vec(&cell).unwrap(), before);
+                    assert_eq!(cell.revision(), revision);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn first_place_borrows_stored_bindings_and_preserves_sparse_default() {
+    for value_type in [BytecodeType::IntegerPlace, BytecodeType::StringPlace] {
+        for length in [1, 256] {
+            let mut cell = VariableCell::new(&global(value_type, vec![length]));
+            let initial = cell.first_place().unwrap();
+            assert_eq!(initial.as_ref(), &PlaceDescriptor::default());
+            assert_eq!(matches!(initial, Cow::Borrowed(_)), length == 1);
+            let place = PlaceDescriptor {
+                indices: vec![5, 9],
+                ..PlaceDescriptor::default()
+            };
+            let value = if value_type == BytecodeType::IntegerPlace {
+                VmValue::IntegerPlace(Box::new(place.clone()))
+            } else {
+                VmValue::StringPlace(Box::new(place.clone()))
+            };
+            cell.set(0, value).unwrap();
+            let borrowed = cell.first_place().unwrap();
+            assert!(matches!(borrowed, Cow::Borrowed(_)));
+            assert_eq!(borrowed.as_ref(), &place);
+        }
+    }
+}
+
 fn global(value_type: BytecodeType, dimensions: Vec<u64>) -> BytecodeGlobal {
     BytecodeGlobal {
         key: SymbolKey::derive("memory.test", format!("{value_type:?}").as_bytes()),

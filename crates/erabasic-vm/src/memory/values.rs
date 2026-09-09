@@ -138,6 +138,25 @@ impl VariableValues {
             .then(|| (start..end).filter_map(|index| self.get(index)).collect())
     }
 
+    pub(super) fn first_place(&self) -> Option<Cow<'_, PlaceDescriptor>> {
+        match self {
+            Self::IntegerPlaces(values) | Self::StringPlaces(values) => {
+                values.first().map(Cow::Borrowed)
+            }
+            Self::SparseIntegerPlaces { length, entries }
+            | Self::SparseStringPlaces { length, entries }
+                if *length > 0 =>
+            {
+                // Sparse default slots are still places, just as in `get(0)`.
+                Some(
+                    sparse_value(entries, 0)
+                        .map_or_else(|| Cow::Owned(PlaceDescriptor::default()), Cow::Borrowed),
+                )
+            }
+            _ => None,
+        }
+    }
+
     #[inline]
     pub(super) fn get(&self, index: usize) -> Option<VmValue> {
         match self {

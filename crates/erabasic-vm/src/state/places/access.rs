@@ -38,8 +38,8 @@ impl Vm {
                 .locals
                 .get(&definition.key)
                 .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?;
-            if let Some(VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound)) = cell.first() {
-                let mut target = *bound;
+            if let Some(bound) = cell.first_place() {
+                let mut target = bound.into_owned();
                 target.indices.extend_from_slice(&place.indices);
                 return self.read_place(fiber, &target);
             }
@@ -96,8 +96,8 @@ impl Vm {
                 .locals
                 .get(&definition.key)
                 .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?;
-            if let Some(VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound)) = cell.first() {
-                let mut target = *bound;
+            if let Some(bound) = cell.first_place() {
+                let mut target = bound.into_owned();
                 target.indices.extend_from_slice(indices);
                 return self.read_place(fiber, &target);
             }
@@ -154,11 +154,8 @@ impl Vm {
             let bound = find_frame(fiber, frame, definition.owner)?
                 .locals
                 .get(&definition.key)
-                .and_then(VariableCell::first)
-                .and_then(|value| match value {
-                    VmValue::IntegerPlace(place) | VmValue::StringPlace(place) => Some(*place),
-                    VmValue::Integer(_) | VmValue::String(_) => None,
-                });
+                .and_then(VariableCell::first_place)
+                .map(std::borrow::Cow::into_owned);
             if let Some(mut target) = bound {
                 target.indices.extend_from_slice(indices);
                 return self.write_place_internal(fiber, &target, value, false);
@@ -217,7 +214,7 @@ impl Vm {
                 .locals
                 .get(&definition.key)
                 .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?;
-            if let Some(VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound)) = cell.first() {
+            if let Some(bound) = cell.first_place() {
                 return self.read_place_array(fiber, &bound);
             }
             return Ok(cell.to_values());
@@ -257,7 +254,7 @@ impl Vm {
                 .locals
                 .get(&definition.key)
                 .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?;
-            if let Some(VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound)) = cell.first() {
+            if let Some(bound) = cell.first_place() {
                 return self.place_array_len(fiber, &bound);
             }
             return Ok(cell.len());
@@ -350,7 +347,7 @@ impl Vm {
                 .locals
                 .get(&definition.key)
                 .ok_or_else(|| VmError::InvalidState("local variable is unavailable".into()))?;
-            if let Some(VmValue::IntegerPlace(bound) | VmValue::StringPlace(bound)) = cell.first() {
+            if let Some(bound) = cell.first_place() {
                 return self.read_place_array_range_internal(
                     fiber,
                     &bound,

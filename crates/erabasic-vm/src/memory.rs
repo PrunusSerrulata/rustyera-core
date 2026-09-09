@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
 use std::mem::size_of;
@@ -226,6 +227,11 @@ impl VariableCell {
     #[inline]
     pub(crate) fn first(&self) -> Option<VmValue> {
         self.values.get(0)
+    }
+
+    /// Inspect a local binding without cloning ordinary strings or boxing places.
+    pub(crate) fn first_place(&self) -> Option<Cow<'_, PlaceDescriptor>> {
+        self.values.first_place()
     }
 
     #[inline]
