@@ -442,15 +442,13 @@ pub(super) fn substring_legacy_bytes(
     length: Option<i64>,
     encoding: LegacyEncoding,
 ) -> String {
-    let total = encoding.encoded_len(value);
     let start = usize::try_from(start.max(0)).unwrap_or(usize::MAX);
-    if start >= total || length == Some(0) {
+    if length == Some(0) {
         return String::new();
     }
     let requested = length
         .and_then(|length| usize::try_from(length).ok())
-        .filter(|length| *length <= total)
-        .unwrap_or(total);
+        .unwrap_or(usize::MAX);
 
     let byte_start = legacy_index_to_utf8_boundary(value, start, encoding);
     let mut consumed: usize = 0;
@@ -484,10 +482,22 @@ pub(super) fn strfind_legacy_bytes(
     start: i64,
     encoding: LegacyEncoding,
 ) -> i64 {
-    let total = encoding.encoded_len(haystack);
+    // The common prefix search needs no conversion of the unsearched suffix.
+    // In particular, an unsuccessful search must not encode the whole string.
+    if start == 0 {
+        return if haystack.is_empty() {
+            -1
+        } else {
+            haystack
+                .find(needle)
+                .and_then(|offset| i64::try_from(encoding.encoded_len(&haystack[..offset])).ok())
+                .unwrap_or(-1)
+        };
+    }
     let Ok(start) = usize::try_from(start) else {
         return -1;
     };
+    let total = encoding.encoded_len(haystack);
     if start >= total {
         return -1;
     }

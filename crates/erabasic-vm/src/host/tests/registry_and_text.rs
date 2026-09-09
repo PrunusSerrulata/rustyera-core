@@ -215,6 +215,78 @@ fn non_u_strfind_returns_offsets_accepted_by_non_u_substring() {
 }
 
 #[test]
+fn legacy_text_shortcuts_preserve_boundaries_and_empty_results() {
+    fn boundary(value: &str, index: usize, encoding: LegacyEncoding) -> usize {
+        if index == 0 {
+            return 0;
+        }
+        let mut consumed = 0;
+        value
+            .char_indices()
+            .find_map(|(offset, character)| {
+                consumed += encoding.encoded_char_len(character);
+                (consumed >= index).then_some(offset + character.len_utf8())
+            })
+            .unwrap_or(value.len())
+    }
+
+    for encoding in [
+        LegacyEncoding::Japanese,
+        LegacyEncoding::Korean,
+        LegacyEncoding::ChineseHans,
+        LegacyEncoding::ChineseHant,
+    ] {
+        for value in ["", "abc", "界", "A界B", "😀界ｱé", "TYPE:道具"] {
+            let total = encoding.encoded_len(value);
+            for start in [-1, 0, 1, 2, 3, 4, 5, 6, 9, i64::MAX] {
+                let index = usize::try_from(start.max(0)).unwrap_or(usize::MAX);
+                let byte_start = boundary(value, index, encoding);
+                for length in [
+                    None,
+                    Some(-1),
+                    Some(0),
+                    Some(1),
+                    Some(2),
+                    Some(5),
+                    Some(i64::MAX),
+                ] {
+                    let expected = if index >= total || length == Some(0) {
+                        String::new()
+                    } else {
+                        let requested = length
+                            .and_then(|n| usize::try_from(n).ok())
+                            .filter(|n| *n <= total)
+                            .unwrap_or(total);
+                        let end = boundary(&value[byte_start..], requested, encoding);
+                        value[byte_start..byte_start + end].to_owned()
+                    };
+                    assert_eq!(
+                        substring_legacy_bytes(value, start, length, encoding),
+                        expected,
+                        "substring {encoding:?} {value:?} {start} {length:?}"
+                    );
+                }
+                for needle in ["", "a", "界", "B", "missing", "TYPE:", "😀"] {
+                    let expected = if start < 0 || index >= total {
+                        -1
+                    } else {
+                        value[byte_start..].find(needle).map_or(-1, |offset| {
+                            i64::try_from(encoding.encoded_len(&value[..byte_start + offset]))
+                                .unwrap()
+                        })
+                    };
+                    assert_eq!(
+                        strfind_legacy_bytes(value, needle, start, encoding),
+                        expected,
+                        "find {encoding:?} {value:?} {needle:?} {start}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn context_free_strform_requires_the_vm_for_runtime_expansion() {
     assert_eq!(
         evaluate_pure_native("STRFORM", vec![VmValue::String("plain text".into())]),
