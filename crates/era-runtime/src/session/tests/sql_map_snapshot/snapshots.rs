@@ -337,6 +337,10 @@ fn exact_restore_failure_keeps_the_active_sql_state_and_cleans_the_candidate() {
         fixture.messages.extend(drain(&mut fixture.session));
 
         let (alpha_request, alpha_payload) = fixture.take_sql_request();
+        assert_eq!(
+            fixture.session.sql_provider_lifecycle(),
+            (old_provider, Some(alpha_payload.provider))
+        );
         let SqlOperationV1::Open {
             connection: alpha_connection,
             logical_name,
@@ -435,6 +439,10 @@ fn exact_restore_failure_keeps_the_active_sql_state_and_cleans_the_candidate() {
             SqlOperationV1::Disconnect { connection } if connection == alpha_connection
         ));
         assert!(fixture.session.pending_sql_snapshot_restore.is_none());
+        assert_eq!(
+            fixture.session.sql_provider_lifecycle(),
+            (old_provider, None)
+        );
     }
 }
 
@@ -663,6 +671,10 @@ fn exact_restore_swaps_only_after_the_provider_reopens_the_recorded_revision() {
     assert_eq!(active.handle, candidate_connection);
     assert_eq!(active.durable_revision.as_ref(), Some(&revision(4)));
     assert_ne!(active.handle, old_connection);
+    assert_eq!(
+        fixture.session.sql_provider_lifecycle(),
+        (payload.provider, None)
+    );
     assert_eq!(fixture.session.phase(), RuntimePhase::WaitingInput);
     let (_, cleanup) = fixture.take_sql_request();
     assert_eq!(cleanup.provider, old_provider);

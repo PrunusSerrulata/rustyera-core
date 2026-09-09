@@ -124,6 +124,9 @@ struct SqlOpening {
 #[derive(Clone, Debug)]
 pub(crate) struct SqlRuntimeState {
     service_epoch: u64,
+    // Detached restore candidates share this allocator with live state. A failed candidate must
+    // not let a later restore reuse handles that a host has already retired.
+    epoch_allocator: std::sync::Arc<std::sync::atomic::AtomicU64>,
     next_connection_id: u64,
     next_reader_id: i64,
     connections: BTreeMap<String, SqlConnection>,
@@ -138,6 +141,7 @@ impl Default for SqlRuntimeState {
     fn default() -> Self {
         Self {
             service_epoch: 1,
+            epoch_allocator: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
             next_connection_id: 1,
             next_reader_id: 1,
             connections: BTreeMap::new(),
@@ -377,9 +381,14 @@ impl SqlRuntimeState {
     /// Invalidate every provider handle at a project/session ownership boundary.
     pub(crate) fn reset_for_project_boundary(&mut self) {
         self.service_epoch = self
-            .service_epoch
-            .checked_add(1)
-            .expect("SQL service epoch exhausted");
+            .epoch_allocator
+            .fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |epoch| epoch.checked_add(1),
+            )
+            .expect("SQL service epoch exhausted")
+            + 1;
         self.next_connection_id = 1;
         self.next_reader_id = 1;
         self.connections.clear();
@@ -611,6 +620,25 @@ mod tests {
         assert!(state.reader(1).is_none());
         assert!(state.reader(2).is_none());
         assert_eq!(state.reader(3).unwrap().row[0].integer, Some(33));
+    }
+
+    #[test]
+    fn discarded_candidate_epochs_are_never_reused_by_live_state_or_later_candidates() {
+        let mut live = SqlRuntimeState::default();
+        let original = live.provider();
+        let mut failed = live.clone();
+        failed.reset_for_project_boundary();
+        let retired = failed.provider();
+        drop(failed);
+        assert_eq!(live.provider(), original);
+        let mut next = live.clone();
+        next.reset_for_project_boundary();
+        assert!(next.provider().service_epoch > retired.service_epoch);
+        assert_eq!(live.provider(), original);
+        live.reset_for_project_boundary();
+        assert!(live.provider().service_epoch > next.provider().service_epoch);
+        next.reset_for_project_boundary();
+        assert!(next.provider().service_epoch > live.provider().service_epoch);
     }
 
     #[test]

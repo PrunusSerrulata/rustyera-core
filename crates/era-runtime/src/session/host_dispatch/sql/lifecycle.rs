@@ -4,6 +4,28 @@
 use super::super::super::*;
 
 impl RuntimeSession {
+    /// Return the authoritative live and detached-candidate SQL provider ownership.
+    /// Native hosts use this after driving to retire or promote providers without inferring
+    /// lifecycle from request order. Queued cleanup for retired providers remains idempotent.
+    #[must_use]
+    pub fn sql_provider_lifecycle(
+        &self,
+    ) -> (
+        era_runtime_protocol::SqlProviderHandleV1,
+        Option<era_runtime_protocol::SqlProviderHandleV1>,
+    ) {
+        let candidate = self
+            .pending_sql_snapshot_restore
+            .as_ref()
+            .map(|pending| pending.candidate_sql.provider())
+            .or_else(|| {
+                self.ready_sql_snapshot_restore
+                    .as_ref()
+                    .map(|ready| ready.candidate_sql.provider())
+            });
+        (self.sql.provider(), candidate)
+    }
+
     pub(in crate::session) fn negotiated_sql_version(&self) -> ProtocolVersion {
         self.service_capabilities
             .get(&(ServiceKind::Sql, SQL_OPERATION.into()))
