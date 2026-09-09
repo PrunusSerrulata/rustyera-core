@@ -101,6 +101,7 @@ impl Vm {
                     Err(error) => {
                         let fallback = fiber.frames.last().map_or(
                             InstructionPosition {
+                                resolved_program: None,
                                 generation: self.current_generation,
                                 function: SymbolKey::default(),
                                 instruction: 0,
@@ -109,6 +110,7 @@ impl Vm {
                                 encoded: DispatchInstruction::trap(),
                             },
                             |frame| InstructionPosition {
+                                resolved_program: None,
                                 generation: frame.generation,
                                 function: frame.function,
                                 instruction: frame.instruction,
@@ -385,6 +387,7 @@ impl Vm {
                         let position = self
                             .instruction_position(&fiber, &mut function_cursor)
                             .unwrap_or(InstructionPosition {
+                                resolved_program: None,
                                 generation: self.current_generation,
                                 function: SymbolKey::default(),
                                 instruction: 0,
@@ -417,6 +420,7 @@ impl Vm {
             )) {
                 let frame = fiber.frames.last();
                 let position = InstructionPosition {
+                    resolved_program: None,
                     generation: frame.map_or(self.current_generation, |frame| frame.generation),
                     function: frame.map_or(SymbolKey::default(), |frame| frame.function),
                     instruction: frame.map_or(0, |frame| frame.instruction),

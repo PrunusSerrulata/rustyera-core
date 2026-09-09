@@ -384,6 +384,15 @@ impl ProgramGeneration {
         target: usize,
     ) -> Option<std::borrow::Cow<'_, StructuredJumpTransition>> {
         let index = *self.function_index(function)?;
+        self.structured_jump_transition_at_index(index, source, target)
+    }
+
+    pub(crate) fn structured_jump_transition_at_index(
+        &self,
+        index: usize,
+        source: usize,
+        target: usize,
+    ) -> Option<std::borrow::Cow<'_, StructuredJumpTransition>> {
         if let Some(plan) = self
             .static_structured_jumps
             .get(index)
@@ -996,6 +1005,36 @@ mod compact_generation_index_tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn indexed_jump_transition_keeps_cached_and_uncached_scope_semantics() {
+        let program = ProgramGeneration::new(Arc::new(compiled_generation_fixture()));
+        let mut uncached = program.clone();
+        uncached.static_structured_jumps.clear();
+        for generation in [&program, &uncached] {
+            for (index, function) in generation.artifact.functions.iter().enumerate() {
+                for source in 0..function.code.len() {
+                    for target in 0..=function.code.len() {
+                        assert_eq!(
+                            *generation
+                                .structured_jump_transition_at_index(index, source, target)
+                                .unwrap(),
+                            scope_transitions::transition(
+                                &generation.structured_scope_ranges[index],
+                                source,
+                                target
+                            ),
+                        );
+                    }
+                }
+            }
+            assert!(
+                generation
+                    .structured_jump_transition_at_index(usize::MAX, 0, 0)
+                    .is_none()
+            );
         }
     }
 

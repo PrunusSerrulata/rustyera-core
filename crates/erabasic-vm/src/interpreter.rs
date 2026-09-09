@@ -94,6 +94,7 @@ struct ExecutionPolicy {
 type StepError = crate::ExecutionFailure;
 
 struct InstructionPosition<'a> {
+    resolved_program: Option<(&'a ProgramGeneration, usize)>,
     generation: crate::GenerationId,
     function: SymbolKey,
     instruction: usize,

@@ -149,6 +149,7 @@ impl RuntimeFormContinuation {
             .and_then(|function| function.code.get(self.instruction))
             .ok_or_else(|| invalid("input form root instruction missing"))?;
         let position = crate::interpreter::InstructionPosition {
+            resolved_program: None,
             generation: self.generation,
             function: self.function,
             instruction: self.instruction,

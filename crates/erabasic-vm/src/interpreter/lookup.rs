@@ -66,6 +66,7 @@ impl Vm {
         // The cursor owns the generation Arc, so this payload borrow is independent
         // of `self` and remains valid across mutable VM dispatch for this instruction.
         Ok(InstructionPosition {
+            resolved_program: Some((&cursor.program, cursor.index)),
             generation,
             function: function_key,
             instruction,

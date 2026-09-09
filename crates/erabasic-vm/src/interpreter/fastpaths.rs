@@ -8,17 +8,20 @@ impl Vm {
         position: &InstructionPosition<'_>,
         target: usize,
     ) -> bool {
-        let Some(transition) = self
-            .generations
-            .get(&position.generation)
-            .and_then(|generation| {
-                generation.structured_jump_transition(
-                    position.function,
-                    position.instruction,
-                    target,
-                )
-            })
-        else {
+        let transition = if let Some((program, index)) = position.resolved_program {
+            program.structured_jump_transition_at_index(index, position.instruction, target)
+        } else {
+            self.generations
+                .get(&position.generation)
+                .and_then(|generation| {
+                    generation.structured_jump_transition(
+                        position.function,
+                        position.instruction,
+                        target,
+                    )
+                })
+        };
+        let Some(transition) = transition else {
             return false;
         };
         let frame = fiber.frames.last_mut().expect("frame exists");
