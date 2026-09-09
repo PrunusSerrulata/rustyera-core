@@ -335,7 +335,7 @@ fn decode_user_consumer(
         || pending.call.generation != position.generation
         || pending.call.mode != spec.mode
         || pending.captured.len() != slot.min(pending.call.bindings.len())
-        || caller.stack.get(token) != Some(&VmValue::String(target.name.clone()))
+        || !matches!(caller.stack.get(token), Some(VmValue::String(name)) if name == &target.name)
     {
         return Err(invalid(
             "user token, generation, origin or slot progress differs",
