@@ -68,7 +68,7 @@ impl RuntimeSession {
         self.controller.flow = Some(SystemFlow::Title);
         let result = if self
             .controller
-            .prepare_function(vm.vm().artifact(), "SYSTEM_TITLE")
+            .prepare_function(vm.vm().function_key_by_name("SYSTEM_TITLE"))
         {
             self.spawn_next_event(&mut vm)?;
             self.vm = Some(vm);

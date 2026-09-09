@@ -119,9 +119,14 @@ impl ProgramGeneration {
             preparation.advance();
         }
         let mut global_name_indices = HashMap::new();
+        let mut first_global_name_indices = HashMap::new();
         for (index, global) in artifact.globals.iter().enumerate() {
             if global.owner.is_none() {
-                global_name_indices.insert(global.name.to_ascii_uppercase(), index);
+                let name = global.name.to_ascii_uppercase();
+                first_global_name_indices
+                    .entry(name.clone())
+                    .or_insert(index);
+                global_name_indices.insert(name, index);
             }
             preparation.advance();
         }
@@ -318,6 +323,7 @@ impl ProgramGeneration {
             memoized_indexed_read_plans,
             path_memo_result_read_plans,
             global_name_indices,
+            first_global_name_indices,
             runtime_name_fallback_indices,
             target_global_index,
             native_import_indices,
@@ -467,13 +473,13 @@ impl ProgramGeneration {
     ) -> Option<&erabasic_bytecode::BytecodeGlobal> {
         self.function_locals(function)
             .chain(self.function_statics(function))
-            .chain(
-                self.artifact
-                    .globals
-                    .iter()
-                    .filter(|global| global.owner.is_none()),
-            )
             .find(|global| global.name.eq_ignore_ascii_case(name))
+            .or_else(|| {
+                // Scoped resolution uses the first ownerless declaration, unlike the
+                // last-wins runtime global lookup and its unrelated-scope fallback.
+                case_insensitive_index(&self.first_global_name_indices, name)
+                    .and_then(|index| self.artifact.globals.get(*index))
+            })
     }
 
     pub(crate) fn target_global(&self) -> Option<&erabasic_bytecode::BytecodeGlobal> {
@@ -643,6 +649,113 @@ mod compact_generation_index_tests {
         );
         assert!(compile.artifact.is_some(), "{:#?}", compile.diagnostics);
         compile.artifact.expect("compiled artifact")
+    }
+
+    #[test]
+    fn indexed_scoped_lookup_matches_ordered_scan_across_generations() {
+        let mut artifact = compiled_generation_fixture();
+        let mut duplicate = artifact
+            .globals
+            .iter()
+            .find(|global| global.owner.is_none())
+            .expect("root global")
+            .clone();
+        duplicate.key = SymbolKey([0xf1; 16]);
+        artifact.globals.push(duplicate);
+        let generation = ProgramGeneration::new(Arc::new(artifact));
+        for program in [&generation, &generation.clone()] {
+            for function in &program.artifact.functions {
+                for name in program
+                    .artifact
+                    .globals
+                    .iter()
+                    .map(|global| global.name.to_ascii_lowercase())
+                    .chain(["missing_variable_xyz".into()])
+                {
+                    let expected = program
+                        .function_locals(function.key)
+                        .chain(program.function_statics(function.key))
+                        .chain(
+                            program
+                                .artifact
+                                .globals
+                                .iter()
+                                .filter(|global| global.owner.is_none()),
+                        )
+                        .find(|global| global.name.eq_ignore_ascii_case(&name))
+                        .map(|global| global.key);
+                    assert_eq!(
+                        program
+                            .scoped_variable(function.key, &name)
+                            .map(|global| global.key),
+                        expected,
+                        "{}:{name}",
+                        function.name
+                    );
+                }
+            }
+        }
+        let mut next = (*generation.artifact).clone();
+        for global in &mut next.globals {
+            if global.owner.is_none() {
+                global.name = format!("RENAMED_{}", global.name);
+            }
+        }
+        let next = ProgramGeneration::new(Arc::new(next));
+        let missing_function = SymbolKey([0xf2; 16]);
+        for global in generation
+            .artifact
+            .globals
+            .iter()
+            .filter(|global| global.owner.is_none())
+        {
+            assert!(
+                generation
+                    .scoped_variable(missing_function, &global.name)
+                    .is_some()
+            );
+            assert!(
+                next.scoped_variable(missing_function, &global.name)
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn indexed_function_names_keep_first_match_and_generation_identity() {
+        let mut artifact = compiled_generation_fixture();
+        let first = artifact.functions[0].clone();
+        let mut duplicate = first.clone();
+        duplicate.key = SymbolKey([0xf3; 16]);
+        duplicate.name = first.name.to_ascii_lowercase();
+        artifact.functions.push(duplicate);
+        let generation = ProgramGeneration::new(Arc::new(artifact));
+        assert_eq!(
+            generation
+                .function_by_name(&first.name.to_ascii_lowercase())
+                .map(|function| function.key),
+            Some(first.key)
+        );
+        assert!(
+            generation
+                .function_by_name("missing_function_xyz")
+                .is_none()
+        );
+        let mut next = (*generation.artifact).clone();
+        next.functions[0].name = "RENAMED_FIRST_FUNCTION".into();
+        let next = ProgramGeneration::new(Arc::new(next));
+        assert_eq!(
+            next.function_by_name(&first.name)
+                .map(|function| function.key),
+            Some(SymbolKey([0xf3; 16]))
+        );
+        assert_eq!(
+            generation
+                .clone()
+                .function_by_name(&first.name)
+                .map(|function| function.key),
+            Some(first.key)
+        );
     }
 
     #[test]

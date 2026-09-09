@@ -52,7 +52,7 @@ impl RuntimeSession {
                     .ok_or_else(|| RuntimeError::Internal("system wait has no VM".into()))?;
                 if self
                     .controller
-                    .prepare_function(vm.vm().artifact(), "TITLE_LOADGAME")
+                    .prepare_function(vm.vm().function_key_by_name("TITLE_LOADGAME"))
                 {
                     self.controller.flow = Some(SystemFlow::Title);
                     self.controller.step = SystemStep::TitleLoadOverride;

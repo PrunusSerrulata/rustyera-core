@@ -490,14 +490,7 @@ pub(super) fn array_copy_place(
             // project can contain many same-named dynamic locals, so the generation-wide
             // name index can otherwise select a caller's or unrelated function's array.
             let definition = program
-                .function_locals(frame.function)
-                .chain(program.function_statics(frame.function))
-                .find(|definition| definition.name.eq_ignore_ascii_case(name))
-                .or_else(|| {
-                    program.artifact.globals.iter().find(|definition| {
-                        definition.owner.is_none() && definition.name.eq_ignore_ascii_case(name)
-                    })
-                })
+                .scoped_variable(frame.function, name)
                 .ok_or_else(|| {
                     script_native_error(
                         crate::ScriptFaultKind::Resolve,

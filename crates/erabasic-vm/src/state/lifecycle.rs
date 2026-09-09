@@ -226,6 +226,15 @@ impl Vm {
             .artifact
     }
 
+    /// Resolve the first ASCII-case-insensitive function name in the current generation.
+    #[must_use]
+    pub fn function_key_by_name(&self, name: &str) -> Option<SymbolKey> {
+        self.generations
+            .get(&self.current_generation)?
+            .function_by_name(name)
+            .map(|function| function.key)
+    }
+
     pub(crate) fn set_runtime_calculated_string(&mut self, name: &str, value: &str) {
         let program = self
             .generations

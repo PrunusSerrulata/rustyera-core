@@ -75,6 +75,7 @@ pub(crate) struct ProgramGeneration {
     path_memo_result_read_plans: Vec<Vec<PathMemoResultReadPlan>>,
     // Canonical owner-free definitions always win system-name lookup.
     global_name_indices: HashMap<String, usize>,
+    first_global_name_indices: HashMap<String, usize>,
     // Runtime inspection historically exposes otherwise unique function variables.
     runtime_name_fallback_indices: HashMap<String, usize>,
     target_global_index: Option<usize>,

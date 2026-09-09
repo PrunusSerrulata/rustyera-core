@@ -127,17 +127,13 @@ impl SystemController {
         !self.pending.is_empty()
     }
 
-    pub(crate) fn prepare_function(&mut self, artifact: &BytecodeArtifact, name: &str) -> bool {
+    pub(crate) fn prepare_function(&mut self, function: Option<SymbolKey>) -> bool {
         self.clear();
-        let Some(function) = artifact
-            .functions
-            .iter()
-            .find(|function| function.name.eq_ignore_ascii_case(name))
-        else {
+        let Some(function) = function else {
             return false;
         };
         self.pending.push_back(DispatchEntry {
-            function: function.key,
+            function,
             single: false,
             group: u8::MAX,
         });
@@ -235,6 +231,23 @@ mod tests {
 
     fn key(value: u8) -> SymbolKey {
         SymbolKey([value; 16])
+    }
+
+    #[test]
+    fn indexed_function_dispatch_clears_old_work_and_missing_entry() {
+        let mut controller = SystemController::default();
+        assert!(controller.prepare_function(Some(key(1))));
+        assert!(controller.prepare_function(Some(key(2))));
+        assert_eq!(controller.next(), Some(key(2)));
+        controller.started(FiberId(7));
+        assert!(!controller.prepare_function(None));
+        assert!(controller.is_complete());
+        assert_eq!(controller.next(), None);
+        assert!(controller.prepare_function(Some(key(3))));
+        assert_eq!(controller.next(), Some(key(3)));
+        controller.started(FiberId(8));
+        assert!(controller.completed(FiberId(8), Some(&VmValue::Integer(1))));
+        assert!(controller.is_complete());
     }
 
     #[test]

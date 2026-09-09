@@ -197,7 +197,10 @@ impl RuntimeSession {
             if self.controller.prepare_event(vm.vm().artifact(), entry) {
                 return self.spawn_next_event(vm);
             }
-        } else if self.controller.prepare_function(vm.vm().artifact(), entry) {
+        } else if self
+            .controller
+            .prepare_function(vm.vm().function_key_by_name(entry))
+        {
             return self.spawn_next_event(vm);
         }
         if required {
@@ -219,7 +222,10 @@ impl RuntimeSession {
         name: &str,
         required: bool,
     ) -> Result<bool, RuntimeError> {
-        if self.controller.prepare_function(vm.vm().artifact(), name) {
+        if self
+            .controller
+            .prepare_function(vm.vm().function_key_by_name(name))
+        {
             self.spawn_next_event(vm)?;
             return Ok(true);
         }
