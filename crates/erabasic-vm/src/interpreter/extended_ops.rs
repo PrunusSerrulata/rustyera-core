@@ -11,6 +11,9 @@ use super::native_ops::{
     optional_integer_argument, script_native_error, validate_array_storage_values,
 };
 
+#[cfg(test)]
+mod array_copy_tests;
+
 pub(super) fn execute_regex_match(
     vm: &mut Vm,
     fiber: &mut Fiber,
@@ -237,8 +240,25 @@ fn copy_shared_array_extent(
     // Emuera accepts arrays of the same rank even when individual lengths differ. Each
     // dimension is truncated independently, while destination cells outside the shared
     // rectangular extent retain their previous values.
+    let physical_length = |dimensions: &[u64]| {
+        dimensions.iter().try_fold(1usize, |length, dimension| {
+            let dimension = usize::try_from(*dimension).ok().filter(|size| *size > 0)?;
+            length.checked_mul(dimension)
+        })
+    };
+    if (source_dimensions == destination_dimensions
+        || (source_dimensions.len() == 1 && destination_dimensions.len() == 1))
+        && physical_length(source_dimensions) == Some(source.len())
+        && physical_length(destination_dimensions) == Some(destination.len())
+    {
+        let length = source.len().min(destination.len());
+        destination[..length].clone_from_slice(&source[..length]);
+        return Ok(());
+    }
+    // Preserve the general rectangular/error path while allocating its scratch space once.
+    let mut coordinates = vec![0; destination_dimensions.len()];
     for (destination_offset, destination_value) in destination.iter_mut().enumerate() {
-        let coordinates = array_coordinates(destination_dimensions, destination_offset)?;
+        array_coordinates(destination_dimensions, destination_offset, &mut coordinates)?;
         if coordinates
             .iter()
             .zip(source_dimensions)
@@ -255,8 +275,11 @@ fn copy_shared_array_extent(
     Ok(())
 }
 
-fn array_coordinates(dimensions: &[u64], mut offset: usize) -> Result<Vec<u64>, VmError> {
-    let mut coordinates = vec![0; dimensions.len()];
+fn array_coordinates(
+    dimensions: &[u64],
+    mut offset: usize,
+    coordinates: &mut [u64],
+) -> Result<(), VmError> {
     for dimension in (0..dimensions.len()).rev() {
         let length = usize::try_from(dimensions[dimension]).map_err(|_| {
             VmError::InvalidState("ARRAYCOPY dimension exceeds this platform".into())
@@ -269,7 +292,7 @@ fn array_coordinates(dimensions: &[u64], mut offset: usize) -> Result<Vec<u64>, 
         coordinates[dimension] = u64::try_from(offset % length).unwrap_or(u64::MAX);
         offset /= length;
     }
-    Ok(coordinates)
+    Ok(())
 }
 
 fn array_offset(dimensions: &[u64], coordinates: &[u64]) -> Result<usize, VmError> {
