@@ -59,8 +59,7 @@ fn path_memo_dependencies_match(
                     };
                     memory
                         .cell(place.generation, definition, place.character)
-                        .and_then(|cell| cell.read(&place.indices).ok())
-                        .is_some_and(|observed| observed.eq(value))
+                        .is_some_and(|cell| cell.matches_value(&place.indices, value))
                 }
                 PathMemoDependency::CellRevision {
                     generation,

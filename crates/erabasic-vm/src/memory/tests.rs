@@ -3,6 +3,91 @@ use erabasic_bytecode::{BytecodePersistence, BytecodeStorage};
 use super::*;
 
 #[test]
+fn borrowed_value_comparison_matches_owned_reads_without_mutation() {
+    let place = PlaceDescriptor {
+        indices: vec![2, 7],
+        character: Some(3),
+        ..PlaceDescriptor::default()
+    };
+    let candidates = [
+        VmValue::Integer(0),
+        VmValue::Integer(17),
+        VmValue::String(String::new()),
+        VmValue::String("玄関🙂".repeat(512)),
+        VmValue::IntegerPlace(Box::default()),
+        VmValue::IntegerPlace(Box::new(place.clone())),
+        VmValue::StringPlace(Box::default()),
+        VmValue::StringPlace(Box::new(place)),
+    ];
+    for value_type in [
+        BytecodeType::Integer,
+        BytecodeType::String,
+        BytecodeType::IntegerPlace,
+        BytecodeType::StringPlace,
+    ] {
+        for length in [0, 1, 256] {
+            for sparse in [false, true] {
+                let mut cell = VariableCell {
+                    value_type,
+                    dimensions: vec![u64::try_from(length).unwrap()],
+                    values: if sparse {
+                        VariableValues::with_lazy_default(value_type, length)
+                    } else {
+                        VariableValues::with_default(value_type, length)
+                    },
+                    revision: 0,
+                };
+                for populated in [false, true] {
+                    if populated && length > 0 {
+                        let value = candidates
+                            .iter()
+                            .rfind(|value| value.value_type() == value_type)
+                            .unwrap();
+                        cell.set(0, value.clone()).unwrap();
+                    }
+                    let before = cell.clone();
+                    for indices in [
+                        vec![],
+                        vec![0],
+                        vec![1],
+                        vec![255],
+                        vec![256],
+                        vec![u64::MAX],
+                        vec![0, 0],
+                    ] {
+                        for candidate in &candidates {
+                            assert_eq!(
+                                cell.matches_value(&indices, candidate),
+                                cell.read(&indices).is_ok_and(|value| value == *candidate)
+                            );
+                        }
+                    }
+                    assert_eq!(cell, before);
+                    assert_eq!(cell.revision(), before.revision());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn borrowed_value_comparison_rejects_invalid_shape_and_missing_storage() {
+    let mut cell = VariableCell::new(&global(BytecodeType::String, vec![2, 3]));
+    cell.write(&[1, 2], VmValue::String("stored".into()))
+        .unwrap();
+    for indices in [vec![1, 2], vec![0, 2], vec![2, 0], vec![1], vec![1, 2, 0]] {
+        let expected = VmValue::String("stored".into());
+        assert_eq!(
+            cell.matches_value(&indices, &expected),
+            cell.read(&indices).is_ok_and(|value| value == expected)
+        );
+    }
+    cell.values = VariableValues::Strings(Vec::new());
+    assert!(!cell.matches_value(&[0, 0], &VmValue::String(String::new())));
+    assert!(cell.read(&[0, 0]).is_err());
+}
+
+#[test]
 fn first_place_matches_value_inspection_for_dense_and_sparse_storage() {
     for value_type in [
         BytecodeType::Integer,

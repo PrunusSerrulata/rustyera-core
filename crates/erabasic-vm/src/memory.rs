@@ -178,6 +178,11 @@ impl VariableCell {
         self.read_execution(indices).map_err(|error| error.message)
     }
 
+    pub(crate) fn matches_value(&self, indices: &[u64], expected: &VmValue) -> bool {
+        flatten_execution(&self.dimensions, indices)
+            .is_ok_and(|offset| self.values.matches_value(offset, expected))
+    }
+
     /// Script indices are classified at the indexing operation; a mismatch between
     /// the declared shape and physical storage is still an internal failure.
     #[inline]

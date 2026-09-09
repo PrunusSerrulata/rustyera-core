@@ -13,6 +13,60 @@ use erabasic_validator::{ValidationContext, validate_bytecode};
 struct RejectHost;
 
 #[test]
+fn borrowed_dependency_comparison_tracks_string_changes_and_missing_identity() {
+    let (mut vm, artifact) = compile_vm("@SYSTEM_TITLE\nRETURN\n");
+    let variable = artifact
+        .globals
+        .iter()
+        .find(|global| global.name == "RESULTS")
+        .unwrap()
+        .key;
+    let value = VmValue::String("玄関🙂".repeat(1024));
+    vm.write_variable(variable, &[2], None, value.clone())
+        .unwrap();
+    let mut entry = cached_entry(0);
+    Arc::make_mut(&mut entry)
+        .dependencies
+        .push(PathMemoDependency::Value {
+            place: PathMemoPlace {
+                generation: vm.current_generation,
+                variable,
+                character: 0,
+                indices: vec![2],
+            },
+            value,
+        });
+    assert!(path_memo_dependencies_match(
+        &vm.generations,
+        &vm.memory,
+        &entry
+    ));
+    vm.write_variable(variable, &[2], None, VmValue::String("changed".into()))
+        .unwrap();
+    assert!(!path_memo_dependencies_match(
+        &vm.generations,
+        &vm.memory,
+        &entry
+    ));
+    Arc::make_mut(&mut entry).result_dependency = Some(0);
+    assert!(path_memo_dependencies_match(
+        &vm.generations,
+        &vm.memory,
+        &entry
+    ));
+    Arc::make_mut(&mut entry).result_dependency = None;
+    if let PathMemoDependency::Value { place, .. } = &mut Arc::make_mut(&mut entry).dependencies[0]
+    {
+        place.generation = GenerationId(u64::MAX);
+    }
+    assert!(!path_memo_dependencies_match(
+        &vm.generations,
+        &vm.memory,
+        &entry
+    ));
+}
+
+#[test]
 fn repeated_path_memo_reads_preserve_dependency_identity_and_retained_storage() {
     let (mut vm, artifact) = compile_vm("@READ\n#FUNCTION\nRETURNF FLAG:2\n");
     let function = artifact

@@ -191,6 +191,32 @@ impl VariableValues {
         }
     }
 
+    /// Compare in storage without allocating an owned string or place for a read-only probe.
+    pub(super) fn matches_value(&self, index: usize, expected: &VmValue) -> bool {
+        match (self, expected) {
+            (Self::Integers(values), VmValue::Integer(value)) => values.get(index) == Some(value),
+            (Self::Strings(values), VmValue::String(value)) => values.get(index) == Some(value),
+            (Self::IntegerPlaces(values), VmValue::IntegerPlace(value))
+            | (Self::StringPlaces(values), VmValue::StringPlace(value)) => {
+                values.get(index) == Some(value.as_ref())
+            }
+            (Self::SparseIntegers { length, entries }, VmValue::Integer(value)) => {
+                index < *length
+                    && sparse_value(entries, index).copied().unwrap_or_default() == *value
+            }
+            (Self::SparseStrings { length, entries }, VmValue::String(value)) => {
+                index < *length && sparse_value(entries, index).map_or("", String::as_str) == value
+            }
+            (Self::SparseIntegerPlaces { length, entries }, VmValue::IntegerPlace(value))
+            | (Self::SparseStringPlaces { length, entries }, VmValue::StringPlace(value)) => {
+                index < *length
+                    && sparse_value(entries, index).unwrap_or(&PlaceDescriptor::default())
+                        == value.as_ref()
+            }
+            _ => false,
+        }
+    }
+
     #[inline]
     pub(super) fn set(&mut self, index: usize, value: VmValue) -> Result<(), String> {
         if value.value_type() != self.value_type() {
