@@ -155,6 +155,20 @@ pub(super) fn protocol_storage(storage: BytecodeStorage) -> VariableStorage {
     }
 }
 
+pub(super) fn protocol_variable_descriptor(definition: &BytecodeGlobal) -> VariableDescriptor {
+    VariableDescriptor {
+        symbol_key: ProtocolBytes::new(definition.key.0),
+        name: definition.name.clone(),
+        storage: protocol_storage(definition.storage),
+        value_kind: match definition.value_type {
+            BytecodeType::Integer | BytecodeType::IntegerPlace => ValueKind::Integer,
+            BytecodeType::String | BytecodeType::StringPlace => ValueKind::String,
+        },
+        dimensions: definition.dimensions.clone(),
+        mutable: definition.mutable,
+    }
+}
+
 pub(super) fn game_field_descriptors() -> Vec<GameFieldDescriptor> {
     vec![
         GameFieldDescriptor {

@@ -17,7 +17,7 @@ mod error;
 pub use command::DebugCommand;
 pub use error::{DebugError, DebugErrorCode};
 
-pub const DEBUG_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(4, 0);
+pub const DEBUG_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(4, 1);
 
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 #[cbor(map)]

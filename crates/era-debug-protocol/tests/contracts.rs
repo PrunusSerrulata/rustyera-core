@@ -48,6 +48,35 @@ fn stateful_debug_commands_carry_a_stop_token() {
 #[test]
 fn debug_protocol_has_an_independent_version() {
     assert_eq!(DEBUG_PROTOCOL_VERSION.major, 4);
+    assert_eq!(DEBUG_PROTOCOL_VERSION.minor, 1);
+}
+
+#[test]
+fn variable_descriptions_can_be_requested_by_exact_name() {
+    let stop = StopToken {
+        session_epoch: 3,
+        pause_epoch: 7,
+        program_generation: 2,
+        runtime_revision: 19,
+    };
+    let command = DebugCommand::DescribeVariables {
+        stop,
+        names: vec!["DAY".into(), "TIME".into()],
+    };
+    let message = DebugMessage::Request(AuthorizedDebugRequest {
+        grant: GrantToken {
+            grant_id: SessionId { high: 1, low: 2 },
+            session_epoch: 3,
+            program_generation: 2,
+            issued_runtime_revision: 18,
+        },
+        command,
+    });
+    let bytes = message.encode_payload().expect("encode describe request");
+    assert_eq!(
+        DebugMessage::decode_payload(message.tag(), &bytes),
+        Ok(message)
+    );
 }
 
 #[test]

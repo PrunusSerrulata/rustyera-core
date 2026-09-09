@@ -31,6 +31,13 @@ pub enum DebugCommand {
         #[n(2)]
         limit: u32,
     },
+    #[n(13)]
+    DescribeVariables {
+        #[n(0)]
+        stop: StopToken,
+        #[n(1)]
+        names: Vec<String>,
+    },
     #[n(11)]
     ReadVariable {
         #[n(0)]

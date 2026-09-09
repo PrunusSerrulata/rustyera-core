@@ -11,7 +11,7 @@ use era_debug_protocol::{
 };
 use era_protocol::{ProtocolBytes, SessionId, VersionRange, encode_envelope, negotiate_version};
 use erabasic_ast::{BinaryOp, Expr, ExprKind, UnaryOp};
-use erabasic_bytecode::{BytecodeStorage, Digest, SymbolKey};
+use erabasic_bytecode::{BytecodeGlobal, BytecodeStorage, BytecodeType, Digest, SymbolKey};
 use erabasic_parser::{DefaultParserContext, ParserContext, parse_expression};
 use erabasic_vm::{
     FiberId, FiberStatus, FrameId, GenerationId, PlaceDescriptor, VmBreakpoint,

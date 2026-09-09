@@ -12,6 +12,7 @@ use console::{
 };
 use protocol::{
     game_field_descriptors, protocol_breakpoint, protocol_fiber, protocol_frame, protocol_source,
-    protocol_storage, protocol_value, protocol_value_in_generation, protocol_variable_value,
-    usize_cursor, vm_breakpoint, vm_step_kind, vm_value, vm_variable_reference,
+    protocol_value, protocol_value_in_generation, protocol_variable_descriptor,
+    protocol_variable_value, usize_cursor, vm_breakpoint, vm_step_kind, vm_value,
+    vm_variable_reference,
 };

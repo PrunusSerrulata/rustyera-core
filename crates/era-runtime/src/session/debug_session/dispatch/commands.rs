@@ -213,6 +213,37 @@ impl RuntimeSession {
                     Some(message_id),
                 )
             }
+            DebugCommand::DescribeVariables { stop, names } => {
+                self.validate_stop(stop, message_id)?;
+                if names.len() > 256 {
+                    return self.emit_debug_error(
+                        DebugErrorCode::ResourceLimit,
+                        "variable descriptor name list exceeds its limit",
+                        Some(message_id),
+                    );
+                }
+                let names = names
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<std::collections::HashSet<_>>();
+                let variables = self
+                    .debug_vm(message_id)?
+                    .vm()
+                    .artifact()
+                    .globals
+                    .iter()
+                    .filter(|definition| names.contains(definition.name.as_str()))
+                    .map(protocol_variable_descriptor)
+                    .collect();
+                self.emit_debug(
+                    DebugMessage::Response(DebugResponse::VariablePage(VariablePage {
+                        stop,
+                        variables,
+                        next_cursor: None,
+                    })),
+                    Some(message_id),
+                )
+            }
             DebugCommand::ReadVariable { stop, value } => {
                 let vm_stop = self.validate_stop(stop, message_id)?;
                 let reference = match vm_variable_reference(&value) {

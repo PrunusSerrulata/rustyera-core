@@ -223,6 +223,31 @@ fn postmortem_result_reference(
 }
 
 #[test]
+fn debug_describes_only_requested_variable_names() {
+    let (mut session, grant) = faulted_debug_session("GCREATE(752, 0, 1)");
+    let stop = postmortem_pause(&mut session, grant);
+    let messages = postmortem_request(
+        &mut session,
+        grant,
+        DebugCommand::DescribeVariables {
+            stop,
+            names: vec!["RESULT".into(), "MISSING".into()],
+        },
+    );
+    let [DebugMessage::Response(DebugResponse::VariablePage(page))] = messages.as_slice() else {
+        panic!("expected variable descriptions: {messages:?}");
+    };
+    assert_eq!(page.next_cursor, None);
+    assert_eq!(
+        page.variables
+            .iter()
+            .map(|variable| variable.name.as_str())
+            .collect::<Vec<_>>(),
+        ["RESULT"]
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn postmortem_debug_reads_the_fault_site_and_continue_keeps_it_faulted() {
     let (mut session, grant) = faulted_debug_session("GCREATE(752, 0, 1)");

@@ -1,6 +1,6 @@
 # Runtime 调试接口
 
-> 面向前端开发人员和 EraBasic 脚本开发人员。本文描述 Debug 协议 `4.0` 在当前
+> 面向前端开发人员和 EraBasic 脚本开发人员。本文描述 Debug 协议 `4.1` 在当前
 > `era-runtime`/`erabasic-vm` 中的实际实现。公共信封为 `2.0`，C ABI 为 `3.8`。
 > 主要源码：
 > [`era-debug-protocol`](../crates/era-debug-protocol/src/lib.rs)、
@@ -14,7 +14,7 @@
 `session_submit/session_drive/session_poll` 传输，不存在第二套 native debugger API。
 协议对象只描述请求、停止视图和类型化结果，本身不能直接检查 VM。
 
-Debug 4.0 是公开且版本化的开发期接口，当前默认不保证向后兼容。数字 message/command/
+Debug 4.1 是公开且版本化的开发期接口，当前默认不保证向后兼容。数字 message/command/
 response 标记是线 ID，不能复用；主版本不兼容，次版本新增必须可忽略或经协商。
 Runtime–VM 调试 port 属于内部接口，可随二者同一发布实体同步修改。
 
@@ -59,7 +59,7 @@ C/Rust 创建时传入 64 位 mask：
 
 | bit / `DebugScope` | 用途 | 所需命令 |
 | --- | --- | --- |
-| 0 `VariablesRead` | 列表、读取 EraBasic 变量 | ListVariables、ReadVariable |
+| 0 `VariablesRead` | 列表、按名称描述、读取 EraBasic 变量 | ListVariables、DescribeVariables、ReadVariable |
 | 1 `VariablesWrite` | 原子写 EraBasic 变量 | WriteVariables |
 | 2 `GameFieldsRead` | 列表、读取 runtime 游戏字段 | ListGameFields、ReadGameField |
 | 3 `GameFieldsWrite` | 写允许的 runtime 字段 | WriteGameFields |
@@ -108,7 +108,7 @@ DebugMessage::Grant(DebugGrant {
 epoch 或 program generation 变化时，runtime 会主动发一个无 `correlation_id` 的新 Grant，
 scope 不变，旧 token 立即失效。
 
-版本区间与 4.0 无交集时没有专用 VersionRejected，而是关联 Hello 返回
+版本区间与 4.1 无交集时没有专用 VersionRejected，而是关联 Hello 返回
 `DebugError(InvalidState)`；session 仍可运行，前端应关闭不兼容的调试 UI。
 
 前端撤销：
@@ -128,7 +128,7 @@ grant/stop，并继续 pump 可能出现的 Runtime `StateChanged`。
 ## 4. 信封、消息方向和时序
 
 Debug 复用 [Runtime–前端接口第 4 节](runtime-frontend-interface.zh-CN.md#4-公共-cbor-信封)
-的确定性 CBOR 规则。信封必须 `channel=1`、`channel_version={4,0}`，payload tag 与内部
+的确定性 CBOR 规则。信封必须 `channel=1`、`channel_version={4,1}`，payload tag 与内部
 enum tag 相同。
 
 | tag | 方向 | 数据 | 关联规则 |
@@ -236,6 +236,12 @@ Instruction、SourceLine、Into、Over、Out。成功先返回 Accepted、phase 
 所以当前 wire 结果会把上述角色/局部/保留 generation 的多项压成无法区分的重复
 descriptor。前端只能按当前 generation、角色 0 等约定构造有限目标，或复用其他响应/
 operand `DebugPlace` 已给出的目标；不能声称已能从列表可靠遍历所有实例。见第 13 节。
+
+`DescribeVariables {stop,names[]}` 对当前 program generation 的不可变符号表执行精确、
+区分大小写的名称匹配，一次返回全部匹配 descriptor，`next_cursor` 恒为空。请求最多包含
+256 个名称；不存在的名称不产生条目，同名定义全部返回，由前端判定是否歧义。该命令不读取
+变量值，也不按现存角色展开 Character 变量，适合 watch、性能 checkpoint 等已知名称读取；
+取得 descriptor 后仍须使用 `ReadVariable` 读取当前 stop 下的实际值。
 
 `VariableReference` 字段为 `symbol_key, storage, fiber_id?, frame_id?, generation,
 character?, indices[]`。当前目标转换使用 symbol/fiber/frame/generation/character/indices，
@@ -475,26 +481,22 @@ client.request_debug(variant(1, stop), grant)            # Continue
 
 ## 13. 待确认
 
-1. 版本协商失败文本位于
-   [`debug_session.rs`](../crates/era-runtime/src/session/debug_session.rs)，当前写
-   “debug protocol 3.0 is required”，实际常量是 4.0。客户端应依 `DebugGrant.version`/
-   协议常量判断，不能解析该文本。
-2. C 头只定义 scope bit 0–8 的命名常量，但 `ERA_DEBUG_SCOPE_ALL` 和实际协议还包含
+1. C 头只定义 scope bit 0–8 的命名常量，但 `ERA_DEBUG_SCOPE_ALL` 和实际协议还包含
    bit 9 `ScriptOutput`。需补常量或明确由绑定自行定义。
-3. `FiberState::DebugPaused` 已在线协议定义，但当前 `protocol_fiber` 没有产生该值。
+2. `FiberState::DebugPaused` 已在线协议定义，但当前 `protocol_fiber` 没有产生该值。
    需确认它是未来 per-fiber 暂停状态还是应删除。
-4. `DebugMessage::Revoke` 是双向 enum，但 runtime 当前只接受前端 Revoke，不主动发送；
+3. `DebugMessage::Revoke` 是双向 enum，但 runtime 当前只接受前端 Revoke，不主动发送；
    权限更新使用新的 Grant。需确认是否应定义 runtime 主动撤销的时序。
-5. breakpoint 上限在 remove 前检查，且更新请求没有 hit-count 输入，替换会归零。需确认
+4. breakpoint 上限在 remove 前检查，且更新请求没有 hit-count 输入，替换会归零。需确认
    这两点是否为期望的公开语义。
-6. `ConsoleOutcome.output` 和 `changed_game_fields` 当前总为空；已定义字段不能理解为已经
+5. `ConsoleOutcome.output` 和 `changed_game_fields` 当前总为空；已定义字段不能理解为已经
    支持控制台输出捕获或游戏字段赋值。
-7. `DebugErrorCode::UnsafeConsoleStatement` 当前没有由 runtime 顶层分发产生；控制台安全
+6. `DebugErrorCode::UnsafeConsoleStatement` 当前没有由 runtime 顶层分发产生；控制台安全
    拒绝主要作为 `ConsoleOutcome.diagnostics`。需确认错误分层。
-8. `VariableReference.storage` 当前不参与 VM 引用转换；而变量读/写响应只根据
+7. `VariableReference.storage` 当前不参与 VM 引用转换；而变量读/写响应只根据
    fiber/character 判断 storage，因此 FunctionStatic 结果会投影为 Global，即使 descriptor
    曾报告 FunctionStatic。需确认该字段应参与校验，还是修正响应投影。
-9. `ListVariables` 的 VM 内部页包含完整 `VmDebugVariableRef`，公共
+8. `ListVariables` 的 VM 内部页包含完整 `VmDebugVariableRef`，公共
    `VariableDescriptor` 却丢弃 generation/character/fiber/frame/indices。角色、局部和
    多 generation 条目因而无法由前端唯一引用；需给 descriptor 增加 reference/实例字段，
    或改变列举模型。

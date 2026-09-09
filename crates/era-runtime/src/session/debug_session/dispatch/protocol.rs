@@ -54,9 +54,13 @@ impl RuntimeSession {
     fn debug_hello(&mut self, message_id: u64, hello: &DebugHello) -> Result<(), RuntimeError> {
         let supported = VersionRange::exact(DEBUG_PROTOCOL_VERSION);
         if negotiate_version(hello.versions, supported).is_none() {
+            let message = format!(
+                "debug protocol {}.{} is required",
+                DEBUG_PROTOCOL_VERSION.major, DEBUG_PROTOCOL_VERSION.minor
+            );
             return self.emit_debug_error(
                 DebugErrorCode::InvalidState,
-                "debug protocol 4.0 is required",
+                &message,
                 Some(message_id),
             );
         }

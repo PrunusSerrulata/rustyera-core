@@ -222,14 +222,15 @@ impl RuntimeSession {
                 .iter()
                 .find(|item| item.key == value.target.target.variable)
         });
+        if let Some(definition) = definition {
+            return protocol_variable_descriptor(definition);
+        }
         VariableDescriptor {
             symbol_key: ProtocolBytes::new(value.target.target.variable.0),
             name: value.name.clone(),
-            storage: definition.map_or(VariableStorage::Global, |item| {
-                protocol_storage(item.storage)
-            }),
+            storage: VariableStorage::Global,
             value_kind: protocol_value(value.value.clone()).kind(),
-            dimensions: definition.map_or_else(Vec::new, |item| item.dimensions.clone()),
+            dimensions: Vec::new(),
             mutable: value.mutable,
         }
     }

@@ -411,9 +411,9 @@ pub(super) fn command_scope(command: &DebugCommand) -> DebugScope {
         DebugCommand::Pause | DebugCommand::Continue { .. } | DebugCommand::Step { .. } => {
             DebugScope::ExecutionControl
         }
-        DebugCommand::ListVariables { .. } | DebugCommand::ReadVariable { .. } => {
-            DebugScope::VariablesRead
-        }
+        DebugCommand::ListVariables { .. }
+        | DebugCommand::DescribeVariables { .. }
+        | DebugCommand::ReadVariable { .. } => DebugScope::VariablesRead,
         DebugCommand::WriteVariables { .. } => DebugScope::VariablesWrite,
         DebugCommand::ListGameFields { .. } | DebugCommand::ReadGameField { .. } => {
             DebugScope::GameFieldsRead
