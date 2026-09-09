@@ -16,6 +16,53 @@ const CUTS_PER_REQUEST: usize = 256;
 const PREFIX_WORK_PER_REQUEST: usize = 500_000;
 const MAXIMUM_ADVANCE: i64 = 1_048_576_000;
 
+pub(super) const MAXIMUM_BATCH_PROBES: usize = 16;
+
+/// Only small, complete text parts share a provider lease. The conservative per-part
+/// bounds keep aggregate nodes, text, cuts, prefix work and wire bytes below v2 limits.
+/// Slots and large/chunked parts retain the existing single-probe path.
+pub(super) fn can_batch(probe: &HtmlLengthProbe) -> bool {
+    fn count(nodes: &[erabasic_html::HtmlNode], total: &mut usize, text: &mut usize) -> bool {
+        for node in nodes {
+            *total += 1;
+            if *total > 128 {
+                return false;
+            }
+            match node {
+                erabasic_html::HtmlNode::Text { text: value, .. } => {
+                    *text += value.encode_utf16().count();
+                    if *text > 512 {
+                        return false;
+                    }
+                }
+                erabasic_html::HtmlNode::Element { children, .. } => {
+                    if !count(children, total, text) {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+    let HtmlLengthProbeKind::TextPart {
+        text_node_path,
+        cuts,
+    } = &probe.kind
+    else {
+        return false;
+    };
+    if cuts.is_empty()
+        || cuts.len() > 32
+        || text_node_path.len() > 64
+        || cuts.iter().any(|cut| cut.decoded_utf16 > 512)
+    {
+        return false;
+    }
+    count(&probe.document.nodes, &mut 0, &mut 0)
+        && era_protocol::encode_canonical(&probe.document)
+            .is_ok_and(|bytes| bytes.len() <= 16 * 1024)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(super) struct ProbeTransfer {
     probe: HtmlLengthProbe,
@@ -114,11 +161,18 @@ impl ProbeTransfer {
         &self,
         response: &HtmlMeasureResponseV2,
     ) -> Result<(), HtmlQueryError> {
+        if response.probes.len() != 1 {
+            return Err(invalid("probe identifiers do not match the request"));
+        }
+        self.validate_probe_identity(response.probes[0].id)
+    }
+
+    pub(super) fn validate_probe_identity(&self, id: u32) -> Result<(), HtmlQueryError> {
         let expected = self
             .expected
             .as_ref()
             .ok_or_else(|| invalid("unsolicited probe response"))?;
-        if response.probes.len() != 1 || response.probes[0].id != expected.id {
+        if id != expected.id {
             return Err(invalid("probe identifiers do not match the request"));
         }
         Ok(())

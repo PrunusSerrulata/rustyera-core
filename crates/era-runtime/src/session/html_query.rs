@@ -56,6 +56,10 @@ pub(crate) struct HtmlQueryContinuation {
     transfer: Option<ProbeTransfer>,
     next_probe: u32,
     line_ticket: Option<String>,
+    // Runtime snapshots use positional MessagePack. Append optional state so old
+    // continuations retain their field positions, including debug/diagnosis exports.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    batch_transfers: Vec<ProbeTransfer>,
 }
 
 enum Advance {
@@ -63,15 +67,59 @@ enum Advance {
     Complete(PlanPoll),
 }
 
+enum ResponseFailure {
+    Backend(era_runtime_protocol::ServiceError),
+    Measurement(HtmlQueryError),
+}
+
 impl HtmlQueryContinuation {
+    fn receive_batch(
+        &mut self,
+        response: HtmlMeasureResponseV2,
+        bytes: usize,
+    ) -> Result<(), ResponseFailure> {
+        // Identity is checked before entry. Keep the original first backend error
+        // priority, then consume measurements/errors strictly in request order.
+        if let era_runtime_protocol::HtmlProbeResultV2::Error { error } = &response.probes[0].result
+        {
+            return Err(ResponseFailure::Backend(error.clone()));
+        }
+        self.budget
+            .charge(bytes, 0)
+            .map_err(ResponseFailure::Measurement)?;
+        let mut remaining = std::mem::take(&mut self.batch_transfers).into_iter();
+        for probe in response.probes {
+            if let era_runtime_protocol::HtmlProbeResultV2::Error { error } = probe.result {
+                return Err(ResponseFailure::Backend(error));
+            }
+            self.receive(HtmlMeasureResponseV2 {
+                context: response.context,
+                probes: vec![probe],
+            })
+            .map_err(ResponseFailure::Measurement)?;
+            if let Some(transfer) = remaining.next() {
+                if self.transfer.is_some() {
+                    return Err(ResponseFailure::Measurement(failure(
+                        HtmlQueryErrorKind::InvalidMeasurement,
+                        "batched text probe did not complete",
+                    )));
+                }
+                self.transfer = Some(transfer);
+            }
+        }
+        Ok(())
+    }
+
     fn advance(&mut self) -> Result<Advance, HtmlQueryError> {
         if self.transfer.is_none() {
             match self
                 .plan
                 .poll(query_settings(&self.style)?, &mut self.budget)?
             {
-                PlanPoll::Measure(probe) => {
-                    self.transfer = Some(ProbeTransfer::new(probe));
+                PlanPoll::Measure(probes) => {
+                    let mut probes = probes.into_iter();
+                    self.transfer = probes.next().map(ProbeTransfer::new);
+                    self.batch_transfers = probes.map(ProbeTransfer::new).collect();
                 }
                 complete => return Ok(Advance::Complete(complete)),
             }
@@ -88,10 +136,38 @@ impl HtmlQueryContinuation {
             .expect("initialized transfer")
             .request(next, &mut self.budget)?;
         self.next_probe = next;
+        let mut probes = vec![probe];
+        let candidates = std::mem::take(&mut self.batch_transfers);
+        for mut transfer in candidates {
+            let Some(id) = self.next_probe.checked_add(1) else {
+                break;
+            };
+            let mut candidate_budget = self.budget;
+            let Ok(probe) = transfer.request(id, &mut candidate_budget) else {
+                break;
+            };
+            let mut candidate_probes = probes.clone();
+            candidate_probes.push(probe);
+            let request = HtmlMeasureRequestV2 {
+                context: self.context,
+                style: self.style.clone(),
+                probes: candidate_probes,
+            };
+            // Reserve complete wire cost without charging it twice. Rejected candidates
+            // remain pending in the plan and consume neither identifiers nor budget.
+            let mut reserved_budget = candidate_budget;
+            if encode_html_request(&request, &mut reserved_budget).is_err() {
+                break;
+            }
+            self.budget = candidate_budget;
+            self.next_probe = id;
+            probes = request.probes;
+            self.batch_transfers.push(transfer);
+        }
         Ok(Advance::Request(HtmlMeasureRequestV2 {
             context: self.context,
             style: self.style.clone(),
-            probes: vec![probe],
+            probes,
         }))
     }
 
@@ -105,6 +181,20 @@ impl HtmlQueryContinuation {
         if let Some(measurement) = transfer.resume(response)? {
             self.plan.resume(measurement)?;
             self.transfer = None;
+        }
+        Ok(())
+    }
+
+    fn validate_responses(&self, response: &HtmlMeasureResponseV2) -> Result<(), HtmlQueryError> {
+        if self.transfer.is_none() || response.probes.len() != 1 + self.batch_transfers.len() {
+            return Err(failure(
+                HtmlQueryErrorKind::InvalidMeasurement,
+                "probe identifiers do not match the request",
+            ));
+        }
+        let transfers = self.transfer.iter().chain(&self.batch_transfers);
+        for (transfer, probe) in transfers.zip(&response.probes) {
+            transfer.validate_probe_identity(probe.id)?;
         }
         Ok(())
     }
@@ -315,6 +405,7 @@ impl RuntimeSession {
             plan,
             budget,
             transfer: None,
+            batch_transfers: Vec::new(),
             next_probe: 0,
             line_ticket,
         })))
@@ -406,28 +497,19 @@ impl RuntimeSession {
         if response.context != continuation.context {
             return self.html_query_stale(&continuation.origin);
         }
-        let identity = continuation
-            .transfer
-            .as_ref()
-            .ok_or_else(invalid_arguments)
-            .and_then(|transfer| transfer.validate_identity(&response));
+        let identity = continuation.validate_responses(&response);
         if let Err(error) = identity {
             return self.html_query_failure(&error, Some(continuation.origin.clone()));
         }
-        // Per-probe errors use the same classification as whole-service failures,
-        // but only after validating the exact requested probe identity.
-        if let era_runtime_protocol::HtmlProbeResultV2::Error { error } = &response.probes[0].result
-        {
-            return self.html_backend_failure(&error.code, &error.message, &continuation.origin);
-        }
-        let received = continuation
-            .budget
-            .charge(payload.as_slice().len(), 0)
-            .and_then(|()| continuation.receive(response));
-        if let Err(error) = received {
-            // The response side is a provider contract, even if future inner code
-            // accidentally propagates a source-looking error from a measurement.
-            return self.html_query_failure(&error, Some(continuation.origin.clone()));
+        if let Err(error) = continuation.receive_batch(response, payload.as_slice().len()) {
+            return match error {
+                ResponseFailure::Backend(error) => {
+                    self.html_backend_failure(&error.code, &error.message, &continuation.origin)
+                }
+                ResponseFailure::Measurement(error) => {
+                    self.html_query_failure(&error, Some(continuation.origin.clone()))
+                }
+            };
         }
         match continuation.advance() {
             Err(error) => self.complete_pending_html_failure(&continuation, &error),

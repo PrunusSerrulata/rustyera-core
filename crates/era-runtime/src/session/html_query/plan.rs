@@ -38,7 +38,7 @@ impl MeasuredLength {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum PlanPoll {
-    Measure(HtmlLengthProbe),
+    Measure(Vec<HtmlLengthProbe>),
     Integer(i64),
     Substring(HtmlSubstringResult),
 }
@@ -191,25 +191,35 @@ impl QueryPlan {
             length.account(budget)?;
             match polled? {
                 HtmlStringLengthPoll::NeedMeasurements { probe_ids } => {
-                    let id = probe_ids.first().ok_or_else(|| {
-                        failure(
+                    let mut selected = Vec::new();
+                    for id in probe_ids.iter().take(super::wire::MAXIMUM_BATCH_PROBES) {
+                        let probe = length
+                            .plan
+                            .probes()
+                            .iter()
+                            .find(|probe| probe.id == *id)
+                            .ok_or_else(|| {
+                                failure(
+                                    HtmlQueryErrorKind::InvalidMeasurement,
+                                    "length plan probe is missing",
+                                )
+                            })?;
+                        let small = super::wire::can_batch(probe);
+                        if !selected.is_empty() && !small {
+                            break;
+                        }
+                        selected.push(probe.clone());
+                        if !small {
+                            break;
+                        }
+                    }
+                    if selected.is_empty() {
+                        return Err(failure(
                             HtmlQueryErrorKind::InvalidMeasurement,
                             "length plan requested no probes",
-                        )
-                    })?;
-                    return length
-                        .plan
-                        .probes()
-                        .iter()
-                        .find(|probe| probe.id == *id)
-                        .cloned()
-                        .map(PlanPoll::Measure)
-                        .ok_or_else(|| {
-                            failure(
-                                HtmlQueryErrorKind::InvalidMeasurement,
-                                "length plan probe is missing",
-                            )
-                        });
+                        ));
+                    }
+                    return Ok(PlanPoll::Measure(selected));
                 }
                 HtmlStringLengthPoll::Complete(result) => match self {
                     Self::Length(_) => return Ok(PlanPoll::Integer(result.value)),

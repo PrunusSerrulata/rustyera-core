@@ -400,7 +400,7 @@ fn line_geometry_service_negotiates_only_the_pinned_v1_operation() {
 }
 
 #[test]
-fn sql_service_negotiates_only_the_pinned_v1_operation() {
+fn sql_service_negotiates_the_highest_supported_v1_minor() {
     let selected = crate::session::selected_service_capabilities(&[
         ServiceCapability {
             kind: ServiceKind::Sql,
@@ -419,6 +419,15 @@ fn sql_service_negotiates_only_the_pinned_v1_operation() {
     assert_eq!(
         selected[0].versions,
         VersionRange::exact(SQL_OPERATION_VERSION)
+    );
+    let selected = crate::session::selected_service_capabilities(&[ServiceCapability {
+        kind: ServiceKind::Sql,
+        operation: SQL_OPERATION.into(),
+        versions: SQL_OPERATION_VERSIONS,
+    }]);
+    assert_eq!(
+        selected[0].versions,
+        VersionRange::exact(era_runtime_protocol::SQL_READER_ROW_VERSION)
     );
     assert!(
         crate::session::selected_service_capabilities(&[ServiceCapability {

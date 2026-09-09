@@ -83,7 +83,14 @@ fn rejected_html_attribute_emits_identity_scoped_diagnostic_without_raw_markup()
         Some(&identity)
     );
     assert!(!diagnostic.message.contains("secret"));
-    assert!(session.presentation.snapshot().history.logical_lines.is_empty());
+    assert!(
+        session
+            .presentation
+            .snapshot()
+            .history
+            .logical_lines
+            .is_empty()
+    );
 }
 
 #[test]
@@ -144,7 +151,8 @@ fn original_profile_keeps_rejecting_snake_only_html_attributes() {
 
 #[test]
 fn original_profile_rejects_snake_html_query_before_provider_observes_it() {
-    let source = "@SYSTEM_TITLE\nRESULT = HTML_STRINGLEN(\"<font size='12'>x</font>\", 1)\nWAIT\nRETURN\n";
+    let source =
+        "@SYSTEM_TITLE\nRESULT = HTML_STRINGLEN(\"<font size='12'>x</font>\", 1)\nWAIT\nRETURN\n";
     let mut session = prepare_html_execution_with_profile(
         source,
         Some(ProtocolVersion::new(2, 0)),

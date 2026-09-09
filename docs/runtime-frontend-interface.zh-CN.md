@@ -1,7 +1,7 @@
 # Runtime–前端接口
 
 > 面向前端开发人员。本文描述当前源码，而不是规划中的能力。基线版本为
-> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `46.0`。源码入口：
+> C ABI `3.9`、公共信封 `2.0`、Runtime 协议 `47.0`。源码入口：
 > [`era_runtime.h`](../crates/era-runtime-ffi/include/era_runtime.h)、
 > [`era-runtime-capi`](../crates/era-runtime-capi/src/lib.rs)、
 > [`era-protocol`](../crates/era-protocol/src/lib.rs)、
@@ -16,12 +16,12 @@
 
 接口分为三层：
 
-| 层 | 当前稳定性 | 用途 |
-| --- | --- | --- |
-| C ABI 3.9 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权 |
-| 公共信封 2.0 | 公开、版本化 | Runtime 与 Debug 共用的确定性 CBOR 封装 |
-| Runtime 协议 46.0 | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输 |
-| `RuntimeSession` Rust API | 内部接口 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
+| 层                        | 当前稳定性                               | 用途                                        |
+| ------------------------- | ---------------------------------------- | ------------------------------------------- |
+| C ABI 3.9                 | 公开、版本化，但开发期默认不保证向后兼容 | 动态库发现、session 和字节缓冲区所有权      |
+| 公共信封 2.0              | 公开、版本化                             | Runtime 与 Debug 共用的确定性 CBOR 封装     |
+| Runtime 协议 47.0         | 公开、版本化，但开发期默认不保证向后兼容 | 生命周期、输入、展示、日志、I/O 和状态传输  |
+| `RuntimeSession` Rust API | 内部接口                                 | Rust 侧测试和嵌入；可随 runtime/VM 同步改变 |
 
 破坏性变更必须提升相应版本，并同步 Schema、C 头、文档与测试。数字消息标记已经是
 线标识，退役后也不得复用。主版本不兼容；次版本只能加入旧端可忽略的可选字段或经
@@ -93,18 +93,18 @@ get_api → create → ClientHello → ServerHello
 
 所有结构均为 C 布局；未写入的 `reserved` 必须置零。`EraCallHeader` 字段是
 `struct_size: uint32_t` 和 `abi_version: { major: uint16_t, minor: uint16_t }`。
-头文件同时公开 `ERA_RUNTIME_PROTOCOL_MAJOR=46`、`ERA_RUNTIME_PROTOCOL_MINOR=0`；协议升级
+头文件同时公开 `ERA_RUNTIME_PROTOCOL_MAJOR=47`、`ERA_RUNTIME_PROTOCOL_MINOR=0`；协议升级
 不改变 C 函数表形状，C 调用方仍通过 `session_submit/session_poll` 传输统一 CBOR 信封。
 
-| 类型 | 字段及含义 | 所有权/约束 |
-| --- | --- | --- |
-| `EraSessionHandle` | `value: uint64_t` | runtime 发放；零值不是有效 session |
-| `EraByteSlice` | `data: const uint8_t*`, `len: size_t` | 借用到调用返回；`len>0` 时指针必须非空 |
-| `EraOwnedBuffer` | `data: uint8_t*`, `len: size_t`, `token: uint64_t` | runtime 拥有；成功后必须整体原样传给 `release_buffer` |
-| `EraCreateOptions` | `header`; `debug_scope_mask: uint64_t`; `reserved[4]` | mask 是调试权限上限；未知位拒绝 |
-| `EraDriveOptions` | `header`; `maximum_vm_instructions: uint64_t`; `maximum_runtime_transitions: uint32_t`; `reserved` | 指令预算可为零；transition 预算 0 在当前实现中提升为 1 |
-| `EraDriveResult` | `header`; `state`; `vm_instructions`; `runtime_transitions`; `queued_envelopes` | runtime 填写；计数只对应本次 drive |
-| `EraRuntimeApi` | `struct_size`, `abi_version`, `implementation_name`, `implementation_context`, 七个函数指针, `reserved[8]` | 表和名称指针由动态库静态持有；库卸载后失效 |
+| 类型               | 字段及含义                                                                                                 | 所有权/约束                                            |
+| ------------------ | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `EraSessionHandle` | `value: uint64_t`                                                                                          | runtime 发放；零值不是有效 session                     |
+| `EraByteSlice`     | `data: const uint8_t*`, `len: size_t`                                                                      | 借用到调用返回；`len>0` 时指针必须非空                 |
+| `EraOwnedBuffer`   | `data: uint8_t*`, `len: size_t`, `token: uint64_t`                                                         | runtime 拥有；成功后必须整体原样传给 `release_buffer`  |
+| `EraCreateOptions` | `header`; `debug_scope_mask: uint64_t`; `reserved[4]`                                                      | mask 是调试权限上限；未知位拒绝                        |
+| `EraDriveOptions`  | `header`; `maximum_vm_instructions: uint64_t`; `maximum_runtime_transitions: uint32_t`; `reserved`         | 指令预算可为零；transition 预算 0 在当前实现中提升为 1 |
+| `EraDriveResult`   | `header`; `state`; `vm_instructions`; `runtime_transitions`; `queued_envelopes`                            | runtime 填写；计数只对应本次 drive                     |
+| `EraRuntimeApi`    | `struct_size`, `abi_version`, `implementation_name`, `implementation_context`, 七个函数指针, `reserved[8]` | 表和名称指针由动态库静态持有；库卸载后失效             |
 
 `EraDriveState`：`IDLE=0` 无立即工作；`MORE_WORK=1` 预算耗尽仍可推进；
 `OUTPUT_READY=2` 有待 poll 输出；`STOPPED=3` 正常终止；`FAULTED=4` 终止故障。
@@ -112,16 +112,16 @@ get_api → create → ClientHello → ServerHello
 
 `EraStatus`：
 
-| 值 | 语义 | 调用方处理 |
-| --- | --- | --- |
-| `OK=0` | 调用完成 | 继续 |
-| `EMPTY=1` | `poll` 当前无消息 | 停止本轮 drain |
-| `BUSY=2` | 暂时忙 | host 缓存暂存与另一个入站传输冲突时稍后重试 |
-| `INVALID_ARGUMENT=3` | 空指针、无效 header/mask、坏 CBOR 或 session 级协议提交错误 | 查 `last_error`，修正调用；不要盲重试 |
-| `ABI_MISMATCH=4` | ABI 主版本不同或结构太短 | 加载兼容动态库/绑定 |
-| `INVALID_HANDLE=5` | handle 不存在、已销毁或属于别的进程 | 丢弃本地 session 状态 |
-| `RESOURCE_LIMIT=6` | 资源限制 | host 缓存超过协商传输上限；协议内限制通常成为拒绝或故障 |
-| `INTERNAL_ERROR=7` | drive/runtime 内部错误 | 读 `last_error`，将 session 视为不可继续或重新创建 |
+| 值                   | 语义                                                        | 调用方处理                                              |
+| -------------------- | ----------------------------------------------------------- | ------------------------------------------------------- |
+| `OK=0`               | 调用完成                                                    | 继续                                                    |
+| `EMPTY=1`            | `poll` 当前无消息                                           | 停止本轮 drain                                          |
+| `BUSY=2`             | 暂时忙                                                      | host 缓存暂存与另一个入站传输冲突时稍后重试             |
+| `INVALID_ARGUMENT=3` | 空指针、无效 header/mask、坏 CBOR 或 session 级协议提交错误 | 查 `last_error`，修正调用；不要盲重试                   |
+| `ABI_MISMATCH=4`     | ABI 主版本不同或结构太短                                    | 加载兼容动态库/绑定                                     |
+| `INVALID_HANDLE=5`   | handle 不存在、已销毁或属于别的进程                         | 丢弃本地 session 状态                                   |
+| `RESOURCE_LIMIT=6`   | 资源限制                                                    | host 缓存超过协商传输上限；协议内限制通常成为拒绝或故障 |
+| `INTERNAL_ERROR=7`   | drive/runtime 内部错误                                      | 读 `last_error`，将 session 视为不可继续或重新创建      |
 
 ### 3.2 函数索引和契约
 
@@ -291,8 +291,12 @@ pub const fn RuntimeSession::random_seed(&self) -> Option<u64>
 按值复制；session 独占后续状态。
 
 `RuntimeDriveBudget {maximum_vm_instructions,maximum_runtime_transitions}` 默认
-100000/1024。`RuntimeDriveReport {state,vm_instructions,runtime_transitions,
-queued_envelopes}`；state 与 C `EraDriveState` 一一对应。
+100000/1024。`RuntimeDriveReport {state,immediate_work,vm_instructions,runtime_transitions,
+queued_envelopes,cooperative_background_work}`；state 与 C `EraDriveState` 一一对应。
+`immediate_work` 单独报告当前 actor 边界允许继续处理的入站消息、排队输入或可运行 VM
+工作，不把尚待调用方取走的输出当作计算工作。`OutputReady` 因而可以同时搭配 false：
+取走该批输出后无需立即空转；服务回复、新输入、定时推进和后台任务仍按各自机制唤醒。
+该提示描述本次 drive 结束时的状态，不涵盖调用方随后提交的新消息。
 
 同步 `RuntimeError` 是 `Protocol(ProtocolError)`、`InvalidSequence{expected,actual}`、
 `SessionMismatch`、`ResourceLimit(&'static str)` 或 `Internal(String)`。它和线上的
@@ -322,18 +326,18 @@ UTF-8 文本、最大嵌套 128；禁止浮点和 indefinite-length。JSON 只�
 
 `Envelope` 是数字键 map：
 
-| 键 | 字段 | 类型/可空性 | 语义 |
-| --- | --- | --- | --- |
-| 0 | `wire_version` | `{0:major,1:minor}` | 当前 2.0；主版本必须匹配 |
-| 1 | `channel_version` | 同上 | Runtime 24.0 或 Debug 4.0 |
-| 2 | `channel` | `0 Runtime` / `1 Debug` | 决定序号空间和 payload 解码器 |
-| 3 | `session` | 可空 `{0:high,1:low}` | 128 位 session 标识 |
-| 4 | `sequence` | `u64` | 同方向、同 channel 从 0 严格递增 |
-| 5 | `message_id` | 非零 `u64` | 跨 channel 共用的消息身份 |
-| 6 | `correlation_id` | 可空 `u64` | 响应关联请求的 `message_id`；通知为空 |
-| 7 | `payload_tag` | `u32` | 必须与 payload 内 enum 标记一致 |
-| 8 | `payload` | byte string | 再次 CBOR 编码的 `RuntimeMessage`/`DebugMessage` |
-| 9 | `session_epoch` | 可空 `u64` | 当前权威时间线 |
+| 键  | 字段              | 类型/可空性             | 语义                                             |
+| --- | ----------------- | ----------------------- | ------------------------------------------------ |
+| 0   | `wire_version`    | `{0:major,1:minor}`     | 当前 2.0；主版本必须匹配                         |
+| 1   | `channel_version` | 同上                    | Runtime 24.0 或 Debug 4.1                        |
+| 2   | `channel`         | `0 Runtime` / `1 Debug` | 决定序号空间和 payload 解码器                    |
+| 3   | `session`         | 可空 `{0:high,1:low}`   | 128 位 session 标识                              |
+| 4   | `sequence`        | `u64`                   | 同方向、同 channel 从 0 严格递增                 |
+| 5   | `message_id`      | 非零 `u64`              | 跨 channel 共用的消息身份                        |
+| 6   | `correlation_id`  | 可空 `u64`              | 响应关联请求的 `message_id`；通知为空            |
+| 7   | `payload_tag`     | `u32`                   | 必须与 payload 内 enum 标记一致                  |
+| 8   | `payload`         | byte string             | 再次 CBOR 编码的 `RuntimeMessage`/`DebugMessage` |
+| 9   | `session_epoch`   | 可空 `u64`              | 当前权威时间线                                   |
 
 首条 Runtime `ClientHello` 必须是 Runtime sequence 0 和第一条语义消息。前端应发送
 `session=None`、`epoch=None`；当前实现直到激活后才校验这两个字段，因此错误地带值的
@@ -360,14 +364,14 @@ epoch 时会清理两个 channel 的接受 ID，但仍不重置 sequence；VM sn
 
 `ClientHello` 字段：
 
-| 键 | 字段 | 类型、默认/合法值 |
-| --- | --- | --- |
-| 0 | `runtime_versions` | `{min,max}`，两端闭区间 |
-| 1 | `client_name` | UTF-8，不作为身份授权 |
-| 2 | `features` | `RuntimeFeature[]` 请求集合 |
-| 3 | `requested_limits` | 七个非负限制字段 |
-| 4 | `capabilities` | 下表；session 固定 |
-| 5 | `preferred_locales` | 有序 BCP-47；当前选择 `zh-Hans`、`en` 或默认 `ja` |
+| 键  | 字段                | 类型、默认/合法值                                 |
+| --- | ------------------- | ------------------------------------------------- |
+| 0   | `runtime_versions`  | `{min,max}`，两端闭区间                           |
+| 1   | `client_name`       | UTF-8，不作为身份授权                             |
+| 2   | `features`          | `RuntimeFeature[]` 请求集合                       |
+| 3   | `requested_limits`  | 七个非负限制字段                                  |
+| 4   | `capabilities`      | 下表；session 固定                                |
+| 5   | `preferred_locales` | 有序 BCP-47；当前选择 `zh-Hans`、`en` 或默认 `ja` |
 
 `RuntimeFeature` 数值为：0 project reload、1 traditional save、2 VM snapshot、3 timed
 input、4 rich text、5 HTML、6 graphics、7 audio、8 mouse、9 external services、10 state
@@ -408,39 +412,39 @@ message}`，不进入活动 session。
 payload 使用 minicbor enum 形式 `[tag, [value]]`；无值变体为 `[tag, []]`。以下方向
 是强约束，反向发送会得到 `CommandRejected(InvalidValue)`。
 
-| tag | 前端 → runtime | 主要结果/效果 |
-| --- | --- | --- |
-| 0 | `ClientHello` | 1 `ServerHello` 或 2 `VersionRejected` |
-| 10 | `ProjectManifest` | 11 `ProjectLoadReport`；兼容便捷入口 |
-| 12 | `ReloadProject` | 构建候选、热替换或报告失败 |
-| 13 | `ProjectAnalysisRequest` | 14 `ProjectAnalysisReport`；不替换活动项目 |
-| 15 | `KeyMacroProfileSubmit` | 17 `KeyMacroStateChanged` |
-| 16 | `KeyMacroCommand` | 17；必要时产生 storage 请求 |
-| 18 | `ExtensionRegistrySubmit` | 冻结动态调用声明 |
-| 19 | `ProjectLoad` | 可先命中 opaque 编译缓存，否则要求 manifest |
-| 20 | `Start` | 新游戏或已提交的 save/snapshot |
-| 23 | `ReturnToTitle` | 丢弃活动时间线但复用项目 |
-| 24 | `PrepareConfigurationUpdate` | 25 验证并序列化项目设置事务 |
-| 26 | `FinalizeConfigurationUpdate` | 27 提交或中止项目设置事务 |
-| 28 | `ApplyClientPreferences` | 29 `ClientPreferencesApplied`；只改变客户端展示画像 |
-| 30 | `Input` | 消费当前 wait/token |
-| 31 | `AdvanceTime` | 推进 deadline/countdown |
-| 33 | `DeviceStateChanged` | 按 epoch 内事件序号更新 runtime 设备状态 |
-| 34 | `ClientStateChanged` | 更新焦点/音频等前端状态 |
-| 35 | `ProjectionObservation` | 36 `ProjectionState` 或拒绝 |
-| 37 | `InputUndoRequest` | 38 `InputUndoStateChanged` |
-| 43 | `EffectAcknowledgement` | 完成已知 effect |
-| 51 | `StorageResponse` | 完成 tag 50 请求 |
-| 53 | `ServiceResponse` | 完成 tag 52 请求 |
-| 60 | `StateExportRequest` | 61 `StateExportReady` |
-| 62/64/65 | import begin/chunk/commit | 63 accepted、66 ready |
-| 67 | `StateExportChunkRequest` | 68 chunk |
-| 70 | `FullProjectManifest` | —；仅保留给进程内兼容入口，跨进程客户端使用 kind 5 状态导入 |
-| 71 | `StateExportCancel` | — |
-| 69 | `StateTransferCancel` | 取消指定传输 |
-| 90 | `ShutdownRequest` | 91 `ShutdownReady` |
-| 93 | `Acknowledge` | 累计释放 Runtime 输出 journal |
-| 94 | `Resynchronize` | 96 完整聚合状态，随后仍存续的 effects |
+| tag      | 前端 → runtime                | 主要结果/效果                                               |
+| -------- | ----------------------------- | ----------------------------------------------------------- |
+| 0        | `ClientHello`                 | 1 `ServerHello` 或 2 `VersionRejected`                      |
+| 10       | `ProjectManifest`             | 11 `ProjectLoadReport`；兼容便捷入口                        |
+| 12       | `ReloadProject`               | 构建候选、热替换或报告失败                                  |
+| 13       | `ProjectAnalysisRequest`      | 14 `ProjectAnalysisReport`；不替换活动项目                  |
+| 15       | `KeyMacroProfileSubmit`       | 17 `KeyMacroStateChanged`                                   |
+| 16       | `KeyMacroCommand`             | 17；必要时产生 storage 请求                                 |
+| 18       | `ExtensionRegistrySubmit`     | 冻结动态调用声明                                            |
+| 19       | `ProjectLoad`                 | 可先命中 opaque 编译缓存，否则要求 manifest                 |
+| 20       | `Start`                       | 新游戏或已提交的 save/snapshot                              |
+| 23       | `ReturnToTitle`               | 丢弃活动时间线但复用项目                                    |
+| 24       | `PrepareConfigurationUpdate`  | 25 验证并序列化项目设置事务                                 |
+| 26       | `FinalizeConfigurationUpdate` | 27 提交或中止项目设置事务                                   |
+| 28       | `ApplyClientPreferences`      | 29 `ClientPreferencesApplied`；只改变客户端展示画像         |
+| 30       | `Input`                       | 消费当前 wait/token                                         |
+| 31       | `AdvanceTime`                 | 推进 deadline/countdown                                     |
+| 33       | `DeviceStateChanged`          | 按 epoch 内事件序号更新 runtime 设备状态                    |
+| 34       | `ClientStateChanged`          | 更新焦点/音频等前端状态                                     |
+| 35       | `ProjectionObservation`       | 36 `ProjectionState` 或拒绝                                 |
+| 37       | `InputUndoRequest`            | 38 `InputUndoStateChanged`                                  |
+| 43       | `EffectAcknowledgement`       | 完成已知 effect                                             |
+| 51       | `StorageResponse`             | 完成 tag 50 请求                                            |
+| 53       | `ServiceResponse`             | 完成 tag 52 请求                                            |
+| 60       | `StateExportRequest`          | 61 `StateExportReady`                                       |
+| 62/64/65 | import begin/chunk/commit     | 63 accepted、66 ready                                       |
+| 67       | `StateExportChunkRequest`     | 68 chunk                                                    |
+| 70       | `FullProjectManifest`         | —；仅保留给进程内兼容入口，跨进程客户端使用 kind 5 状态导入 |
+| 71       | `StateExportCancel`           | —                                                           |
+| 69       | `StateTransferCancel`         | 取消指定传输                                                |
+| 90       | `ShutdownRequest`             | 91 `ShutdownReady`                                          |
+| 93       | `Acknowledge`                 | 累计释放 Runtime 输出 journal                               |
+| 94       | `Resynchronize`               | 96 完整聚合状态，随后仍存续的 effects                       |
 
 runtime → 前端还会主动发送：21 `StateChanged`、22 `ExitRequested`、29
 `ClientPreferencesApplied`、32 `WaitChanged`、
@@ -459,19 +463,19 @@ Warning、Error。前端可以筛选、着色和添加到达时间，但不得�
 
 ### 7.1 项目数据
 
-| 类型 | 字段（按 CBOR 键顺序） | 约束 |
-| --- | --- | --- |
-| `FrontendIoError` | `kind`, `message`, `platform_code?` | kind：NotFound、PermissionDenied、InvalidData、Interrupted、ReadOnly、AlreadyExists、Other、Conflict |
-| `SubmittedFile` | `relative_path`, `category`, `payload`, `content_hash?` | category：Csv/Erh/Erb/ResourceManifest/Resource/Configuration；hash 是可空 opaque bytes |
-| `FilePayload` | `Utf8(String)` / `Bytes` / `ExternalResource` / `IoError` | 源码直接 UTF-8；不要提交本地绝对路径 |
-| `ExternalResource` | `byte_length:u64`, `image_metadata?` | 只可用于 Resource；正文留在前端，runtime 按资源 ID 通过 service 按需读取；图片元数据有效时可免除启动期探测 |
-| `ProjectManifest` | `project_revision:u64`, `files[]` | 文件顺序是协议输入的一部分，runtime 内部做确定性处理 |
-| `ProjectIdentity` | `project_revision`, `source_digest` | digest 由完整规范项目身份产生 |
-| `ProjectLoadRequest` | `identity`, `manifest?`, `compiled_cache_transfer_id?` | cache key 不精确但其嵌入 manifest 身份匹配时直接重编译；缓存无效或源码身份不同且未带 manifest 时才报告 `payload_required=true` |
-| `ProjectLoadReport` | `project_revision`, `success`, `diagnostics[]`, `payload_required`, `configuration?`, `game_information?` | `success=false` 时不要 Start；`game_information` 是从已解析 `GameBase.csv` 投影的可选展示信息 |
-| `ProjectAnalysisRequest` | `manifest`, `selected_erb_paths[]`, `debug_mode` | 一次性分析，不替换项目 |
-| `ProjectAnalysisReport` | `project_revision`, `success`, `diagnostics[]`, `analyzed_erb_paths[]` | 仅报告 |
-| `ReloadProject` | `base_revision`, `target_revision`, `changes[]` | change 是 `Upsert{file}` 或 `Remove{category,path}` |
+| 类型                     | 字段（按 CBOR 键顺序）                                                                                    | 约束                                                                                                                           |
+| ------------------------ | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `FrontendIoError`        | `kind`, `message`, `platform_code?`                                                                       | kind：NotFound、PermissionDenied、InvalidData、Interrupted、ReadOnly、AlreadyExists、Other、Conflict                           |
+| `SubmittedFile`          | `relative_path`, `category`, `payload`, `content_hash?`                                                   | category：Csv/Erh/Erb/ResourceManifest/Resource/Configuration；hash 是可空 opaque bytes                                        |
+| `FilePayload`            | `Utf8(String)` / `Bytes` / `ExternalResource` / `IoError`                                                 | 源码直接 UTF-8；不要提交本地绝对路径                                                                                           |
+| `ExternalResource`       | `byte_length:u64`, `image_metadata?`                                                                      | 只可用于 Resource；正文留在前端，runtime 按资源 ID 通过 service 按需读取；图片元数据有效时可免除启动期探测                     |
+| `ProjectManifest`        | `project_revision:u64`, `files[]`                                                                         | 文件顺序是协议输入的一部分，runtime 内部做确定性处理                                                                           |
+| `ProjectIdentity`        | `project_revision`, `source_digest`                                                                       | digest 由完整规范项目身份产生                                                                                                  |
+| `ProjectLoadRequest`     | `identity`, `manifest?`, `compiled_cache_transfer_id?`                                                    | cache key 不精确但其嵌入 manifest 身份匹配时直接重编译；缓存无效或源码身份不同且未带 manifest 时才报告 `payload_required=true` |
+| `ProjectLoadReport`      | `project_revision`, `success`, `diagnostics[]`, `payload_required`, `configuration?`, `game_information?` | `success=false` 时不要 Start；`game_information` 是从已解析 `GameBase.csv` 投影的可选展示信息                                  |
+| `ProjectAnalysisRequest` | `manifest`, `selected_erb_paths[]`, `debug_mode`                                                          | 一次性分析，不替换项目                                                                                                         |
+| `ProjectAnalysisReport`  | `project_revision`, `success`, `diagnostics[]`, `analyzed_erb_paths[]`                                    | 仅报告                                                                                                                         |
+| `ReloadProject`          | `base_revision`, `target_revision`, `changes[]`                                                           | change 是 `Upsert{file}` 或 `Remove{category,path}`                                                                            |
 
 路径会把 `\` 规范为 `/`，忽略空段和 `.`；空路径、绝对路径、盘符和 `..` 被拒绝。
 `SourceLocation` 是 `relative_path, byte_start, byte_end, line?, byte_column?`；offset 和
@@ -559,27 +563,35 @@ settings, tooltip, resources, html_island, redraw`。`PresentationDelta` 字段�
 `base_revision, new_revision, operations[]`；operation 为 AppendLine、DeleteLines、
 Clear、SetTitle、ApplySceneDelta、SetAudio、SetInputWait、ReplaceLine、
 SetSettings、SetTooltip、SetResources、SetHtmlIsland、SetRedraw、
-SetButtonGeneration、TrimLines。
+SetButtonGeneration、TrimLines、ApplyResourceDelta。
+
+`ApplyResourceDelta`（tag 15）包含 `sprite_edits`、`canvas_edits` 和完整的
+`animation_timer_ms`。每个 edit 为 `start: u32, delete_count: u32, insert[]`，索引一律
+相对于本操作开始前的原列表；edit 按 start 严格递增且删除区间不得重叠，不接受空操作或
+越界后截断。一次操作原子构造两份结果列表，并验证所有精确资源 identity/revision 引用后
+才发布；后续操作以这份结果为基准。未改变的定义及其顺序完整保留，历史 revision 不按当前
+可见性过滤。首次快照、resync 和大范围替换继续提供完整 `resources`/`SetResources`。
+Core 的 `ResourceReplay::apply_delta` 提供同契约的原子重建及引用检查。
 
 主要公开展示结构：
 
-| 类型 | 字段/变体与单位 |
-| --- | --- |
-| `Color` | RGBA `u8`；派生默认值全 0（透明黑） |
-| `TextStyle` | foreground、background?、bold、italic、underline、strikeout、font_family?、font_millipixels（1/1000 logical pixel） |
-| `LogicalLength(i64)` | 1 个脚本逻辑单位 = 1000 milliunits；不是像素 |
-| `PresentationLength` | `Logical` 或 `FontHeightHundredths` |
-| `LogicalRect` | x/y/width/height；均为 LogicalLength |
-| `CanvasPoint/Size/Rect` | i32 坐标；size 为 u32；canvas 自身像素空间 |
-| `MediaPlacement` | resource_id、x/y/width/height、depth、opacity、revision、hover/mask resource?、requested width/height/y? |
-| `RationalOpacity` | numerator:i64、denominator:u32；前端不应制造分母 0 |
-| `Shape` | kind、parameters[]、foreground?、background? |
-| `DisplayLine` | line_id、temporary、logical_line_start、line_end、alignment、runs[]、text_background_eligible |
-| `PresentationSettings` | drawable_width、drawable_height、line_height、background、button_focus_foreground、maximum_physical_lines、prevent_button_wrap、legacy_nonbutton_wrap、text_line_background? |
-| `PresentationHistory` | logical_lines 和可重放 operations；snapshot 不是无限审计日志 |
-| `RedrawState` | enabled |
-| `AudioState` | `Sound(0..9)`/`Bgm` target、resource_id、repeat_count、volume_millionths、Stopped/Playing/Paused、revision、rate_millionths、preserve_pitch |
-| `TooltipSettings` | foreground/background、delay_ms、duration_ms、font、font_millipoints、custom、原始 format、images、normalized_format |
+| 类型                    | 字段/变体与单位                                                                                                                                                              |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Color`                 | RGBA `u8`；派生默认值全 0（透明黑）                                                                                                                                          |
+| `TextStyle`             | foreground、background?、bold、italic、underline、strikeout、font_family?、font_millipixels（1/1000 logical pixel）                                                          |
+| `LogicalLength(i64)`    | 1 个脚本逻辑单位 = 1000 milliunits；不是像素                                                                                                                                 |
+| `PresentationLength`    | `Logical` 或 `FontHeightHundredths`                                                                                                                                          |
+| `LogicalRect`           | x/y/width/height；均为 LogicalLength                                                                                                                                         |
+| `CanvasPoint/Size/Rect` | i32 坐标；size 为 u32；canvas 自身像素空间                                                                                                                                   |
+| `MediaPlacement`        | resource_id、x/y/width/height、depth、opacity、revision、hover/mask resource?、requested width/height/y?                                                                     |
+| `RationalOpacity`       | numerator:i64、denominator:u32；前端不应制造分母 0                                                                                                                           |
+| `Shape`                 | kind、parameters[]、foreground?、background?                                                                                                                                 |
+| `DisplayLine`           | line_id、temporary、logical_line_start、line_end、alignment、runs[]、text_background_eligible                                                                                |
+| `PresentationSettings`  | drawable_width、drawable_height、line_height、background、button_focus_foreground、maximum_physical_lines、prevent_button_wrap、legacy_nonbutton_wrap、text_line_background? |
+| `PresentationHistory`   | logical_lines 和可重放 operations；snapshot 不是无限审计日志                                                                                                                 |
+| `RedrawState`           | enabled                                                                                                                                                                      |
+| `AudioState`            | `Sound(0..9)`/`Bgm` target、resource_id、repeat_count、volume_millionths、Stopped/Playing/Paused、revision、rate_millionths、preserve_pitch                                  |
+| `TooltipSettings`       | foreground/background、delay_ms、duration_ms、font、font_millipoints、custom、原始 format、images、normalized_format                                                         |
 
 `DisplayRun` 变体：
 
@@ -634,10 +646,10 @@ scene 是所有背景与独立图层的唯一权威来源：
   引用（包括尚未附到图层的 CBG button map）可达的历史依赖闭包。runtime 以显式工作队列
   完整收集并验证闭包后才原子发布/剪枝；缺少任一精确边时拒绝发布；
 - `SpriteReplay {name,size,position,frames,canvas_id?,canvas_rectangle?,revision,
-  canvas_revision?}`；scene 中的
+canvas_revision?}`；scene 中的
   Sprite source 必须绑定该 revision，不得只按同名资源取“最新值”；
 - `SpriteFrameReplay {resource_id,source_rectangle[4],offset[2],delay_ms,
-  destination_size?,canvas_id?,content_digest?,canvas_revision?}`；文件资源必须携带精确
+destination_size?,canvas_id?,content_digest?,canvas_revision?}`；文件资源必须携带精确
   内容摘要，canvas frame 不携带摘要但必须携带精确 canvas_revision；前端可按摘要去重
   解码，但仍按 resource_id 解析项目资源；
 - `CanvasReplay {canvas_id,size,commands,revision}`；
@@ -756,29 +768,29 @@ Error{code,message}。不要返回 JSON、平台对象或错误栈。
 
 当前 1.0 操作：
 
-| kind | operation | 请求 → 响应 |
-| --- | --- | --- |
-| Clock | `local_date_time` | 空 → year/month/day/hour/minute/second/millisecond/UTC offset minutes |
-| Entropy | `random_seed` | 空 → `seed:u64` |
-| InputState | `get_key_state` | `key_code:u8` → active/pressed/toggle |
-| Image | `image_metadata` | resource ID + digest → width/height/format/animated |
-| Image | `image_pixel` | resource ID + digest + x/y → ARGB u32 |
-| Network | `update_check` | URL → remote version/download URL |
-| OpenUrl | `open_url` | URL → opened bool |
-| PresentationQuery | `get_display_line` | context + index → context + string |
-| PresentationQuery | `get_line_geometry_v1` | context + stable line_id → context + line_id + top/height/viewport_height |
-| PresentationQuery | `html_get_printed_str` | context + index → context + string |
-| PresentationQuery | `html_string_len` | context + markup + argument → context + integer |
-| PresentationQuery | `html_substring` | 同上 → context + head/tail |
-| PresentationQuery | `html_string_lines` | 同上 → context + integer |
-| PresentationQuery | `serialize_physical_history` | context + title + hide_information → context + UTF-8 |
-| FontMetrics | `gget_text_size` | context + text/font/size/style bits → context + width/height |
-| Canvas | `sample_canvas_pixel` | context + canvas/revision/point → context + revision/ARGB |
-| Canvas | `decode_canvas_image` | encoded bytes → width/height |
-| Canvas | `encode_canvas_png` | canvas/revision → encoded bytes |
-| Audio | `audio_observation` | `AudioObservationRequestV1` → `AudioObservationResponseV1` |
-| Sql | `rustyera.sql` | `SqlRequestV1` → `SqlResponseV1` |
-| Extension | 动态声明的 operation | `ExtensionInvocation` → `ExtensionResult` |
+| kind              | operation                    | 请求 → 响应                                                               |
+| ----------------- | ---------------------------- | ------------------------------------------------------------------------- |
+| Clock             | `local_date_time`            | 空 → year/month/day/hour/minute/second/millisecond/UTC offset minutes     |
+| Entropy           | `random_seed`                | 空 → `seed:u64`                                                           |
+| InputState        | `get_key_state`              | `key_code:u8` → active/pressed/toggle                                     |
+| Image             | `image_metadata`             | resource ID + digest → width/height/format/animated                       |
+| Image             | `image_pixel`                | resource ID + digest + x/y → ARGB u32                                     |
+| Network           | `update_check`               | URL → remote version/download URL                                         |
+| OpenUrl           | `open_url`                   | URL → opened bool                                                         |
+| PresentationQuery | `get_display_line`           | context + index → context + string                                        |
+| PresentationQuery | `get_line_geometry_v1`       | context + stable line_id → context + line_id + top/height/viewport_height |
+| PresentationQuery | `html_get_printed_str`       | context + index → context + string                                        |
+| PresentationQuery | `html_string_len`            | context + markup + argument → context + integer                           |
+| PresentationQuery | `html_substring`             | 同上 → context + head/tail                                                |
+| PresentationQuery | `html_string_lines`          | 同上 → context + integer                                                  |
+| PresentationQuery | `serialize_physical_history` | context + title + hide_information → context + UTF-8                      |
+| FontMetrics       | `gget_text_size`             | context + text/font/size/style bits → context + width/height              |
+| Canvas            | `sample_canvas_pixel`        | context + canvas/revision/point → context + revision/ARGB                 |
+| Canvas            | `decode_canvas_image`        | encoded bytes → width/height                                              |
+| Canvas            | `encode_canvas_png`          | canvas/revision → encoded bytes                                           |
+| Audio             | `audio_observation`          | `AudioObservationRequestV1` → `AudioObservationResponseV1`                |
+| Sql               | `rustyera.sql`               | `SqlRequestV1` → `SqlResponseV1`                                          |
+| Extension         | 动态声明的 operation         | `ExtensionInvocation` → `ExtensionResult`                                 |
 
 presentation query 的 `context` 是 presentation/environment/projection-space 三个 revision；
 `get_line_geometry_v1@1.0` 只接受 runtime 已解析的稳定 line_id。`GETLINEY` 的脚本 display
@@ -795,7 +807,7 @@ millionths 音量与速率、preserve-pitch 和前端单调时间戳。target �
 response，不能提交给 VM；时间戳只排序外部观察，不推进逻辑游戏时间。
 同一 target 的后续响应时间戳不得小于此前已接受值，否则 runtime 以 service failure 拒绝。
 
-`Sql/rustyera.sql@1.0` 是蛇版兼容身份要求的安全 SQL 服务。协议只传 session epoch 限定的
+`Sql/rustyera.sql@1.0..1.2` 是蛇版兼容身份要求的安全 SQL 服务。协议只传 session epoch 限定的
 provider/connection/reader 逻辑句柄、项目 Resource ID 与摘要、不可变数据库修订和类型化
 `Null/Integer/String` 值；不得传操作系统路径、任意连接字符串或 provider 原生句柄。请求
 覆盖 Open、Execute、ReaderRead/Get/IsNull/Close、ImportMapRows 和 Disconnect；响应始终
@@ -805,14 +817,32 @@ provider/connection/reader 逻辑句柄、项目 Resource ID 与摘要、不可�
 8 MiB 参数总量、1 MiB 单元格、64 MiB 单数据库、100,000 行/8 MiB MAP 数据、1,000,000
 reader 行与 5 秒 provider 执行预算。
 
+原生宿主可在每次 drive 后读取 `RuntimeSession::sql_provider_lifecycle()`，获取当前 live
+及可选的 detached restore candidate provider。宿主按此权威身份注册、晋升和退休连接，
+不得根据请求先后顺序猜测是否已完成恢复。失败候选也消耗唯一 service epoch，后续候选
+或项目重置不复用已退休身份；队列中的旧 Disconnect 仍按幂等清理处理。
+
+协商到 1.1 后，provider 可将只读、确定性且仅直接读取 main database 普通表的标量结果标记为
+`ReusableScalar`。runtime 仅按连接、执行模式、完整 SQL 文本和类型化参数精确复用；任何未认证
+结果、可能写入的操作、reader、导入、断连、失败或不确定响应都会令会话内全部 SQL 标量缓存
+失效。缓存命中也会在其他 SQL 操作进行中或 reader 存活时停用，旧 generation 的并发响应不得
+重新填充缓存。1.0 provider 继续返回普通 `Scalar`，行为不变。
+
+协商到 1.2 后，成功推进到当前行的 `ReaderRead` 可返回 `ReaderRow`，附带最多 32 列的
+整数、字符串及 null 判定投影。每列允许分别缺省转换，缺省项继续使用普通 Get/IsNull。
+字符串 UTF-8 字节数加每列 16 字节的总预算不得超过 64 KiB；预取不得推进下一行，不得
+把未请求列的转换错误提前暴露。core 仅在当前 reader/current row 内复用，并保留连接
+进行中与 reader 状态检查；下一次 Read、EOF、Close、断连和会话重置均退休旧投影。
+1.0/1.1 provider 继续返回 `ReaderAdvanced`，不会收到新请求种类。
+
 蛇版 profile semantic/policy v12 固定 `rustyera.sql@1`、`rustyera.sql.limits@1`、
 `rustyera.scene@1` 与 `rustyera.audio@1`，`save_codec` 为
 `snake_emuera1808_interop_v1`；这些字段参与项目、缓存和 snapshot identity。该 v12 identity
 约定标准传统存档不拥有 GLOBAL、SFMT RNG 或 SQL revision，精确 SQL/RNG 仍只属于 VM
 snapshot；实际 codec 路由与编解码在子批次 5.2 接入。传统存档只接受并生成标准
 Emuera 1808 Binary、ERAZIP/GZip 或 Text；RustyEra 私有 envelope 不属于受支持格式。
-前端没有精确协商
-`Sql/rustyera.sql@1.0` 时，兼容身份解析和项目加载会在读取项目源码、storage 或缓存前返回
+前端没有协商到受支持的
+`Sql/rustyera.sql@1.0..1.2` 时，兼容身份解析和项目加载会在读取项目源码、storage 或缓存前返回
 `runtime.missing_sql_service`；音频服务的实际查询门禁由音频运行时接入阶段执行。
 
 ### 9.3 状态传输
@@ -913,7 +943,7 @@ JSON number，摘要使用小写 BLAKE3 十六进制。历史最多
 - `SequenceAcknowledgement {through_sequence}`；
 - `ResynchronizeRequest {after_sequence?}`；
 - `RuntimeResynchronized {epoch, phase, runtime_revision, presentation, exit_requested?,
-  selected_locale, input_undo, key_macros}`；
+selected_locale, input_undo, key_macros}`；
 - `StartRequest {mode}`，mode 为 `NewGame{seed?}`、
   `TraditionalSave{transfer_id}`、`VmSnapshot{transfer_id}`；
 - `ShutdownRequest {graceful}`；
@@ -947,7 +977,7 @@ JSON number，摘要使用小写 BLAKE3 十六进制。历史最多
 - `CancelExternalRequest {request_id,kind}`，kind 是 Storage/Service；
 - `ServiceError {code,message}`；
 - `ProjectionQueryContext {presentation_revision,environment_revision,
-  projection_space_revision}`；
+projection_space_revision}`；
 - `ProjectionStringIndexRequest {context,index}`；
   `ProjectionStringResponse {context,value}`；
 - `HtmlMeasureRequest {context,markup,argument}`；
@@ -964,7 +994,7 @@ JSON number，摘要使用小写 BLAKE3 十六进制。历史最多
 - `SerializePhysicalHistoryRequest {context,title,hide_information}`；
   `SerializePhysicalHistoryResponse {context,utf8}`；
 - `LocalDateTimeResponse {year,month,day,hour,minute,second,millisecond,
-  utc_offset_minutes}`；
+utc_offset_minutes}`；
   `RandomSeedResponse {seed}`；
 - `ImageMetadataRequest {resource_id,content_digest}`；
   `ImageMetadataResponse {width,height,format,animated}`；
@@ -975,9 +1005,9 @@ JSON number，摘要使用小写 BLAKE3 十六进制。历史最多
 - `GetKeyStateRequest {key_code}`；
   `GetKeyStateResponse {frontend_active,pressed,toggle_state}`；
 - `PointerStateRequest {presentation_revision,environment_revision,
-  projection_space_revision}`；
+projection_space_revision}`；
   `PointerStateResponse {x,y,button_value,presentation_revision,environment_revision,
-  projection_space_revision}`。该操作当前不能可靠协商，见第 11 节。
+projection_space_revision}`。该操作当前不能可靠协商，见第 11 节。
 
 Canvas 命令的完整字段：
 
@@ -992,7 +1022,7 @@ Canvas 命令的完整字段：
 - `DrawLine {start,end}`；
   `DrawText {text,point}`；
 - `DrawCanvas {source_canvas_id,source_revision,source,destination,color_matrix?,
-  mask_canvas_id?,rotation_millidegrees,rotation_center?,mask_revision?}`；
+mask_canvas_id?,rotation_millidegrees,rotation_center?,mask_revision?}`；
 - `LoadEncodedImage {content_digest,encoded}`。
 
 HTML semantic 的完整字段：
