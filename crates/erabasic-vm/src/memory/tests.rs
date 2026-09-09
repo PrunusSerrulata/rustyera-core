@@ -3,6 +3,45 @@ use erabasic_bytecode::{BytecodePersistence, BytecodeStorage};
 use super::*;
 
 #[test]
+fn integer_fast_reads_and_owned_fallback_preserve_values_and_bounds() {
+    for value in [
+        VmValue::Integer(i64::MIN),
+        VmValue::String("玄関🙂".into()),
+        VmValue::IntegerPlace(Box::new(PlaceDescriptor {
+            indices: vec![7, 11],
+            ..PlaceDescriptor::default()
+        })),
+        VmValue::StringPlace(Box::new(PlaceDescriptor {
+            indices: vec![13],
+            ..PlaceDescriptor::default()
+        })),
+    ] {
+        for sparse in [false, true] {
+            let mut values = if sparse {
+                VariableValues::with_lazy_default(value.value_type(), 512)
+            } else {
+                VariableValues::with_default(value.value_type(), 512)
+            };
+            let default = values.get(0).unwrap();
+            values.set(511, value.clone()).unwrap();
+            let before = values.clone();
+            assert_eq!(values.get(0), Some(default));
+            assert_eq!(values.get(511), Some(value.clone()));
+            assert_eq!(values.get(512), None);
+            assert_eq!(values.get(usize::MAX), None);
+            let mut owned = values.get(511).unwrap();
+            match &mut owned {
+                VmValue::Integer(value) => *value = 17,
+                VmValue::String(value) => value.clear(),
+                VmValue::IntegerPlace(value) | VmValue::StringPlace(value) => value.indices.clear(),
+            }
+            assert_eq!(values, before);
+            assert_eq!(values.get(511), Some(value.clone()));
+        }
+    }
+}
+
+#[test]
 fn borrowed_value_comparison_matches_owned_reads_without_mutation() {
     let place = PlaceDescriptor {
         indices: vec![2, 7],

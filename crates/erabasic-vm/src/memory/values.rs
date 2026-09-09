@@ -159,8 +159,20 @@ impl VariableValues {
 
     #[inline]
     pub(super) fn get(&self, index: usize) -> Option<VmValue> {
+        // Integer reads dominate execution. Keep their non-allocating path small
+        // enough to inline independently of owned string/place copying.
         match self {
             Self::Integers(values) => values.get(index).copied().map(VmValue::Integer),
+            Self::SparseIntegers { length, entries } => (index < *length).then(|| {
+                VmValue::Integer(sparse_value(entries, index).copied().unwrap_or_default())
+            }),
+            _ => self.get_owned_value(index),
+        }
+    }
+
+    #[inline(never)]
+    fn get_owned_value(&self, index: usize) -> Option<VmValue> {
+        match self {
             Self::Strings(values) => values.get(index).cloned().map(VmValue::String),
             Self::IntegerPlaces(values) => values
                 .get(index)
@@ -172,9 +184,6 @@ impl VariableValues {
                 .cloned()
                 .map(Box::new)
                 .map(VmValue::StringPlace),
-            Self::SparseIntegers { length, entries } => (index < *length).then(|| {
-                VmValue::Integer(sparse_value(entries, index).copied().unwrap_or_default())
-            }),
             Self::SparseStrings { length, entries } => (index < *length).then(|| {
                 VmValue::String(sparse_value(entries, index).cloned().unwrap_or_default())
             }),
@@ -188,6 +197,9 @@ impl VariableValues {
                     sparse_value(entries, index).cloned().unwrap_or_default(),
                 ))
             }),
+            Self::Integers(_) | Self::SparseIntegers { .. } => {
+                unreachable!("integer reads are handled by get")
+            }
         }
     }
 
