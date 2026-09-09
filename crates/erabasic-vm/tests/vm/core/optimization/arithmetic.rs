@@ -1,4 +1,60 @@
 use super::*;
+
+#[test]
+fn cold_compatibility_diagnostics_preserve_warning_order_after_empty_dispatches() {
+    let mut options = AnalyzerOptions::analysis_mode();
+    options.compatibility = erabasic_compat::CompatibilityIdentity::for_profile(
+        erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
+    );
+    let artifact = compile_source_with_options(
+        "@SYSTEM_TITLE\nFLAG:0 = 9223372036854775807\nREPEAT 12\nRESULT = COUNT + 1\nREND\nRESULT = FLAG:0 + 1\nRESULT = FLAG:0 / 0\nRETURN 7\n",
+        &options,
+    );
+    let entry = artifact
+        .functions
+        .iter()
+        .find(|function| function.name == "SYSTEM_TITLE")
+        .unwrap()
+        .key;
+    let mut vm = Vm::new(validated(&artifact), VmConfig::default());
+    let mut natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 1234);
+    vm.spawn_entry(entry, Vec::new()).unwrap();
+    let report = vm.run_slice(
+        &mut ReadyHost::default(),
+        &mut natives,
+        RunBudget::default(),
+    );
+    assert!(
+        !report
+            .events
+            .iter()
+            .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+        "{report:?}"
+    );
+    let warnings = report
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            VmEvent::Diagnostic { code, .. } => Some(code.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        warnings,
+        [
+            "compat.arithmetic.overflow",
+            "compat.arithmetic.divide_by_zero"
+        ]
+    );
+    assert!(report.events.iter().any(|event| matches!(
+        event,
+        VmEvent::FiberCompleted {
+            value: Some(VmValue::Integer(7)),
+            ..
+        }
+    )));
+}
+
 #[test]
 #[expect(
     clippy::too_many_lines,

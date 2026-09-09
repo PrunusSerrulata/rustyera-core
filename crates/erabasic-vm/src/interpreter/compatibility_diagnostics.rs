@@ -58,6 +58,7 @@ impl Vm {
         }
     }
 
+    #[inline]
     pub(super) fn drain_compatibility_diagnostics(
         &mut self,
         fiber: FiberId,
@@ -67,6 +68,17 @@ impl Vm {
         if self.pending_compatibility_warnings.is_empty() {
             return;
         }
+        self.emit_compatibility_diagnostics(fiber, position, events);
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn emit_compatibility_diagnostics(
+        &mut self,
+        fiber: FiberId,
+        position: &InstructionPosition<'_>,
+        events: &mut Vec<VmEvent>,
+    ) {
         // Memo entries cannot retain notification effects, including duplicates at an
         // already reported site. Invalidate all enclosing memo candidates as in 2A.
         self.invalidate_path_memo(fiber);
