@@ -83,6 +83,7 @@ pub(crate) struct ProgramGeneration {
     // Canonical owner-free definitions always win system-name lookup.
     global_name_indices: HashMap<String, usize>,
     first_global_name_indices: HashMap<String, usize>,
+    owned_name_indices: SymbolMap<HashMap<String, usize>>,
     // Runtime inspection historically exposes otherwise unique function variables.
     runtime_name_fallback_indices: HashMap<String, usize>,
     target_global_index: Option<usize>,

@@ -120,8 +120,15 @@ impl ProgramGeneration {
         }
         let mut global_name_indices = HashMap::new();
         let mut first_global_name_indices = HashMap::new();
+        let mut owned_name_indices = SymbolMap::<HashMap<String, usize>>::default();
         for (index, global) in artifact.globals.iter().enumerate() {
-            if global.owner.is_none() {
+            if let Some(owner) = global.owner {
+                owned_name_indices
+                    .entry(owner)
+                    .or_default()
+                    .entry(global.name.to_ascii_uppercase())
+                    .or_insert(index);
+            } else {
                 let name = global.name.to_ascii_uppercase();
                 first_global_name_indices
                     .entry(name.clone())
@@ -341,6 +348,7 @@ impl ProgramGeneration {
             path_memo_result_read_plans,
             global_name_indices,
             first_global_name_indices,
+            owned_name_indices,
             runtime_name_fallback_indices,
             target_global_index,
             native_import_indices,
@@ -476,6 +484,20 @@ impl ProgramGeneration {
                 case_insensitive_index(&self.first_global_name_indices, name)
                     .and_then(|index| self.artifact.globals.get(*index))
             })
+    }
+
+    /// Dynamic variable references use exact owner first, in artifact declaration order.
+    /// Do not substitute `scoped_variable`: shared persistent event locals have different owners.
+    pub(crate) fn dynamic_variable(
+        &self,
+        function: SymbolKey,
+        name: &str,
+    ) -> Option<&erabasic_bytecode::BytecodeGlobal> {
+        self.owned_name_indices
+            .get(&function)
+            .and_then(|names| case_insensitive_index(names, name))
+            .or_else(|| case_insensitive_index(&self.first_global_name_indices, name))
+            .and_then(|index| self.artifact.globals.get(*index))
     }
 
     pub(crate) fn target_global(&self) -> Option<&erabasic_bytecode::BytecodeGlobal> {
@@ -912,6 +934,68 @@ mod compact_generation_index_tests {
                 next.scoped_variable(missing_function, &global.name)
                     .is_none()
             );
+        }
+    }
+
+    #[test]
+    fn indexed_dynamic_lookup_preserves_exact_owner_order_and_generations() {
+        let mut artifact = compiled_generation_fixture();
+        let owners = [artifact.functions[0].key, artifact.functions[1].key];
+        artifact.functions[1].name = artifact.functions[0].name.clone();
+        let template = artifact.globals[0].clone();
+        for (index, owner) in [
+            Some(owners[0]),
+            None,
+            Some(owners[1]),
+            Some(owners[0]),
+            None,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut definition = template.clone();
+            definition.key = SymbolKey([u8::try_from(0xd0 + index).unwrap(); 16]);
+            definition.name = "Lookupé".into();
+            definition.owner = owner;
+            definition.storage = BytecodeStorage::FunctionPersistent;
+            artifact.globals.push(definition);
+        }
+        let first = ProgramGeneration::new(Arc::new(artifact));
+        let mut next = (*first.artifact).clone();
+        next.globals.reverse();
+        let next = ProgramGeneration::new(Arc::new(next));
+        for program in [&first, &first.clone(), &next] {
+            for owner in owners.into_iter().chain([SymbolKey([0xfe; 16])]) {
+                for name in program
+                    .artifact
+                    .globals
+                    .iter()
+                    .map(|global| global.name.to_ascii_lowercase())
+                    .chain(["LOOKUPé".into(), "lookupÉ".into(), "not_present".into()])
+                {
+                    let expected = program
+                        .artifact
+                        .globals
+                        .iter()
+                        .find(|global| {
+                            global.owner == Some(owner) && global.name.eq_ignore_ascii_case(&name)
+                        })
+                        .or_else(|| {
+                            program.artifact.globals.iter().find(|global| {
+                                global.owner.is_none() && global.name.eq_ignore_ascii_case(&name)
+                            })
+                        });
+                    let actual = program.dynamic_variable(owner, &name);
+                    assert_eq!(
+                        actual.map(|global| global.key),
+                        expected.map(|global| global.key),
+                        "{name}"
+                    );
+                    if let (Some(actual), Some(expected)) = (actual, expected) {
+                        assert!(std::ptr::eq(actual, expected));
+                    }
+                }
+            }
         }
     }
 

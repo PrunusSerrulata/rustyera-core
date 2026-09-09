@@ -54,20 +54,8 @@ pub(in super::super) fn resolve_dynamic_variable_target(
             .generations
             .get(&generation)
             .ok_or_else(|| VmError::InvalidState("SETVAR generation is missing".into()))?;
-        let globals = &program.artifact.globals;
-        let definition = globals
-            .iter()
-            .find(|definition| {
-                definition.owner == Some(function)
-                    && definition.name.eq_ignore_ascii_case(variable_name)
-            })
-            .or_else(|| {
-                globals.iter().find(|definition| {
-                    definition.owner.is_none()
-                        && definition.name.eq_ignore_ascii_case(variable_name)
-                })
-            })
-            .cloned()
+        let definition = program
+            .dynamic_variable(function, variable_name)
             .ok_or_else(|| {
                 script_native_error(
                     crate::ScriptFaultKind::Resolve,
@@ -128,7 +116,7 @@ pub(in super::super) fn resolve_dynamic_variable_target(
         fiber: Some(fiber_id),
         frame: (definition.storage == BytecodeStorage::FunctionLocal).then_some(frame_id),
     };
-    Ok((target, definition.value_type, definition.name))
+    Ok((target, definition.value_type, definition.name.clone()))
 }
 
 fn dynamic_variable_index(
@@ -139,18 +127,7 @@ fn dynamic_variable_index(
 ) -> Result<Option<i64>, VmError> {
     let frame = fiber.frames.last().expect("frame exists");
     let name = component.trim();
-    let definition = program
-        .artifact
-        .globals
-        .iter()
-        .find(|candidate| {
-            candidate.owner == Some(frame.function) && candidate.name.eq_ignore_ascii_case(name)
-        })
-        .or_else(|| {
-            program.artifact.globals.iter().find(|candidate| {
-                candidate.owner.is_none() && candidate.name.eq_ignore_ascii_case(name)
-            })
-        });
+    let definition = program.dynamic_variable(frame.function, name);
     let Some(definition) = definition else {
         return Ok(None);
     };
