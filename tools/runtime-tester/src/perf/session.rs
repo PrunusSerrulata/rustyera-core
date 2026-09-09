@@ -22,7 +22,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::trace::{
-    CheckpointExpectation, ServiceExpectation, StorageExpectation, TraceAction,
+    CheckpointExpectation, ServiceExpectation, StorageExpectation, TraceAction, TraceResult,
 };
 use super::{AuditResult, allocator};
 
@@ -277,7 +277,7 @@ impl PerfSession {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        Ok(json!({
+        Ok(super::trace::normalize_checkpoint_json(&json!({
             "phase": self.phase,
             "wait": self.presentation.wait.as_ref().map(StableInputWait::from),
             "lines": &self.presentation.lines,
@@ -289,12 +289,13 @@ impl PerfSession {
             "otherOutboundTags": messages.iter().filter(|message| {
                 !matches!(message, RuntimeMessage::ServiceRequest(_) | RuntimeMessage::StorageRequest(_))
             }).map(RuntimeMessage::tag).collect::<Vec<_>>(),
-        }))
+        })))
     }
 
     pub(super) fn apply_action(
         &mut self,
         action: &TraceAction,
+        protocol_results: &BTreeMap<String, TraceResult>,
         messages: &[RuntimeMessage],
         logical_time: u64,
     ) -> AuditResult<()> {
@@ -317,15 +318,33 @@ impl PerfSession {
                     message_skip: *message_skip,
                 }))
             }
-            TraceAction::ServiceResponse { service, result } => {
+            TraceAction::ServiceResponse {
+                service,
+                result_ref,
+            } => {
                 let request = unique_service_request(messages, service)?;
+                let TraceResult::ServiceResponse(result) = protocol_results
+                    .get(result_ref)
+                    .ok_or("service response result reference is absent")?
+                else {
+                    return Err("service response result reference has the wrong kind".into());
+                };
                 self.send(RuntimeMessage::ServiceResponse(ServiceResponse {
                     request_id: request.request_id,
                     result: result.clone(),
                 }))
             }
-            TraceAction::StorageResponse { storage, result } => {
+            TraceAction::StorageResponse {
+                storage,
+                result_ref,
+            } => {
                 let request = unique_storage_request(messages, storage)?;
+                let TraceResult::StorageResponse(result) = protocol_results
+                    .get(result_ref)
+                    .ok_or("storage response result reference is absent")?
+                else {
+                    return Err("storage response result reference has the wrong kind".into());
+                };
                 self.send(RuntimeMessage::StorageResponse(StorageResponse {
                     request_id: request.request_id,
                     result: result.clone(),
@@ -345,7 +364,9 @@ impl PerfSession {
         let (grant, stop) = self.debug_pause()?;
         let mut actual = BTreeMap::new();
         for (watch, expected_value) in expected {
-            let value = self.read_watch(grant, stop, watch)?;
+            let value = super::trace::normalize_checkpoint_json(
+                &self.read_watch(grant, stop, watch)?,
+            );
             if &value != expected_value {
                 return Err(format!(
                     "variable {watch} mismatch: expected={expected_value} actual={value}"

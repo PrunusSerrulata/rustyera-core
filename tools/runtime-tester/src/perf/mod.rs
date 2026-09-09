@@ -31,7 +31,7 @@ use trace::{PerfTrace, TraceStep};
 
 pub(super) type AuditResult<T> = Result<T, Box<dyn Error>>;
 pub(super) const OUTPUT_SCHEMA_VERSION: u32 = 2;
-pub(super) const TRACE_SCHEMA_VERSION: u32 = 1;
+pub(super) const TRACE_SCHEMA_VERSION: u32 = 2;
 pub(super) const SNAKE_PROFILE: CompatibilityProfileId =
     CompatibilityProfileId::EmueraSkiaSnake;
 const MAX_ITERATIONS: u32 = 100;
@@ -295,7 +295,12 @@ fn run_iteration(
         if should_pause(cli, iteration, &step.checkpoint) {
             pause_for_profiler(cli, iteration, step, drive.sink)?;
         }
-        session.apply_action(&step.action, &messages, step_index as u64)?;
+        session.apply_action(
+            &step.action,
+            &trace.protocol_results,
+            &messages,
+            step_index as u64,
+        )?;
     }
     drive.sink.emit("iterationEnd", json!({
         "iteration": iteration, "elapsedNs": started.elapsed().as_nanos(),

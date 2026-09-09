@@ -25,7 +25,7 @@ with `--pause-at CHECKPOINT`, or explicitly selected in a repeated run with `--p
 
 ## Versioned trace
 
-The trace is strict JSON with `schemaVersion: 1`. `traceDigest` is the lowercase SHA-256 of the
+The trace is strict JSON with `schemaVersion: 2`. `traceDigest` is the lowercase SHA-256 of the
 canonical JSON object after removing `traceDigest`: object keys are recursively sorted, arrays keep
 their order, and the normalized value is serialized as compact JSON. The runner recomputes it and
 rejects modified or uppercase digests. `projectDigest` is generated in the same sorted input pass
@@ -43,7 +43,7 @@ substituted into this SHA-256 stream.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "traceDigest": "64 lowercase hexadecimal characters",
   "scenario": "day-one",
   "projectDigest": "64 lowercase hexadecimal characters",
@@ -112,6 +112,7 @@ substituted into this SHA-256 stream.
     }
   },
   "setupMessages": [],
+  "protocolResults": {},
   "steps": [
     {
       "id": "ready",
@@ -142,11 +143,18 @@ The normalized signature object uses these exact keys: `phase`, `wait`, `lines`,
 `{kind, operation, operationVersion, payload}`. Each storage item is
 `{namespace, relativePath, operation}`. Arrays preserve captured protocol order; only JSON object
 keys are sorted by canonicalization.
+Integers outside JavaScript's exact range (`-(2^53-1)` through `2^53-1`) are represented as
+decimal strings in this normalized checkpoint only. This keeps Tauri/WebDriver capture and native
+Core replay lossless without changing the runtime protocol or action payload types. Captured
+`expect.variables` values use the same representation.
 
 Expectations can also list numeric `outboundTags`, `{kind, operation}` service requests, or
 `{namespace, relativePath}` storage requests. Actions are `none`, `input`, `service_response`,
-`storage_response`, or `submit`. Service/storage actions bind the current request ID rather than
-persisting session IDs. `setupMessages` run after negotiation and before the manifest, allowing a
+`storage_response`, or `submit`. Service/storage results are stored once in the root
+`protocolResults` content-addressed table; actions use `resultRef`, whose key is the canonical
+SHA-256 of `{kind,result}`. The strict loader verifies every digest, type and reference and rejects
+unreferenced entries. Service/storage actions bind the current request ID rather than persisting
+session IDs. `setupMessages` run after negotiation and before the manifest, allowing a
 Tauri capture to reproduce extension registration. The trace's client capabilities must include
 every snake feature the scenario exercises. The validator requires the shared minimal snake host
 contract shown above (keyboard latch/pump, input-state services, and `rustyera.sql@1.0`); captures

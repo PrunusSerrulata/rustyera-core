@@ -9,11 +9,15 @@ use era_runtime_protocol::{
     RuntimeFeature, RuntimeMessage, RuntimePhase, SQL_OPERATION, SQL_OPERATION_VERSION,
     ServiceKind, ServiceResult, StorageNamespace, StorageResult, WaitKind,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::{AuditResult, Cli, TRACE_SCHEMA_VERSION};
+
+const MAXIMUM_TRACE_BYTES: u64 = 256 * 1024 * 1024;
+const MAXIMUM_PROTOCOL_RESULT_BYTES: usize = 64 * 1024 * 1024;
+const MAXIMUM_PROTOCOL_RESULTS: usize = 65_536;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -26,6 +30,7 @@ pub(super) struct PerfTrace {
     pub(super) client: TraceClient,
     #[serde(default)]
     pub(super) setup_messages: Vec<RuntimeMessage>,
+    pub(super) protocol_results: BTreeMap<String, TraceResult>,
     pub(super) steps: Vec<TraceStep>,
 }
 
@@ -92,18 +97,30 @@ pub(super) enum TraceAction {
     },
     ServiceResponse {
         service: ServiceExpectation,
-        result: ServiceResult,
+        #[serde(rename = "resultRef")]
+        result_ref: String,
     },
     StorageResponse {
         storage: StorageExpectation,
-        result: StorageResult,
+        #[serde(rename = "resultRef")]
+        result_ref: String,
     },
     Submit {
         message: Box<RuntimeMessage>,
     },
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "result", rename_all = "snake_case", deny_unknown_fields)]
+pub(super) enum TraceResult {
+    ServiceResponse(ServiceResult),
+    StorageResponse(StorageResult),
+}
+
 pub(super) fn load(path: &Path, cli: &Cli) -> AuditResult<PerfTrace> {
+    if fs::metadata(path)?.len() > MAXIMUM_TRACE_BYTES {
+        return Err("perf trace exceeds its 256 MiB file limit".into());
+    }
     let bytes = fs::read(path)?;
     let value: Value = serde_json::from_slice(&bytes)?;
     validate_canonical_digest(&value)?;
@@ -122,6 +139,7 @@ fn validate(trace: &PerfTrace, cli: &Cli) -> AuditResult<()> {
     require_lower_hex("traceDigest", &trace.trace_digest)?;
     require_lower_hex("projectDigest", &trace.project_digest)?;
     validate_snake_client(&trace.client)?;
+    validate_protocol_results(trace)?;
     if trace.steps.is_empty() {
         return Err("perf trace must contain at least one step".into());
     }
@@ -141,6 +159,49 @@ fn validate(trace: &PerfTrace, cli: &Cli) -> AuditResult<()> {
         && !checkpoints.contains(checkpoint)
     {
         return Err(format!("--pause-at checkpoint {checkpoint:?} is absent from trace").into());
+    }
+    Ok(())
+}
+
+fn validate_protocol_results(trace: &PerfTrace) -> AuditResult<()> {
+    if trace.protocol_results.len() > MAXIMUM_PROTOCOL_RESULTS {
+        return Err("perf trace has too many unique protocol results".into());
+    }
+    let mut referenced = BTreeSet::new();
+    let mut result_bytes = 0_usize;
+    for (result_ref, result) in &trace.protocol_results {
+        require_lower_hex("protocol result reference", result_ref)?;
+        let value = serde_json::to_value(result)?;
+        result_bytes = result_bytes.saturating_add(serde_json::to_vec(&value)?.len());
+        if result_bytes > MAXIMUM_PROTOCOL_RESULT_BYTES {
+            return Err("perf trace protocol results exceed their 64 MiB limit".into());
+        }
+        let actual = canonical_digest(&value)?;
+        if actual != *result_ref {
+            return Err(format!("protocol result digest mismatch: expected={result_ref} actual={actual}").into());
+        }
+    }
+    for step in &trace.steps {
+        let (result_ref, expected_kind) = match &step.action {
+            TraceAction::ServiceResponse { result_ref, .. } => (result_ref, "service_response"),
+            TraceAction::StorageResponse { result_ref, .. } => (result_ref, "storage_response"),
+            _ => continue,
+        };
+        let result = trace
+            .protocol_results
+            .get(result_ref)
+            .ok_or_else(|| format!("trace action references missing protocol result {result_ref}"))?;
+        let actual_kind = match result {
+            TraceResult::ServiceResponse(_) => "service_response",
+            TraceResult::StorageResponse(_) => "storage_response",
+        };
+        if actual_kind != expected_kind {
+            return Err(format!("trace action protocol result {result_ref} has kind {actual_kind}, expected {expected_kind}").into());
+        }
+        referenced.insert(result_ref);
+    }
+    if referenced.len() != trace.protocol_results.len() {
+        return Err("perf trace contains unreferenced protocol results".into());
     }
     Ok(())
 }
@@ -221,6 +282,35 @@ pub(super) fn canonical_digest(value: &Value) -> AuditResult<String> {
     ))
 }
 
+pub(super) fn normalize_checkpoint_json(value: &Value) -> Value {
+    const JS_SAFE_INTEGER_MAX: i64 = 9_007_199_254_740_991;
+    match value {
+        Value::Number(number) => {
+            if let Some(integer) = number.as_i64()
+                && !(-JS_SAFE_INTEGER_MAX..=JS_SAFE_INTEGER_MAX).contains(&integer)
+            {
+                return Value::String(integer.to_string());
+            }
+            if let Some(integer) = number.as_u64()
+                && integer > JS_SAFE_INTEGER_MAX as u64
+            {
+                return Value::String(integer.to_string());
+            }
+            value.clone()
+        }
+        Value::Array(values) => {
+            Value::Array(values.iter().map(normalize_checkpoint_json).collect())
+        }
+        Value::Object(values) => Value::Object(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), normalize_checkpoint_json(value)))
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
+}
+
 fn normalize_json(value: &Value) -> Value {
     match value {
         Value::Array(values) => Value::Array(values.iter().map(normalize_json).collect()),
@@ -265,15 +355,31 @@ mod tests {
 
     #[test]
     fn canonical_digest_rejects_tampering_and_uppercase() -> AuditResult<()> {
-        let mut value = json!({"schemaVersion": 1, "traceDigest": "0".repeat(64)});
-        let unsigned = json!({"schemaVersion": 1});
+        let mut value = json!({"schemaVersion": 2, "traceDigest": "0".repeat(64)});
+        let unsigned = json!({"schemaVersion": 2});
         value["traceDigest"] = json!(canonical_digest(&unsigned)?);
         validate_canonical_digest(&value)?;
-        value["schemaVersion"] = json!(2);
+        value["schemaVersion"] = json!(3);
         assert!(validate_canonical_digest(&value).is_err());
         value["traceDigest"] = json!("A".repeat(64));
         assert!(validate_canonical_digest(&value).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn checkpoint_json_stringifies_only_integers_outside_the_javascript_range() {
+        assert_eq!(
+            normalize_checkpoint_json(&json!({
+                "resource": {"revision": 9_415_387_604_111_894_472_u64},
+                "safe": 9_007_199_254_740_991_i64,
+                "negative": -9_007_199_254_740_992_i64,
+            })),
+            json!({
+                "resource": {"revision": "9415387604111894472"},
+                "safe": 9_007_199_254_740_991_i64,
+                "negative": "-9007199254740992",
+            }),
+        );
     }
 
     #[test]
@@ -319,8 +425,13 @@ mod tests {
     fn successful_fixture_trace_schema_smoke_validates() -> AuditResult<()> {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixture-snake-perf");
         let project = super::super::input::prepare(&fixture, &mut |_, _| {})?;
+        let protocol_result = json!({
+            "kind": "service_response",
+            "result": {"type": "ready", "payload": [1, 2, 3]}
+        });
+        let result_ref = canonical_digest(&protocol_result)?;
         let mut source = json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "traceDigest": "0".repeat(64),
             "scenario": "fixture-smoke",
             "projectDigest": project.digest,
@@ -349,17 +460,27 @@ mod tests {
                         "missing_precondition": false, "delete": false}
                 }
             },
+            "protocolResults": {},
             "steps": [{
+                "id": "service", "checkpoint": "service",
+                "expect": {"stateSignature": "1".repeat(64)},
+                "action": {
+                    "kind": "service_response",
+                    "service": {"kind": "sql", "operation": "rustyera.sql"},
+                    "resultRef": result_ref.clone()
+                }
+            }, {
                 "id": "final", "checkpoint": "final",
                 "expect": {"stateSignature": "2".repeat(64)},
                 "action": {"kind": "none"}
             }]
         });
+        source["protocolResults"][&result_ref] = protocol_result;
         let mut unsigned = source.clone();
         unsigned.as_object_mut().unwrap().remove("traceDigest");
         source["traceDigest"] = json!(canonical_digest(&unsigned)?);
         validate_canonical_digest(&source)?;
-        let parsed: PerfTrace = serde_json::from_value(source)?;
+        let parsed: PerfTrace = serde_json::from_value(source.clone())?;
         let cli = Cli {
             project: PathBuf::from("copy"),
             profile: super::super::SNAKE_PROFILE,
@@ -372,6 +493,14 @@ mod tests {
             maximum_pumps: 1,
             allocator: crate::perf_allocator::MeasurementMode::Off,
         };
-        validate(&parsed, &cli)
+        validate(&parsed, &cli)?;
+
+        source["steps"].as_array_mut().unwrap().remove(0);
+        let mut unsigned = source.clone();
+        unsigned.as_object_mut().unwrap().remove("traceDigest");
+        source["traceDigest"] = json!(canonical_digest(&unsigned)?);
+        let unused: PerfTrace = serde_json::from_value(source)?;
+        assert!(validate(&unused, &cli).is_err());
+        Ok(())
     }
 }

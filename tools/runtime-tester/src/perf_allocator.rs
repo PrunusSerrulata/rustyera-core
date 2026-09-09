@@ -232,9 +232,19 @@ fn snapshot() -> AllocationStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    static TEST_MEASUREMENT: Mutex<()> = Mutex::new(());
+
+    fn serial_measurement() -> MutexGuard<'static, ()> {
+        TEST_MEASUREMENT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     #[test]
     fn off_mode_reports_null_and_counting_reports_net_semantics() {
+        let _serial = serial_measurement();
         let (_, off) = measure(MeasurementMode::Off, || Vec::<u8>::with_capacity(8));
         assert!(off.is_none());
         let (value, counting) = measure(MeasurementMode::Counting, || Vec::<u8>::with_capacity(8));
@@ -247,6 +257,7 @@ mod tests {
 
     #[test]
     fn guard_disables_counting_after_unwind() {
+        let _serial = serial_measurement();
         let _ = std::panic::catch_unwind(|| {
             let _ = measure(MeasurementMode::Counting, || panic!("fixture"));
         });
@@ -255,6 +266,7 @@ mod tests {
 
     #[test]
     fn nested_counting_window_is_rejected_without_disabling_the_outer_window() {
+        let _serial = serial_measurement();
         let result = std::panic::catch_unwind(|| {
             let _ = measure(MeasurementMode::Counting, || {
                 let _ = measure(MeasurementMode::Counting, Vec::<u8>::new);
@@ -267,6 +279,7 @@ mod tests {
 
     #[test]
     fn freeing_an_older_allocation_reports_signed_window_growth() {
+        let _serial = serial_measurement();
         let value = Vec::<u8>::with_capacity(32);
         let (_, counting) = measure(MeasurementMode::Counting, || drop(value));
         let counting = counting.unwrap();
