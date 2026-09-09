@@ -32,27 +32,7 @@ fn literal_groupmatch_cursor_executes_bulk_and_preserves_all_fallback_barriers()
         let source = format!(
             "@SYSTEM_TITLE\n{declaration}\nRESULT = GROUPMATCH(VALUE, {literals})\nRETURN\n"
         );
-        let analysis = analyze_project(
-            AnalysisInput {
-                project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
-                    .data
-                    .unwrap(),
-                sources: vec![ProjectSource {
-                    relative_path: "main.erb".into(),
-                    payload: SourcePayload::Utf8(source),
-                }],
-            },
-            &AnalyzerOptions::analysis_mode(),
-            &ExtensionRegistry::default(),
-        );
-        let mut artifact = compile_project(
-            analysis.project.as_ref().unwrap(),
-            &CompilerOptions::default(),
-            &default_host_registry(),
-            None,
-        )
-        .artifact
-        .unwrap();
+        let mut artifact = compile_cursor_fixture(source);
         if needle == VmValue::Integer(-7) {
             // Exercise a valid directly encoded negative literal, rather than Push + Unary.
             for encoded in artifact
@@ -84,6 +64,19 @@ fn literal_groupmatch_cursor_executes_bulk_and_preserves_all_fallback_barriers()
         let id = vm.spawn_entry(entry, Vec::new()).unwrap();
         let mut fiber = vm.fibers.remove(&id).unwrap();
         let mut cursor = None;
+        for instruction in 0..artifact.functions[0].code.len() {
+            let position = vm
+                .instruction_position_at(vm.current_generation, entry, instruction, &mut cursor)
+                .unwrap();
+            assert_eq!(
+                position.variable,
+                position
+                    .resolved_program
+                    .unwrap()
+                    .0
+                    .instruction_global(0, instruction)
+            );
+        }
         let instruction = (0..artifact.functions[0].code.len())
             .find(|instruction| {
                 vm.instruction_position_at(vm.current_generation, entry, *instruction, &mut cursor)
@@ -148,4 +141,97 @@ fn literal_groupmatch_cursor_executes_bulk_and_preserves_all_fallback_barriers()
         assert_eq!(fiber.frames.last().unwrap().instruction, instruction + 4);
         assert_eq!(fiber.frames.last().unwrap().stack, [VmValue::Integer(2)]);
     }
+}
+
+#[test]
+fn instruction_cursor_refresh_preserves_failure_order_and_committed_switches() {
+    let artifact = compile_cursor_fixture("@SYSTEM_TITLE\nRETURN\n@OTHER\nRETURN\n".into());
+    let entry = artifact.functions[0].key;
+    let other = artifact.functions[1].key;
+    let validation = validate_bytecode(
+        artifact.clone().into_unvalidated(),
+        &ValidationContext::for_artifact(&artifact),
+    );
+    let mut vm = Vm::new(validation.value.unwrap(), crate::VmConfig::default());
+    let first = vm.current_generation;
+    let second = crate::GenerationId(first.0 + 1);
+    let absent = crate::GenerationId(second.0 + 1);
+    let second_program = Arc::new(ProgramGeneration::new(Arc::new(artifact)));
+    vm.generations.insert(second, second_program);
+    let mut cursor = None;
+    vm.instruction_position_at(first, entry, 0, &mut cursor)
+        .unwrap();
+    let missing = SymbolKey::derive("cursor-test", b"missing-function");
+    for (generation, function, error) in [
+        (first, missing, VmError::MissingFunction(missing)),
+        (second, missing, VmError::MissingFunction(missing)),
+        (
+            absent,
+            entry,
+            VmError::InvalidState("frame generation was reclaimed".into()),
+        ),
+        (
+            absent,
+            missing,
+            VmError::InvalidState("frame generation was reclaimed".into()),
+        ),
+    ] {
+        let before = cursor.clone().unwrap();
+        assert_eq!(
+            vm.instruction_position_at(generation, function, 0, &mut cursor)
+                .err(),
+            Some(error)
+        );
+        assert_cursor_matches(cursor.as_ref().unwrap(), &before);
+    }
+    for (generation, function, index) in [(first, other, 1), (second, entry, 0)] {
+        assert_eq!(
+            vm.instruction_position_at(generation, function, usize::MAX, &mut cursor)
+                .err(),
+            Some(VmError::InvalidState(
+                "instruction pointer left its function".into()
+            ))
+        );
+        let expected = FunctionCursor {
+            generation,
+            function,
+            index,
+            program: Arc::clone(vm.generations.get(&generation).unwrap()),
+        };
+        assert_cursor_matches(cursor.as_ref().unwrap(), &expected);
+        vm.instruction_position_at(generation, function, 0, &mut cursor)
+            .unwrap();
+        assert_cursor_matches(cursor.as_ref().unwrap(), &expected);
+    }
+}
+
+fn assert_cursor_matches(actual: &FunctionCursor, expected: &FunctionCursor) {
+    assert_eq!(actual.generation, expected.generation);
+    assert_eq!(actual.function, expected.function);
+    assert_eq!(actual.index, expected.index);
+    assert!(Arc::ptr_eq(&actual.program, &expected.program));
+}
+
+fn compile_cursor_fixture(source: String) -> erabasic_bytecode::BytecodeArtifact {
+    let analysis = analyze_project(
+        AnalysisInput {
+            project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
+                .data
+                .unwrap(),
+            sources: vec![ProjectSource {
+                relative_path: "main.erb".into(),
+                payload: SourcePayload::Utf8(source),
+            }],
+        },
+        &AnalyzerOptions::analysis_mode(),
+        &ExtensionRegistry::default(),
+    );
+    compile_project(
+        analysis.project.as_ref().unwrap(),
+        &CompilerOptions::default(),
+        &default_host_registry(),
+        None,
+    )
+    .artifact
+    .unwrap()
 }
