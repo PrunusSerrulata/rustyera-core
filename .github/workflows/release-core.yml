@@ -33,8 +33,33 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        if: runner.os != 'Windows'
+        with:
+          node-version: '24'
+      - name: Prepare native SQLite
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFile } from 'node:fs/promises';
+          import path from 'node:path';
+          import { prepareNativeSqlite } from './tools/sqlite-native/build.mjs';
+
+          const { environment } = await prepareNativeSqlite({
+            output: path.join(process.env.RUNNER_TEMP, 'rustyera-sqlite-native'),
+          });
+          await appendFile(process.env.GITHUB_ENV,
+            Object.entries({ ...environment, RUSTYERA_NODE: process.execPath })
+              .map(([name, value]) => `${name}=${value}\n`).join(''));
+          NODE
       - name: Verify workspace
+        if: runner.os != 'Windows'
         run: cargo check --workspace --all-targets --locked
+      # The standalone provider has no Windows recipe and is not a C API dependency.
+      - name: Verify Windows workspace
+        if: runner.os == 'Windows'
+        run: cargo check --workspace --exclude era-sql-provider --all-targets --locked
       - name: Build C API
         run: cargo build --package era-runtime-capi --release --locked
       - name: Assemble runtime archive
