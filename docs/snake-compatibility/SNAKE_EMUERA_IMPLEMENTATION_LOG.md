@@ -45,7 +45,7 @@ core SHA、库/bundle 路径及后续发布绑定变更，须在对应实施批�
 | [1](#batch-1) | 完整摄取与参考能力阻塞项 | 已完成 | 2026-08-28 / Codex | 1A–1D分项提交及必要验收完成；参考/像素差异与后置资源阻塞见验收汇总，不代表蛇版TW完整可玩 |
 | [2](#batch-2) | 确定性 API、输入与兼容差异骨架 | 功能验收完成；规模证据有缺口 | 2026-08-30 / Codex | 2A–2F 产品与三端行为已交付；峰值 RSS 因沙箱权限未取得，后续性能批次补采 |
 | [3](#batch-3) | 安全 SQL（蛇版 TW P0） | 待登记 | 待填写 | 待填写 |
-| [4](#batch-4) | 主玩法 presentation、图像、scene 与自身存档闭环 | 待登记 | 待填写 | 待填写 |
+| [4](#batch-4) | 主玩法 presentation、图像、scene 与自身存档闭环 | 分项结果见记录 | 2026-09-09 / Codex | 多列图层 Web 修复通过原快照验证；Tauri 本次未复验，非整批验收完成 |
 | [5](#batch-5) | 蛇版存档互操作与音频 | 已完成确认范围 | 2026-09-04 / Codex | 标准 1808、音频、存档页及整包导出修复完成；Browser/Tauri 蛇版 TW 导出文件一致，TUI 真实 TW 保留像素能力限制 |
 | [6](#batch-6) | 完整蛇版语言 | 待登记 | 待填写 | 待填写 |
 | [7](#batch-7) | 可选 extension 与渲染能力 | 待登记 | 待填写 | 待填写 |
@@ -1140,6 +1140,53 @@ HTML_PRINT 流程构造 41 个槽位。Web/Tauri 使用 HTML 版本；TUI 的存
 - 用户 core 批次 5 计划修改、Web 工作锁保持原样；未修改 master、未推送/合并。根
   `CHANGELOG_PENDING.md` 分项登记本批行为修复。任务测试进程已结束，暂停续做材料按规则
   保留在 W 和已记录的专属游戏副本中，不删除用户数据或为文档/提交调整重跑产品。
+
+### 2026-09-09 蛇版 TW 多列图层与浏览器测试启动修复
+
+本次 Web 修复识别“零宽 space 行 → 多列 relative image 段落”的标准组合签名
+（字体百分单位 y=0/-100/-200…），按实际字号、行高及图片缩放恢复共同原点，并只在
+末层保留可见高度。CBOR 长度可能为 bigint，识别前转换为 number。原单图层、像素单位及
+非标准位移路径保留。无公共协议、runtime、存档或依赖绑定变化，core/TUI 产品源码未改。
+
+- Web 图层提交：`4cca7aa`（fix: align snake TW multicolumn image layers）。
+- Web 测试入口提交：`0acb727`（fix: prevent browser startup observer feedback loop）。
+  加载 MutationObserver 改读无 DOM 副作用的 performanceProgress；完整 snapshot 会插入
+  测量元素并反复触发自身，造成 Safari/Firefox 停在资源准备 2/2。独立 5 秒完整
+  DOM/runtime 看门狗未改。此项只修测试入口，不写产品 changelog。
+- 唯一重构审查在首条测试前完成并落实：限制新签名、保留旧偏移、使用有类型的布局结果，
+  保留旧组件回归并覆盖字号16/行高17及0.5/1/2倍缩放。测试开始后没有二次审查。
+- 测试墙钟从 2026-09-09 21:35:30+0800 至最后复验22:25:06，约49分36秒，未重置预算。
+
+| 验收阶段 | 实际结果及边界 |
+|---|---|
+| 首次最小回归 | 51 passed / 1 failed，测试中 structuredClone 不接受响应式 Proxy；修正 fixture 克隆后组件42 passed |
+| 首次且唯一全量 Vitest | 130 files / 2021 passed；完整 typecheck、ESLint、Prettier、Web build、全新 WASM build 均 exit 0 |
+| bigint 修复后定向复验 | 2 files / 53 passed；typecheck、变更文件 lint/format、Web build 均 exit 0；WASM 输入未变，复用本任务已核验产物 |
+| Chromium 原快照 | 最初存在 SQL revision 缺失及自动 Enter 推进问题，使用快照所需隔离存储并固定 enter_key 等待后，捕获首个真实几何差异460px；bigint 修复后退出0，六张图片 top 均618.59375、180×180，后续文字间距32px，fault=null、canInteract=true |
+| Firefox/Safari 首次兼容流程 | 均在打开 fixture 阶段失败；定位到上述观察器反馈循环。Firefox 原生上传尝试另报 File not found，未作为通过 |
+| 观察器修复后 | runner 定向策略测试、脚本 lint/format exit 0；Firefox155.0.1及Safari26.6.2各 startup-only exit 0，completed=true、startupTelemetry.outcome=success、状态为游戏运行中；未重跑全兼容流程 |
+
+参考依据分别来自原版和蛇版 ConsoleImagePart/EmueraConsole：relative y 基于固定行原点，
+溢出图片不逐层扩展物理行。蛇版 TW 图形库输出与原快照规范状态一致。本次是 Web 投影
+修复，只读对照两套源码，没有执行 reference CLI 差分，也未修改参考仓库（修改：无）。
+原版语义基准 `26a35dc9334bb67590b96f7b8efbefbf199e391e`、wrapper
+`058b9f17aa827755a145f819c84d0e44e53fbb6a`；蛇版语义基准
+`fc4fb21416768c17256d0e82f997e5f99c9bba91`、wrapper
+`a5d9f48d40c348ab540925c57affddba2d790a1a`。参考源码审阅不能冒充 oracle 执行验收。
+
+证据入口为 Web 已忽略目录 `.rustyera/test-runs/layer-fix-20260909/`：
+`verified-layout.json`、`snapshot-geometry.json`、各 `*.result.json` 和原始日志/trace，
+`provenance.json` 绑定最终源码与 WASM 摘要。原快照
+`runtime_20260909-211357.snapshot` SHA256 为
+`07cb48b09b0efc7757d891251662ac6cab6cdbd820ae0a88ebdbb95710345a06`；
+profile 为 `emuera.skia.snake`，clock 固定2026-01-01，实际命令及有效 seed 见 Chromium
+trace 的 start 事件。Web 基线 `8504761f2603fbbb9ef6677f02e0456c0ef67bab`，隔离构建
+实际 core 与发布 pin 同为 `463a54fed023efb59311fec8ae9db4d27426eeff`，无本地绑定冒充。
+
+本次确认范围为浏览器图层修复和 Safari/Firefox 启动卡死修复；Tauri 未单独构建/动态验收，
+Firefox/Safari 后续全兼容流程未验证，不能以 Chromium 或启动复验替代。根
+CHANGELOG_PENDING 已追加 Web 图层修复。收尾保留原始 verdict、压缩证据和摘要，清理
+本任务游戏/存储副本与可再生隔离构建目录；用户 Cargo.lock 修改及 logs 保留。
 
 ### 2026-09-04 蛇版 Web 历史图像图层定位修复验收
 
