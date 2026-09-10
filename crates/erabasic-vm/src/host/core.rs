@@ -252,6 +252,9 @@ fn replace_text(
     }
 
     let replacement = request_string(request, 2)?;
+    if is_short_literal_pattern(pattern) && !replacement.contains('$') {
+        return Ok(input.replace(pattern, replacement));
+    }
     regex_cache
         .get_or_compile(pattern)
         .map_err(|error| regex_compile_failure("REPLACE", &error))?
