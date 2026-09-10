@@ -39,6 +39,8 @@ pub(crate) mod map_calls;
 pub(crate) mod matching;
 mod native_ops;
 mod operand;
+#[cfg(all(test, feature = "vm-instruction-profile"))]
+mod profile_window_tests;
 mod recovery;
 mod scheduler;
 mod special_native;

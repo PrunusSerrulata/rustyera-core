@@ -2,6 +2,21 @@
 use super::*;
 
 impl Vm {
+    #[cfg(feature = "vm-instruction-profile")]
+    pub(super) fn finish_profile_dispatch(
+        &mut self,
+        opcode: u16,
+        outcome: &Result<StepOutcome, StepError>,
+        drained_diagnostic: bool,
+    ) {
+        self.instruction_profile.finish_dispatch(
+            opcode,
+            matches!(outcome, Ok(StepOutcome::Continue)),
+            matches!(outcome, Err(_) | Ok(StepOutcome::BulkFailure { .. })),
+            matches!(outcome, Ok(StepOutcome::Diagnostic { .. })) || drained_diagnostic,
+        );
+    }
+
     #[allow(clippy::too_many_lines)]
     pub fn run_slice(
         &mut self,
@@ -152,11 +167,19 @@ impl Vm {
                     break;
                 }
                 #[cfg(feature = "vm-instruction-profile")]
-                self.instruction_profile.observe(
+                self.instruction_profile.observe_dispatch(
                     position.generation,
                     position.function,
                     position.instruction,
                     position.encoded.opcode,
+                    fiber
+                        .frames
+                        .last()
+                        .filter(|_| continuation_origin.is_none())
+                        .map(|frame| crate::instruction_profile::DispatchContext {
+                            fiber: fiber.id,
+                            frame: frame.id,
+                        }),
                 );
                 let host_before = report.host_calls;
                 let policy = ExecutionPolicy {
@@ -210,7 +233,15 @@ impl Vm {
                         policy,
                     )
                 };
+                #[cfg(feature = "vm-instruction-profile")]
+                let events_before = report.events.len();
                 self.drain_compatibility_diagnostics(fiber.id, &position, &mut report.events);
+                #[cfg(feature = "vm-instruction-profile")]
+                self.finish_profile_dispatch(
+                    position.encoded.opcode,
+                    &outcome,
+                    report.events.len() != events_before,
+                );
                 let additional_instructions = match &outcome {
                     Ok(StepOutcome::BulkProgress(instructions)) => *instructions,
                     Ok(StepOutcome::BulkFailure {
@@ -373,6 +404,8 @@ impl Vm {
                 }
             }
 
+            #[cfg(feature = "vm-instruction-profile")]
+            self.instruction_profile.finish_slice();
             if matches!(fiber.state, FiberState::Runnable) {
                 if used >= quantum || budget_exhausted {
                     self.invalidate_path_memo(fiber.id);

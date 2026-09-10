@@ -12,6 +12,9 @@ use opcodes::{OpcodeProfile, OpcodeSnapshot};
 
 mod positions;
 use positions::{PositionProfile, PositionSnapshot};
+mod windows;
+pub(crate) use windows::DispatchContext;
+use windows::{WindowProfile, WindowSnapshot};
 
 const INTERVAL: u64 = 1024;
 const MAXIMUM_FUNCTIONS: usize = 4096;
@@ -26,6 +29,7 @@ pub(crate) struct InstructionProfile {
     counts: BTreeMap<(GenerationId, SymbolKey), u64>,
     positions: PositionProfile,
     opcodes: OpcodeProfile,
+    windows: WindowProfile,
 }
 
 impl Default for InstructionProfile {
@@ -38,6 +42,7 @@ impl Default for InstructionProfile {
             counts: BTreeMap::new(),
             positions: PositionProfile::default(),
             opcodes: OpcodeProfile::default(),
+            windows: WindowProfile::default(),
         }
     }
 }
@@ -58,18 +63,31 @@ impl Clone for InstructionProfile {
 }
 
 impl InstructionProfile {
-    #[inline]
-    pub(crate) fn observe(
+    #[cfg(test)]
+    fn observe(
         &mut self,
         generation: GenerationId,
         function: SymbolKey,
         instruction: usize,
         opcode: u16,
     ) {
+        self.observe_dispatch(generation, function, instruction, opcode, None);
+    }
+
+    #[inline]
+    pub(crate) fn observe_dispatch(
+        &mut self,
+        generation: GenerationId,
+        function: SymbolKey,
+        instruction: usize,
+        opcode: u16,
+        context: Option<DispatchContext>,
+    ) {
         let Some(next) = self.dispatches.checked_add(1) else {
             self.incomplete = true;
             self.positions.mark_incomplete();
             self.opcodes.mark_incomplete();
+            self.windows.mark_incomplete();
             return;
         };
         self.dispatches = next;
@@ -78,6 +96,31 @@ impl InstructionProfile {
             self.sample(generation, function);
             self.positions.sample(generation, function, instruction);
         }
+        self.windows.observe(
+            self.dispatches,
+            context.map(|context| windows::Location {
+                generation,
+                function,
+                instruction,
+                context,
+            }),
+            opcode,
+        );
+    }
+
+    pub(crate) fn finish_dispatch(
+        &mut self,
+        opcode: u16,
+        ordinary: bool,
+        failed: bool,
+        diagnostic: bool,
+    ) {
+        self.windows
+            .finish_dispatch(opcode, ordinary, failed, diagnostic);
+    }
+
+    pub(crate) fn finish_slice(&mut self) {
+        self.windows.finish_slice();
     }
 
     #[cold]
@@ -110,6 +153,7 @@ pub struct InstructionProfileSnapshot {
     symbols: Vec<FunctionSymbol>,
     positions: PositionSnapshot,
     opcodes: OpcodeSnapshot,
+    dispatch_windows: WindowSnapshot,
 }
 
 #[derive(Debug, Serialize)]
@@ -133,6 +177,9 @@ impl Vm {
     pub fn instruction_profile_boundary(&mut self, begin: bool) {
         self.instruction_profile
             .positions
+            .boundary(begin, self.instruction_profile.dispatches);
+        self.instruction_profile
+            .windows
             .boundary(begin, self.instruction_profile.dispatches);
     }
 
@@ -178,6 +225,7 @@ impl Vm {
             symbols,
             positions: profile.positions.snapshot(self),
             opcodes: profile.opcodes.snapshot(),
+            dispatch_windows: profile.windows.snapshot(profile.dispatches),
         }
     }
 }
@@ -233,6 +281,7 @@ mod tests {
             symbols,
             positions: positions::tests::maximum_snapshot(),
             opcodes: opcodes::tests::maximum_snapshot(),
+            dispatch_windows: windows::tests::maximum_snapshot(),
         };
         // Leave room for the bounded JSONL boundary envelope.
         assert!(serde_json::to_vec(&snapshot).unwrap().len() < 32 * 1024 * 1024 - 1024);
