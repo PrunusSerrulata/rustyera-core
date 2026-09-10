@@ -38,11 +38,8 @@ impl Vm {
             let bound = find_frame(fiber, place.frame, definition.owner)?
                 .locals
                 .get(&definition.key)
-                .and_then(VariableCell::first)
-                .and_then(|value| match value {
-                    VmValue::IntegerPlace(place) | VmValue::StringPlace(place) => Some(*place),
-                    VmValue::Integer(_) | VmValue::String(_) => None,
-                });
+                .and_then(VariableCell::first_place)
+                .map(std::borrow::Cow::into_owned);
             if let Some(bound) = bound {
                 return self.fill_place_array_range(fiber, &bound, start, end, value);
             }
@@ -135,11 +132,8 @@ impl Vm {
             let bound = find_frame(fiber, place.frame, definition.owner)?
                 .locals
                 .get(&definition.key)
-                .and_then(VariableCell::first)
-                .and_then(|value| match value {
-                    VmValue::IntegerPlace(place) | VmValue::StringPlace(place) => Some(*place),
-                    VmValue::Integer(_) | VmValue::String(_) => None,
-                });
+                .and_then(VariableCell::first_place)
+                .map(std::borrow::Cow::into_owned);
             if let Some(bound) = bound {
                 return self.write_place_array(fiber, &bound, values);
             }
@@ -208,11 +202,8 @@ impl Vm {
             let bound = find_frame(fiber, place.frame, definition.owner)?
                 .locals
                 .get(&definition.key)
-                .and_then(VariableCell::first)
-                .and_then(|value| match value {
-                    VmValue::IntegerPlace(place) | VmValue::StringPlace(place) => Some(*place),
-                    VmValue::Integer(_) | VmValue::String(_) => None,
-                });
+                .and_then(VariableCell::first_place)
+                .map(std::borrow::Cow::into_owned);
             if let Some(mut target) = bound {
                 target.indices.extend_from_slice(&place.indices);
                 return self.write_place_internal(fiber, &target, value, trusted_runtime);

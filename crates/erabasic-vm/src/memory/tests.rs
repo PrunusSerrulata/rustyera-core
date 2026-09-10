@@ -2,6 +2,8 @@ use erabasic_bytecode::{BytecodePersistence, BytecodeStorage};
 
 use super::*;
 
+mod local_place_writes;
+
 #[test]
 fn integer_fast_reads_and_owned_fallback_preserve_values_and_bounds() {
     for value in [
