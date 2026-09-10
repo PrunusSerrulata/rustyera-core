@@ -41,14 +41,32 @@ impl RegexCache {
         self.entries.push((pattern.to_owned(), regex));
         Ok(&self.entries[index].1)
     }
+}
 
-    fn count_matches(&mut self, pattern: &str, input: &str) -> Result<usize, ExecutionFailure> {
-        self.get_or_compile(pattern)
-            .map_err(|error| regex_compile_failure("STRCOUNT", &error))?
-            .find_iter(input)
-            .try_fold(0usize, |count, matched| matched.map(|_| count + 1))
-            .map_err(|error| regex_runtime_failure("STRCOUNT", &error))
-    }
+/// Short nonempty literals cannot contain regex syntax or reach compilation size limits.
+/// Keep empty patterns, escapes, operators and large inputs on the existing regex path.
+fn is_short_literal_pattern(pattern: &str) -> bool {
+    !pattern.is_empty()
+        && pattern.len() <= 256
+        && !pattern.bytes().any(|byte| {
+            matches!(
+                byte,
+                b'\\'
+                    | b'.'
+                    | b'^'
+                    | b'$'
+                    | b'|'
+                    | b'?'
+                    | b'*'
+                    | b'+'
+                    | b'('
+                    | b')'
+                    | b'['
+                    | b']'
+                    | b'{'
+                    | b'}'
+            )
+        })
 }
 
 impl CoreNative {
@@ -570,3 +588,6 @@ mod regex_cache_tests {
 }
 
 mod dispatch;
+
+#[cfg(test)]
+mod literal_regex_tests;
