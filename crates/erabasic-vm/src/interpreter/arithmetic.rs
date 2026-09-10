@@ -6,6 +6,9 @@ use super::compatibility_diagnostics::CompatibilityWarning;
 use super::{StepError, Vm, VmFaultCode, VmValue, operand};
 use crate::GenerationId;
 
+#[cfg(test)]
+mod tests;
+
 impl Vm {
     pub(super) fn integer_policy(&self, generation: GenerationId) -> IntegerArithmeticPolicy {
         self.generations[&generation]
@@ -56,15 +59,15 @@ impl Vm {
         operation: u8,
         value: VmValue,
     ) -> Result<VmValue, StepError> {
-        if self.integer_policy(generation) == IntegerArithmeticPolicy::ReferenceWrappingV1 {
-            return operand::unary_value(operation, value);
-        }
         let (arithmetic, right) = match operation {
             1 => (IntegerOperation::Negate, None),
             4 | 6 => (IntegerOperation::Add, Some(1)),
             5 | 7 => (IntegerOperation::Subtract, Some(1)),
             _ => return operand::unary_value(operation, value),
         };
+        if self.integer_policy(generation) == IntegerArithmeticPolicy::ReferenceWrappingV1 {
+            return operand::unary_value(operation, value);
+        }
         let VmValue::Integer(value) = value else {
             return operand::unary_value(operation, value);
         };
@@ -79,9 +82,6 @@ impl Vm {
         left: VmValue,
         right: VmValue,
     ) -> Result<VmValue, StepError> {
-        if self.integer_policy(generation) == IntegerArithmeticPolicy::ReferenceWrappingV1 {
-            return operand::binary_value(operation, left, right);
-        }
         let arithmetic = match operation {
             0 => IntegerOperation::Multiply,
             1 => IntegerOperation::Divide,
@@ -90,6 +90,9 @@ impl Vm {
             4 => IntegerOperation::Subtract,
             _ => return operand::binary_value(operation, left, right),
         };
+        if self.integer_policy(generation) == IntegerArithmeticPolicy::ReferenceWrappingV1 {
+            return operand::binary_value(operation, left, right);
+        }
         match (left, right) {
             (VmValue::Integer(left), VmValue::Integer(right)) => self
                 .integer_arithmetic(generation, arithmetic, left, Some(right))

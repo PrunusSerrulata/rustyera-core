@@ -213,6 +213,13 @@ fn assert_cursor_matches(actual: &FunctionCursor, expected: &FunctionCursor) {
 }
 
 pub(crate) fn compile_cursor_fixture(source: String) -> erabasic_bytecode::BytecodeArtifact {
+    compile_cursor_fixture_with_options(source, &AnalyzerOptions::analysis_mode())
+}
+
+pub(crate) fn compile_cursor_fixture_with_options(
+    source: String,
+    options: &AnalyzerOptions,
+) -> erabasic_bytecode::BytecodeArtifact {
     let analysis = analyze_project(
         AnalysisInput {
             project_data: load_project(&ProjectFiles::default(), &CsvLoadOptions::default())
@@ -223,7 +230,7 @@ pub(crate) fn compile_cursor_fixture(source: String) -> erabasic_bytecode::Bytec
                 payload: SourcePayload::Utf8(source),
             }],
         },
-        &AnalyzerOptions::analysis_mode(),
+        options,
         &ExtensionRegistry::default(),
     );
     compile_project(
