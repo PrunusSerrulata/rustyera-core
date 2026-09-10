@@ -19,10 +19,10 @@ node rustyera-core/tools/sqlite-native/build.mjs \
 
 The output directory contains only these persistent products:
 
-- `libsqlite3.a`: the independently compiled static library;
+- `libsqlite3.a` (`sqlite3.lib` on Windows): the independently compiled static library;
 - `sqlite3.h`: a byte-identical copy of the verified public header;
 - `manifest.json`: source, builder, compiler, target, SDK, flags, environment and artifact hashes;
-- `env.json`: the four link environment variables below.
+- `env.json`: the link environment variables below, plus Windows library/input paths.
 
 The CLI writes one JSON result to stdout, including `inputs`, `artifacts`, `environment` and
 `manifestPath`. Failures go to stderr with nonzero exit status. Intermediate C/object files
@@ -110,6 +110,22 @@ The module export is `prepareNativeSqlite({ target, output, environment, cacheOn
 
 ## Compile contract and platform boundaries
 
+Windows x64 MSVC uses existing LLVM `clang` and `llvm-lib`, selected by
+`RUSTYERA_SQLITE_CC` and `RUSTYERA_SQLITE_AR`. Set
+`RUSTYERA_SQLITE_WINDOWS_TOOLCHAIN` to an absolute JSON file containing exactly
+`schemaVersion: 1`, `sdkVersion` (a four-component Windows SDK version), and
+`vcTools`, `sdkRoot`, `clangResource`. Directory values must match Node's
+`fs.realpath()` spelling. The roots identify one MSVC Tools version, the Windows
+Kits root, and one LLVM resource version respectively. No SDK discovery or download
+fallback is performed.
+
+The compiler uses explicit target, resource and include paths, and the dynamic
+MSVC CRT. Rust `crt-static` is rejected. The manifest covers the five selected
+header trees and six CRT/OS import libraries; cache and link checks revalidate
+their contents, including added or deleted headers. `LIB` and
+`RUSTYERA_SQLITE_WINDOWS_INPUT_ROOTS` from `env.json` must reach Cargo unchanged.
+Windows GNU/arm64 and cross-compilation remain unsupported.
+
 The baseline definitions in `SQLITE_DEFINES` follow compile-option strings present in the
 installed official `@sqlite.org/sqlite-wasm@3.53.4-build1` artifact. This was a static artifact
 inspection, not execution of `PRAGMA compile_options`; real provider conformance remains a
@@ -135,7 +151,7 @@ Platform recipes are explicit:
 | aarch64-apple-darwin                             | clang, verified native target, explicit `-arch arm64`, macOS SDK, deployment target default 11.0, `ar rcs`                | Implemented; not built/tested in this delegation |
 | x86_64-apple-darwin                              | Same, explicit `-arch x86_64` on an x86_64 host                                                                           | Implemented; untested                            |
 | aarch64-/x86_64-unknown-linux-gnu                | Native matching cc target, PIC object, `ar rcs`                                                                           | Implemented; untested                            |
-| Windows MSVC                                     | Future separate `cl /c /O2` + `lib /OUT:sqlite3.lib` recipe, CRT/toolchain provenance and `.lib` output contract required | Not implemented; explicit refusal                |
+| Windows x64 MSVC                                 | LLVM clang + llvm-lib, explicit SDK/CRT identity, dynamic CRT and `sqlite3.lib` output | Native host only; no cross compilation |
 | musl, Android, iOS, other OS/ABI or cross target | Requires a separately verified sysroot/compiler/archiver recipe                                                           | Not implemented; explicit refusal                |
 
 Requested target must equal both the Rust host triple and the running platform/architecture.
@@ -159,7 +175,10 @@ leave that lock: the owner must confirm the process stopped and remove that exac
 before retrying. The tool never guesses that another process is dead or deletes its output.
 
 Tool output is capped at 1 MiB; identity/archive commands have 30 s timeouts, C compilation
-has a 300 s limit, and timeout/interruption terminates the child then escalates after 1 s.
+has a 300 s limit. Unix interruption sends TERM and escalates after 1 s. Windows
+uses a bounded 5 s process-tree termination. A separate 6 s cleanup deadline
+closes inherited output pipes and reports unconfirmed descendant termination if
+normal child closure cannot complete.
 The parent test runner must additionally enforce its remaining round budget. Compilation
 refuses to start below 10 GiB available disk space. No downloaded archives or multiple expanded
 source caches are retained by this tool.

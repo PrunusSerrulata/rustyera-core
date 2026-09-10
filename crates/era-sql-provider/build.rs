@@ -41,9 +41,11 @@ fn main() {
                 | "x86_64-apple-darwin"
                 | "aarch64-unknown-linux-gnu"
                 | "x86_64-unknown-linux-gnu"
+                | "x86_64-pc-windows-msvc"
         ),
         "unsupported native SQLite target: {target}"
     );
+    verify_windows_inputs(&target);
     for name in ["SQLITE3_STATIC", "SQLITE3_NO_PKG_CONFIG"] {
         assert_eq!(
             env::var(name).as_deref(),
@@ -55,6 +57,34 @@ fn main() {
         env::var_os("LIBSQLITE3_SYS_USE_PKG_CONFIG").is_none_or(|value| value == "0"),
         "LIBSQLITE3_SYS_USE_PKG_CONFIG must not override the native SQLite contract"
     );
+    verify_archive(&target);
+}
+
+fn verify_windows_inputs(target: &str) {
+    if target == "x86_64-pc-windows-msvc" {
+        assert!(
+            !env::var("CARGO_CFG_TARGET_FEATURE")
+                .unwrap_or_default()
+                .split(',')
+                .any(|value| value == "crt-static"),
+            "native SQLite requires the dynamic MSVC CRT"
+        );
+        for name in [
+            "LIB",
+            "RUSTYERA_SQLITE_WINDOWS_INPUT_ROOTS",
+            "CARGO_CFG_TARGET_FEATURE",
+        ] {
+            println!("cargo:rerun-if-env-changed={name}");
+        }
+        let roots = env::var_os("RUSTYERA_SQLITE_WINDOWS_INPUT_ROOTS")
+            .expect("Windows input inventory required");
+        for input in env::split_paths(&roots) {
+            println!("cargo:rerun-if-changed={}", input.display());
+        }
+    }
+}
+
+fn verify_archive(target: &str) {
     let library = PathBuf::from(env::var_os("SQLITE3_LIB_DIR").expect("SQLite prebuild required"));
     let include = PathBuf::from(
         env::var_os("SQLITE3_INCLUDE_DIR").expect("SQLite include directory required"),
@@ -65,7 +95,11 @@ fn main() {
         "SQLite archive and header must come from the same prebuild"
     );
     for file in [
-        library.join("libsqlite3.a"),
+        library.join(if target == "x86_64-pc-windows-msvc" {
+            "sqlite3.lib"
+        } else {
+            "libsqlite3.a"
+        }),
         include.join("sqlite3.h"),
         library.join("manifest.json"),
     ] {
@@ -74,11 +108,15 @@ fn main() {
     let verifier = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("crate directory"))
         .join("../../tools/sqlite-native/build.mjs");
     println!("cargo:rerun-if-changed={}", verifier.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        verifier.with_file_name("windows.mjs").display()
+    );
     let result = Command::new(env::var_os("RUSTYERA_NODE").unwrap_or_else(|| "node".into()))
         .arg(verifier)
         .arg("--verify-link-inputs")
         .arg(&library)
-        .arg(&target)
+        .arg(target)
         .output()
         .expect("existing Node executable required to verify native SQLite inputs");
     assert!(

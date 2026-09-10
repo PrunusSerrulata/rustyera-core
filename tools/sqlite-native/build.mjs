@@ -19,6 +19,14 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  WINDOWS_TARGET,
+  nativeArtifacts,
+  windowsToolchain,
+  verifyWindowsInputs,
+  verifyWindowsCompileFlags,
+} from "./windows.mjs";
+
 const root = path.dirname(fileURLToPath(import.meta.url));
 const source = path.join(root, "source");
 export const SQLITE_SOURCE_ID =
@@ -75,14 +83,27 @@ async function identity(filename, algorithm = "sha256") {
   return { bytes, digest: hash.digest("hex") };
 }
 
-async function executable(name, environment) {
+export async function executable(name, environment) {
   if (!name || name.includes("\0")) throw new Error("Invalid tool executable");
-  const candidates = name.includes(path.sep)
-    ? [path.resolve(name)]
-    : (environment.PATH ?? "")
-        .split(path.delimiter)
-        .filter(Boolean)
-        .map((entry) => path.resolve(entry, name));
+  const searchPath =
+    environment.PATH ??
+    (process.platform === "win32"
+      ? environment[
+          Object.keys(environment).find((key) => key.toUpperCase() === "PATH")
+        ]
+      : undefined) ??
+    "";
+  const candidates =
+    path.isAbsolute(name) || name.includes(path.sep)
+      ? [path.resolve(name)]
+      : searchPath
+          .split(path.delimiter)
+          .filter(Boolean)
+          .flatMap((entry) =>
+            process.platform === "win32" && !path.extname(name)
+              ? [path.resolve(entry, `${name}.exe`), path.resolve(entry, name)]
+              : [path.resolve(entry, name)],
+          );
   for (const candidate of candidates) {
     try {
       await access(candidate, constants.X_OK);
@@ -95,24 +116,84 @@ async function executable(name, environment) {
   throw new Error(`Required tool unavailable (no install fallback): ${name}`);
 }
 
-async function run(command, args, environment, timeout = 30_000) {
+export async function run(
+  command,
+  args,
+  environment,
+  timeout = 30_000,
+  {
+    spawnChild = spawn,
+    platform = process.platform,
+    terminateTree = terminateWindowsChild,
+    cleanupDeadlineMs = 6000,
+  } = {},
+) {
   return await new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawnChild(command, args, {
       env: environment,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
     let stdout = "",
       stderr = "",
       failure;
     let killTimer;
-    const stop = (error) => {
-      if (failure) return;
-      failure = error;
-      child.kill("SIGTERM");
-      killTimer = setTimeout(() => child.kill("SIGKILL"), 1000);
-    };
+    let cleanupTimer;
+    let settled = false;
+    let termination = Promise.resolve();
     const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
     const onSignal = () => stop(new Error("SQLite build interrupted"));
+    const finish = (code, signal, forced = false) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(killTimer);
+      clearTimeout(cleanupTimer);
+      for (const item of signals) process.removeListener(item, onSignal);
+      child.removeListener("error", stop);
+      child.stdout.removeAllListeners("data");
+      child.stderr.removeAllListeners("data");
+      if (forced) {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        child.removeListener("close", onClose);
+      }
+      if (failure) reject(failure);
+      else if (code !== 0)
+        reject(new Error(`${command} exited ${code ?? signal}: ${stderr}`));
+      else resolve(stdout.trim());
+    };
+    const stop = (error) => {
+      if (failure || settled) return;
+      failure = error;
+      // Descendants can retain inherited pipes even after the direct child exits.
+      // A separate deadline bounds settlement independently of the close event.
+      cleanupTimer = setTimeout(() => {
+        failure = new AggregateError(
+          [failure],
+          "SQLite cleanup deadline exceeded; descendant exit is unconfirmed",
+        );
+        if (child.exitCode === null && child.signalCode === null)
+          child.kill("SIGKILL");
+        finish(null, null, true);
+      }, cleanupDeadlineMs);
+      if (platform === "win32") {
+        // Keep the parent alive until taskkill captures its descendants. Never kill by name.
+        termination = Promise.resolve()
+          .then(() => terminateTree(child, environment))
+          .catch((cleanupError) => {
+            failure = new AggregateError(
+              [failure, cleanupError],
+              "SQLite tool and process-tree cleanup failed; descendant exit is unconfirmed",
+            );
+            if (child.exitCode === null && child.signalCode === null)
+              child.kill("SIGKILL");
+          });
+      } else {
+        child.kill("SIGTERM");
+        killTimer = setTimeout(() => child.kill("SIGKILL"), 1000);
+      }
+    };
     for (const signal of signals) process.on(signal, onSignal);
     const timer = setTimeout(
       () => stop(new Error(`Tool timed out: ${command}`)),
@@ -131,17 +212,48 @@ async function run(command, args, environment, timeout = 30_000) {
           stop(new Error("Tool output exceeds 1 MiB"));
       });
     }
-    child.once("error", (error) => {
-      failure = error;
-    });
-    child.once("close", (code, signal) => {
+    child.once("error", stop);
+    const onClose = async (code, signal) => {
+      await termination;
+      finish(code, signal);
+    };
+    child.once("close", onClose);
+  });
+}
+
+async function terminateWindowsChild(child, environment) {
+  if (
+    !Number.isSafeInteger(child.pid) ||
+    child.pid <= 0 ||
+    child.exitCode !== null ||
+    child.signalCode !== null
+  )
+    return;
+  const systemRoot = environment.SystemRoot ?? environment.SYSTEMROOT;
+  if (!systemRoot || !path.isAbsolute(systemRoot))
+    throw new Error("SystemRoot required for bounded Windows cleanup");
+  await new Promise((resolve, reject) => {
+    const killer = spawn(
+      path.join(systemRoot, "System32", "taskkill.exe"),
+      ["/PID", String(child.pid), "/T", "/F"],
+      {
+        env: environment,
+        windowsHide: true,
+        stdio: "ignore",
+      },
+    );
+    const timer = setTimeout(() => {
+      killer.kill();
+      reject(new Error("Windows process-tree cleanup exceeded 5s"));
+    }, 5000);
+    killer.once("error", (error) => {
       clearTimeout(timer);
-      clearTimeout(killTimer);
-      for (const item of signals) process.removeListener(item, onSignal);
-      if (failure) reject(failure);
-      else if (code !== 0)
-        reject(new Error(`${command} exited ${code ?? signal}: ${stderr}`));
-      else resolve(stdout.trim());
+      reject(error);
+    });
+    killer.once("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error("Windows process-tree cleanup exited " + code));
     });
   });
 }
@@ -189,11 +301,18 @@ async function inputsFor({ target, output, environment }) {
             arm64: "aarch64-unknown-linux-gnu",
             x64: "x86_64-unknown-linux-gnu",
           }[process.arch]
-        : undefined;
+        : process.platform === "win32" && process.arch === "x64"
+          ? WINDOWS_TARGET
+          : undefined;
   if (target !== platformTarget)
     throw new Error(
       `Unsupported native SQLite platform/ABI: ${process.platform}/${process.arch}/${target}`,
     );
+  const windows =
+    target === WINDOWS_TARGET
+      ? await windowsToolchain(environment, identity)
+      : null;
+  const artifacts = nativeArtifacts(target);
   output = path.resolve(
     output ||
       environment.RUSTYERA_SQLITE_NATIVE_OUTPUT ||
@@ -216,6 +335,8 @@ async function inputsFor({ target, output, environment }) {
     "CPATH",
     "C_INCLUDE_PATH",
     "LIBRARY_PATH",
+    "CL",
+    "_CL_",
   ])
     if (environment[name])
       throw new Error(
@@ -224,25 +345,48 @@ async function inputsFor({ target, output, environment }) {
   const compiler = await executable(
     environment.RUSTYERA_SQLITE_CC ||
       environment.CC ||
-      (process.platform === "darwin" ? "clang" : "cc"),
+      (process.platform === "darwin" || windows ? "clang" : "cc"),
     environment,
   );
   const archiver = await executable(
-    environment.RUSTYERA_SQLITE_AR || environment.AR || "ar",
+    environment.RUSTYERA_SQLITE_AR ||
+      environment.AR ||
+      (windows ? "llvm-lib" : "ar"),
     environment,
   );
-  const compilerVersion = await run(compiler, ["--version"], environment);
-  const compilerTarget = await run(compiler, ["-dumpmachine"], environment);
+  const probeFlags = windows ? ["--no-default-config"] : [];
+  const compilerVersion = await run(
+    compiler,
+    [...probeFlags, "--version"],
+    environment,
+  );
+  const compilerTarget = await run(
+    compiler,
+    [...probeFlags, "-dumpmachine"],
+    environment,
+  );
   const expectedArch =
     process.arch === "arm64" ? /^(arm64|aarch64)-/ : /^x86_64-/;
   if (
     !expectedArch.test(compilerTarget) ||
-    !(process.platform === "darwin" ? /apple-darwin/ : /linux-gnu/).test(
-      compilerTarget,
-    )
+    !(
+      windows
+        ? /windows-msvc/
+        : process.platform === "darwin"
+          ? /apple-darwin/
+          : /linux-gnu/
+    ).test(compilerTarget)
   )
     throw new Error(
       `Compiler target does not match ${target}: ${compilerTarget}`,
+    );
+  if (
+    windows &&
+    (!/clang version/i.test(compilerVersion) ||
+      !/llvm-lib(?:\.exe)?$/i.test(archiver))
+  )
+    throw new Error(
+      "Windows SQLite requires the clang GNU driver and llvm-lib",
     );
   let sdk;
   if (process.platform === "darwin") {
@@ -288,7 +432,7 @@ async function inputsFor({ target, output, environment }) {
     throw new Error("SQLite header version/source ID differs from manifest");
   const flags = [
     "-O2",
-    "-fPIC",
+    ...(windows ? windows.flags : ["-fPIC"]),
     "-fno-strict-aliasing",
     ...SQLITE_DEFINES.map((value) => `-D${value}`),
     ...(sdk
@@ -309,6 +453,11 @@ async function inputsFor({ target, output, environment }) {
     sourceManifest,
     files,
     builder: await identity(fileURLToPath(import.meta.url)),
+    windowsBuilder: await identity(
+      fileURLToPath(new URL("./windows.mjs", import.meta.url)),
+    ),
+    windows,
+    artifacts,
     sourceManifestIdentity: await identity(manifestPath),
     compiler: {
       path: compiler,
@@ -321,7 +470,7 @@ async function inputsFor({ target, output, environment }) {
       path: archiver,
       realPath: await realpath(archiver),
       identity: await identity(await realpath(archiver)),
-      flags: ["rcs"],
+      flags: windows ? ["/nologo"] : ["rcs"],
       environment: { ZERO_AR_DATE: "1" },
     },
     rustc: {
@@ -344,18 +493,30 @@ async function inputsFor({ target, output, environment }) {
         "RUSTYERA_SQLITE_CC",
         "RUSTYERA_SQLITE_AR",
         "RUSTYERA_SQLITE_CFLAGS_JSON",
+        "RUSTYERA_SQLITE_WINDOWS_TOOLCHAIN",
       ].map((name) => [name, environment[name] ?? null]),
     ),
   };
   return { inputs, output, compiler, archiver, flags };
 }
 
-function linkEnvironment(output) {
+function linkEnvironment(output, inputs) {
   return {
     SQLITE3_LIB_DIR: output,
     SQLITE3_INCLUDE_DIR: output,
     SQLITE3_STATIC: "1",
     SQLITE3_NO_PKG_CONFIG: "1",
+    ...(inputs?.windows
+      ? {
+          LIB: inputs.windows.libraryDirectories.join(path.delimiter),
+          RUSTYERA_SQLITE_WINDOWS_INPUT_ROOTS: [
+            ...inputs.windows.headers,
+            ...inputs.windows.linkInputs,
+          ]
+            .map((row) => row.path)
+            .join(path.delimiter),
+        }
+      : {}),
   };
 }
 
@@ -386,8 +547,26 @@ export async function verifyLinkInputs(output, target) {
     throw new Error(
       "Native SQLite link manifest does not match the fixed engine contract",
     );
+  const artifacts = nativeArtifacts(target);
+  if (JSON.stringify(inputs.artifacts) !== JSON.stringify(artifacts))
+    throw new Error("SQLite artifact contract mismatch");
+  if (target === WINDOWS_TARGET) {
+    const layout = await verifyWindowsInputs(inputs.windows, identity);
+    verifyWindowsCompileFlags(
+      inputs.flags,
+      layout,
+      SQLITE_DEFINES,
+      jsonFlags(inputs.environment?.RUSTYERA_SQLITE_CFLAGS_JSON),
+    );
+    const expectedEnvironment = linkEnvironment(output, inputs);
+    for (const name of ["LIB", "RUSTYERA_SQLITE_WINDOWS_INPUT_ROOTS"])
+      if (process.env[name] !== expectedEnvironment[name])
+        throw new Error(
+          "Windows SQLite link environment differs from prebuild: " + name,
+        );
+  }
   const hash = createHash("sha256").update(manifestBytes);
-  for (const name of ["libsqlite3.a", "sqlite3.h"]) {
+  for (const name of [artifacts.archive, "sqlite3.h"]) {
     const actual = await identity(path.join(output, name));
     if (
       !actual.bytes ||
@@ -422,7 +601,7 @@ async function cached(configuration) {
     );
     if (JSON.stringify(manifest.inputs) !== JSON.stringify(inputs))
       return undefined;
-    for (const name of ["libsqlite3.a", "sqlite3.h"])
+    for (const name of [nativeArtifacts(inputs.target).archive, "sqlite3.h"])
       if (
         JSON.stringify(await identity(path.join(output, name))) !==
         JSON.stringify(manifest.artifacts[name])
@@ -436,11 +615,11 @@ async function cached(configuration) {
     const env = JSON.parse(
       await readFile(path.join(output, "env.json"), "utf8"),
     );
-    if (JSON.stringify(env) !== JSON.stringify(linkEnvironment(output)))
+    if (JSON.stringify(env) !== JSON.stringify(linkEnvironment(output, inputs)))
       return undefined;
     if (
       manifest.schemaVersion !== 1 ||
-      manifest.artifacts["libsqlite3.a"].bytes === 0
+      manifest.artifacts[nativeArtifacts(inputs.target).archive].bytes === 0
     )
       return undefined;
     return {
@@ -535,25 +714,34 @@ export async function prepareNativeSqlite({
         "-c",
         path.join(staging, "sqlite3.c"),
         "-o",
-        path.join(staging, "sqlite3.o"),
+        path.join(staging, configuration.inputs.artifacts.object),
       ],
       environment,
       300_000,
     );
     await run(
       configuration.archiver,
-      [
-        "rcs",
-        path.join(staging, "libsqlite3.a"),
-        path.join(staging, "sqlite3.o"),
-      ],
+      configuration.inputs.windows
+        ? [
+            "/nologo",
+            "/OUT:" +
+              path.join(staging, configuration.inputs.artifacts.archive),
+            path.join(staging, configuration.inputs.artifacts.object),
+          ]
+        : [
+            "rcs",
+            path.join(staging, configuration.inputs.artifacts.archive),
+            path.join(staging, configuration.inputs.artifacts.object),
+          ],
       { ...environment, ZERO_AR_DATE: "1" },
     );
     const manifest = {
       schemaVersion: 1,
       inputs: configuration.inputs,
       artifacts: {
-        "libsqlite3.a": await identity(path.join(staging, "libsqlite3.a")),
+        [configuration.inputs.artifacts.archive]: await identity(
+          path.join(staging, configuration.inputs.artifacts.archive),
+        ),
         "sqlite3.h": await identity(path.join(staging, "sqlite3.h")),
       },
     };
@@ -565,11 +753,11 @@ export async function prepareNativeSqlite({
     if (JSON.stringify(current.inputs) !== JSON.stringify(configuration.inputs))
       throw new Error("SQLite build inputs changed during compilation");
     await mkdir(destination, { recursive: true });
-    for (const name of ["libsqlite3.a", "sqlite3.h"])
+    for (const name of [configuration.inputs.artifacts.archive, "sqlite3.h"])
       await rename(path.join(staging, name), path.join(destination, name));
     await writeFile(
       path.join(staging, "env.json"),
-      JSON.stringify(linkEnvironment(destination)) + "\n",
+      JSON.stringify(linkEnvironment(destination, configuration.inputs)) + "\n",
     );
     await rename(
       path.join(staging, "env.json"),
@@ -585,7 +773,7 @@ export async function prepareNativeSqlite({
     );
     return {
       ...manifest,
-      environment: linkEnvironment(destination),
+      environment: linkEnvironment(destination, configuration.inputs),
       manifestPath: path.join(destination, "manifest.json"),
     };
   } finally {
