@@ -1,6 +1,15 @@
 #[allow(clippy::wildcard_imports)]
 use super::super::*;
 
+// The common dispatch result must not carry the payloads used by terminal calls
+// and failures. Only cold failures allocate; ordinary instructions stay compact.
+pub(in crate::interpreter) enum BasicOutcome {
+    Continue,
+    Unhandled,
+    BulkProgress(u64),
+    StructuredGotoDiagnostic,
+}
+
 impl Vm {
     #[allow(clippy::too_many_lines)]
     pub(in crate::interpreter) fn dispatch_basic(
@@ -9,7 +18,7 @@ impl Vm {
         position: &InstructionPosition<'_>,
         opcode: Opcode,
         policy: ExecutionPolicy,
-    ) -> Result<Option<StepOutcome>, StepError> {
+    ) -> Result<BasicOutcome, Box<StepError>> {
         let frame = fiber
             .frames
             .last_mut()
@@ -93,7 +102,8 @@ impl Vm {
                             return Err(StepError::new(
                                 VmFaultCode::InvalidInstruction,
                                 "a variable schema cannot contain place values",
-                            ));
+                            )
+                            .into());
                         }
                     };
                     fiber
@@ -197,7 +207,8 @@ impl Vm {
                                 return Err(StepError::new(
                                     VmFaultCode::TypeMismatch,
                                     "a place cannot contain another place",
-                                ));
+                                )
+                                .into());
                             }
                         }
                     }
@@ -219,7 +230,8 @@ impl Vm {
                     return Err(StepError::new(
                         VmFaultCode::InvalidInstruction,
                         "user-call tokens must be consumed by Invoke or Abandon",
-                    ));
+                    )
+                    .into());
                 }
                 pop(&mut frame.stack)?;
             }
@@ -240,7 +252,8 @@ impl Vm {
                         return Err(StepError::new(
                             VmFaultCode::TypeMismatch,
                             "indirect store place and value types differ",
-                        ));
+                        )
+                        .into());
                     }
                 };
                 self.write_place(fiber, &place, value)
@@ -258,25 +271,29 @@ impl Vm {
                     return Err(StepError::new(
                         VmFaultCode::TypeMismatch,
                         "FOR step expects an integer",
-                    ));
+                    )
+                    .into());
                 };
                 let VmValue::Integer(end) = pop(stack)? else {
                     return Err(StepError::new(
                         VmFaultCode::TypeMismatch,
                         "FOR end expects an integer",
-                    ));
+                    )
+                    .into());
                 };
                 let VmValue::Integer(start) = pop(stack)? else {
                     return Err(StepError::new(
                         VmFaultCode::TypeMismatch,
                         "FOR start expects an integer",
-                    ));
+                    )
+                    .into());
                 };
                 let VmValue::IntegerPlace(counter) = pop(stack)? else {
                     return Err(StepError::new(
                         VmFaultCode::TypeMismatch,
                         "FOR counter expects an integer place",
-                    ));
+                    )
+                    .into());
                 };
                 self.write_place(fiber, &counter, VmValue::Integer(start))
                     .map_err(map_vm_error)?;
@@ -285,7 +302,7 @@ impl Vm {
                     && let Some(additional_instructions) = self
                         .try_bulk_fill_loop(fiber, position, &counter, start, end, step, policy)?
                 {
-                    return Ok(Some(StepOutcome::BulkProgress(additional_instructions)));
+                    return Ok(BasicOutcome::BulkProgress(additional_instructions));
                 }
                 if active {
                     fiber
@@ -316,7 +333,7 @@ impl Vm {
                 if state.is_bypassed() {
                     frame.for_loops.pop();
                     frame.stack.push(VmValue::Integer(0));
-                    return Ok(Some(StepOutcome::Continue));
+                    return Ok(BasicOutcome::Continue);
                 }
                 let VmValue::Integer(current) = self
                     .read_place(fiber, &state.counter)
@@ -325,7 +342,8 @@ impl Vm {
                     return Err(StepError::new(
                         VmFaultCode::TypeMismatch,
                         "FOR counter storage is not integer",
-                    ));
+                    )
+                    .into());
                 };
                 let next = self.integer_arithmetic(
                     position.generation,
@@ -352,7 +370,7 @@ impl Vm {
                 })?;
                 if state.is_bypassed() {
                     frame.for_loops.pop();
-                    return Ok(Some(StepOutcome::Continue));
+                    return Ok(BasicOutcome::Continue);
                 }
                 let VmValue::Integer(current) = self
                     .read_place(fiber, &state.counter)
@@ -361,7 +379,8 @@ impl Vm {
                     return Err(StepError::new(
                         VmFaultCode::TypeMismatch,
                         "FOR counter storage is not integer",
-                    ));
+                    )
+                    .into());
                 };
                 let next = self.integer_arithmetic(
                     position.generation,
@@ -408,7 +427,7 @@ impl Vm {
                         pop(stack)?;
                     }
                     stack.push(VmValue::Integer(0));
-                    return Ok(Some(StepOutcome::Continue));
+                    return Ok(BasicOutcome::Continue);
                 }
                 let selector = selector.ok_or_else(|| {
                     StepError::new(
@@ -438,7 +457,8 @@ impl Vm {
                             return Err(StepError::new(
                                 VmFaultCode::InvalidInstruction,
                                 "unknown CASE comparison operation",
-                            ));
+                            )
+                            .into());
                         }
                     };
                     let value = operand::comparison_value(binary_operation, selector, &operand)?;
@@ -468,7 +488,8 @@ impl Vm {
                         return Err(StepError::new(
                             VmFaultCode::TypeMismatch,
                             "conditional jump expects an integer",
-                        ));
+                        )
+                        .into());
                     };
                     condition == 0
                 } else {
@@ -483,16 +504,12 @@ impl Vm {
                     }
                     fiber.frames.last_mut().expect("frame exists").instruction = target;
                     if entered_structured_block {
-                        return Ok(Some(StepOutcome::Diagnostic {
-                            code: STRUCTURED_GOTO_DIAGNOSTIC_CODE,
-                            message: STRUCTURED_GOTO_DIAGNOSTIC_MESSAGE,
-                            notification: crate::VmDiagnosticNotification::LogOnly,
-                        }));
+                        return Ok(BasicOutcome::StructuredGotoDiagnostic);
                     }
                 }
             }
-            _ => return Ok(None),
+            _ => return Ok(BasicOutcome::Unhandled),
         }
-        Ok(Some(StepOutcome::Continue))
+        Ok(BasicOutcome::Continue)
     }
 }

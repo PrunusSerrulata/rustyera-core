@@ -19,6 +19,8 @@ pub(crate) mod bit_calls;
 #[cfg(test)]
 mod bulk_fill_tests;
 mod character_ops;
+#[cfg(test)]
+mod compact_dispatch_tests;
 pub(crate) mod compatibility_diagnostics;
 mod dispatch;
 pub(crate) mod dynamic_form;
@@ -164,8 +166,26 @@ impl Vm {
             .last_mut()
             .ok_or_else(|| StepError::new(VmFaultCode::InvalidInstruction, "missing frame"))?;
         frame.instruction = frame.instruction.saturating_add(1);
-        if let Some(outcome) = self.dispatch_basic(fiber, position, opcode, policy)? {
-            return self.finish_dispatch(fiber, outcome);
+        match self
+            .dispatch_basic(fiber, position, opcode, policy)
+            .map_err(|error| *error)?
+        {
+            dispatch::BasicOutcome::Continue => {
+                self.check_operand_stack(fiber)?;
+                return Ok(StepOutcome::Continue);
+            }
+            dispatch::BasicOutcome::BulkProgress(instructions) => {
+                return Ok(StepOutcome::BulkProgress(instructions));
+            }
+            dispatch::BasicOutcome::StructuredGotoDiagnostic => {
+                self.check_operand_stack(fiber)?;
+                return Ok(StepOutcome::Diagnostic {
+                    code: STRUCTURED_GOTO_DIAGNOSTIC_CODE,
+                    message: STRUCTURED_GOTO_DIAGNOSTIC_MESSAGE,
+                    notification: crate::VmDiagnosticNotification::LogOnly,
+                });
+            }
+            dispatch::BasicOutcome::Unhandled => {}
         }
         if let Some(outcome) = self.dispatch_map_calls(fiber, position, opcode, natives)? {
             return Ok(outcome);
@@ -196,6 +216,7 @@ impl Vm {
         ))
     }
 
+    #[inline]
     fn finish_dispatch(
         &self,
         fiber: &Fiber,
@@ -205,17 +226,23 @@ impl Vm {
             &outcome,
             StepOutcome::Continue | StepOutcome::Diagnostic { .. }
         ) {
-            let stack_len = fiber
-                .frames
-                .last()
-                .map_or(Some(0), crate::state::Frame::operand_slots);
-            if stack_len.is_none_or(|len| len > self.config.maximum_operand_stack) {
-                return Err(StepError::new(
-                    VmFaultCode::ResourceLimit,
-                    "maximum operand stack exceeded",
-                ));
-            }
+            self.check_operand_stack(fiber)?;
         }
         Ok(outcome)
+    }
+
+    #[inline]
+    fn check_operand_stack(&self, fiber: &Fiber) -> Result<(), StepError> {
+        let stack_len = fiber
+            .frames
+            .last()
+            .map_or(Some(0), crate::state::Frame::operand_slots);
+        if stack_len.is_none_or(|len| len > self.config.maximum_operand_stack) {
+            return Err(StepError::new(
+                VmFaultCode::ResourceLimit,
+                "maximum operand stack exceeded",
+            ));
+        }
+        Ok(())
     }
 }
