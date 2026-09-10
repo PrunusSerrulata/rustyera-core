@@ -275,7 +275,7 @@ impl RuntimeFormContinuation {
             self.frame,
             &call.call,
             &call.specs,
-            &call.captured,
+            std::borrow::Cow::Borrowed(&call.captured),
             UserCallOrigin::RuntimeForm,
         )
         .map_err(map_vm_error)?;

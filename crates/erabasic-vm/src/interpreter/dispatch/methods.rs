@@ -205,7 +205,7 @@ impl Vm {
                     owner,
                     &pending.call,
                     &spec.arguments,
-                    &pending.captured,
+                    std::borrow::Cow::Owned(pending.captured),
                     UserCallOrigin::Bytecode {
                         resolve: pending.resolve,
                         invoke: position.instruction,

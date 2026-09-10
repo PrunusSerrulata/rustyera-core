@@ -1,6 +1,40 @@
 use super::*;
 
 #[test]
+fn owned_captures_move_strings_while_borrowed_captures_remain_available() {
+    let text = "captured argument".repeat(128);
+    let pointer = text.as_ptr();
+    let mut owned = Cow::Owned(vec![
+        None,
+        Some(VmValue::String(text)),
+        Some(VmValue::Integer(7)),
+    ]);
+    let value = take_captured_argument(&mut owned, 1);
+    let VmValue::String(text) = &value else {
+        panic!("string capture")
+    };
+    assert_eq!(text.as_ptr(), pointer);
+    assert_eq!(text, &"captured argument".repeat(128));
+    assert_eq!(owned[1], None);
+    assert_eq!(take_captured_argument(&mut owned, 2), VmValue::Integer(7));
+    assert_eq!(owned.as_ref(), &[None, None, None]);
+
+    let original = vec![None, Some(value), Some(VmValue::Integer(7))];
+    let before = original.clone();
+    let mut borrowed = Cow::Borrowed(original.as_slice());
+    assert_eq!(
+        take_captured_argument(&mut borrowed, 1),
+        before[1].clone().unwrap()
+    );
+    assert_eq!(
+        take_captured_argument(&mut borrowed, 2),
+        VmValue::Integer(7)
+    );
+    assert!(matches!(borrowed, Cow::Borrowed(_)));
+    assert_eq!(original, before);
+}
+
+#[test]
 fn borrowed_signature_arguments_preserve_defaults_and_rejections() {
     use erabasic_compat::CompatibilityProfileId;
 

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use erabasic_bytecode::{
     BytecodeConstant, BytecodeFunctionKind, BytecodeStorage, BytecodeType, SymbolKey,
     UserArgumentSpec, UserCallMode, UserCallSpec,
@@ -580,7 +582,7 @@ impl Vm {
         owner: crate::FrameId,
         method: &ResolvedUserCall,
         specs: &[UserArgumentSpec],
-        captured: &[Option<VmValue>],
+        mut captured: Cow<'_, [Option<VmValue>]>,
         origin: UserCallOrigin,
     ) -> Result<(), VmError> {
         if fiber.frames.len() >= self.config.maximum_call_depth {
@@ -626,12 +628,12 @@ impl Vm {
                 },
                 (UserArgumentBinding::ArrayReference, Some(value)) => {
                     self.validate_captured_user_reference(fiber, method, slot, value)?;
-                    value.clone()
+                    take_captured_argument(&mut captured, slot)
                 }
                 (UserArgumentBinding::Value { .. }, Some(value))
                     if value.value_type() == target.parameters[slot].value_type =>
                 {
-                    value.clone()
+                    take_captured_argument(&mut captured, slot)
                 }
                 _ => {
                     return Err(invalid(
@@ -674,5 +676,14 @@ impl Vm {
         });
         fiber.frames.push(frame);
         Ok(())
+    }
+}
+
+/// Bytecode consumes its pending call; runtime forms retain captures across suspension.
+/// Callers validate the slot before taking it, so rejected captures never change a live form.
+fn take_captured_argument(captured: &mut Cow<'_, [Option<VmValue>]>, slot: usize) -> VmValue {
+    match captured {
+        Cow::Owned(values) => values[slot].take().expect("validated capture"),
+        Cow::Borrowed(values) => values[slot].as_ref().expect("validated capture").clone(),
     }
 }
