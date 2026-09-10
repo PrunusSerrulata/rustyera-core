@@ -5,7 +5,7 @@ use super::{
 };
 use crate::state::user_calls::{bind_user_call_signature, validate_user_call_target_kind};
 use erabasic_ast::Argument;
-use erabasic_bytecode::{CallTextSpec, UserCallSpec};
+use erabasic_bytecode::CallTextSpec;
 use erabasic_parser::{CallTextParseStage, parse_call_text_at};
 
 impl RuntimeFormContinuation {
@@ -164,12 +164,8 @@ impl RuntimeFormContinuation {
             program,
             self.generation,
             target,
-            &UserCallSpec {
-                mode: spec.mode.user_call_mode(),
-                allow_missing: false,
-                missing_target: 0,
-                arguments: specs.clone(),
-            },
+            spec.mode.user_call_mode(),
+            &specs,
         )
         .map_err(map_vm_error);
         let call = match resolved {

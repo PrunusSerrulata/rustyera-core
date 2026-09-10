@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 
 mod validation;
 
+#[cfg(test)]
+mod tests;
+
 use super::{Fiber, ProgramGeneration};
 use crate::{
     GenerationId, PlaceDescriptor, Vm, VmError, VmValue, bind_persistent_arguments, make_frame,
@@ -80,24 +83,42 @@ pub(crate) fn resolve_user_call(
     name: &str,
     spec: &UserCallSpec,
 ) -> Result<Option<ResolvedUserCall>, VmError> {
+    resolve_user_call_arguments(
+        program,
+        generation,
+        name,
+        spec.mode,
+        spec.allow_missing,
+        &spec.arguments,
+    )
+}
+
+fn resolve_user_call_arguments(
+    program: &ProgramGeneration,
+    generation: GenerationId,
+    name: &str,
+    mode: UserCallMode,
+    allow_missing: bool,
+    arguments: &[UserArgumentSpec],
+) -> Result<Option<ResolvedUserCall>, VmError> {
     let Some(target) = program.function_by_name(name) else {
         return Ok(None);
     };
     // Events hidden from ordinary calls are absent from dynamic method lookup too.
-    if spec.mode.is_method()
+    if mode.is_method()
         && target.kind == BytecodeFunctionKind::Event
         && !program.artifact.call_compatibility.allow_event_as_normal
     {
         return Ok(None);
     }
-    if spec.allow_missing
-        && spec.mode == UserCallMode::MethodDiscard
+    if allow_missing
+        && mode == UserCallMode::MethodDiscard
         && target.kind != BytecodeFunctionKind::Method
     {
         return Ok(None);
     }
-    validate_user_call_target_kind(program, target, spec.mode)?;
-    bind_user_call_signature(program, generation, target, spec).map(Some)
+    validate_user_call_target_kind(program, target, mode)?;
+    bind_user_call_signature(program, generation, target, mode, arguments).map(Some)
 }
 
 pub(crate) fn validate_user_call_target_kind(
@@ -127,11 +148,11 @@ pub(crate) fn bind_user_call_signature(
     program: &ProgramGeneration,
     generation: GenerationId,
     target: &erabasic_bytecode::BytecodeFunction,
-    spec: &UserCallSpec,
+    mode: UserCallMode,
+    arguments: &[UserArgumentSpec],
 ) -> Result<ResolvedUserCall, VmError> {
     let name = &target.name;
     let policy = program.artifact.call_compatibility;
-    let arguments = &spec.arguments;
     let arity = policy
         .user_argument_policy
         .decide(arguments.len(), target.parameters.len());
@@ -176,7 +197,7 @@ pub(crate) fn bind_user_call_signature(
             program, name, slot, parameter, argument,
         )?);
     }
-    if spec.mode.is_method()
+    if mode.is_method()
         && !matches!(
             target.result,
             Some(BytecodeType::Integer | BytecodeType::String)
@@ -186,8 +207,7 @@ pub(crate) fn bind_user_call_signature(
             "method {name} has no scalar return type"
         )));
     }
-    if spec
-        .mode
+    if mode
         .expected_result()
         .is_some_and(|expected| target.result != Some(expected))
     {
@@ -198,7 +218,7 @@ pub(crate) fn bind_user_call_signature(
     Ok(ResolvedUserCall {
         generation,
         function: target.key,
-        mode: spec.mode,
+        mode,
         bindings,
     })
 }
@@ -574,16 +594,13 @@ impl Vm {
         let target = program
             .function(method.function)
             .ok_or(VmError::MissingFunction(method.function))?;
-        if resolve_user_call(
+        if resolve_user_call_arguments(
             &program,
             method.generation,
             &target.name,
-            &UserCallSpec {
-                mode: method.mode,
-                allow_missing: false,
-                missing_target: 0,
-                arguments: specs.to_vec(),
-            },
+            method.mode,
+            false,
+            specs,
         )?
         .as_ref()
             != Some(method)
