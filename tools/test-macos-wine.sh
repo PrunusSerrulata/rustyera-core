@@ -32,6 +32,19 @@ ONEINPUT_FIXTURE_SOURCE_DIR="$CLI_DIR/tests/fixture-oneinput"
 ONEINPUT_LONG_FIXTURE_SOURCE_DIR="$CLI_DIR/tests/fixture-oneinput-long"
 ORACLE_TIMEOUT_SECONDS="${EMUERA_REFERENCE_TIMEOUT_SECONDS:-30}"
 
+# Keep Wine helpers on the same runtime; never fall back to another installation.
+WINE_BIN="${EMUERA_WINE_BIN:-$HOME/Library/Application Support/com.franke.Whisky/Libraries/Wine/bin}"
+for wine_tool in wine winepath wineboot wineserver; do
+    if [[ ! -x "$WINE_BIN/$wine_tool" ]]; then
+        echo "required Wine tool not found: $WINE_BIN/$wine_tool (set EMUERA_WINE_BIN to override)" >&2
+        exit 127
+    fi
+done
+WINE_BIN="$(cd "$WINE_BIN" && pwd)"
+export PATH="$WINE_BIN:$PATH"
+# Legacy prefixes can retain ICU DLLs incompatible with Whisky's Wine runtime.
+export DOTNET_SYSTEM_GLOBALIZATION_USENLS="${DOTNET_SYSTEM_GLOBALIZATION_USENLS:-1}"
+
 for command_name in wine winepath jq perl python3; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         echo "required command not found: $command_name" >&2
