@@ -12,6 +12,11 @@ impl ProgramGeneration {
         self.bulk_fill_loop_plans.clear();
     }
 
+    #[cfg(test)]
+    pub(crate) fn disable_literal_select_for_test(&mut self) {
+        self.literal_select_plans.clear();
+    }
+
     pub(crate) fn runtime_variable(
         &self,
         key: SymbolKey,
@@ -220,6 +225,9 @@ impl ProgramGeneration {
             preparation.advance();
         }
         let mut structured_ranges = Vec::with_capacity(artifact.functions.len());
+        let mut select_budget = planning::literal_select::SelectPlanBudget::default();
+        let cache_selects = select_budget.reserve_directory(artifact.functions.len());
+        let mut literal_select_plans = Vec::new();
         let mut remaining_jump_bytes = scope_transitions::MAXIMUM_STATIC_JUMP_BYTES;
         let mut remaining_jump_work = scope_transitions::MAXIMUM_STATIC_JUMP_WORK;
         let mut static_structured_jumps = scope_transitions::allocate_directory(
@@ -229,6 +237,13 @@ impl ProgramGeneration {
         let cache_jumps = static_structured_jumps.capacity() >= artifact.functions.len();
         for function in &artifact.functions {
             let ranges = structured_scope_ranges(function);
+            if cache_selects {
+                literal_select_plans.push(planning::literal_select::plans(
+                    function,
+                    &ranges,
+                    &mut select_budget,
+                ));
+            }
             if cache_jumps {
                 static_structured_jumps.push(scope_transitions::plan_static_jumps(
                     function,
@@ -369,6 +384,7 @@ impl ProgramGeneration {
             decoded_user_call_specs,
             bulk_fill_loop_plans,
             literal_group_match_plans,
+            literal_select_plans,
             function_memo_plans,
             memoized_indexed_read_plans,
             path_memo_result_read_plans,
@@ -506,6 +522,14 @@ impl ProgramGeneration {
         instruction: usize,
     ) -> Option<&LiteralGroupMatchPlan> {
         sparse_instruction_plan(self.literal_group_match_plans.get(index)?, instruction)
+    }
+
+    pub(crate) fn literal_select_plan(
+        &self,
+        index: usize,
+        instruction: usize,
+    ) -> Option<&LiteralSelectPlan> {
+        sparse_instruction_plan(self.literal_select_plans.get(index)?, instruction)
     }
 
     pub(crate) fn global_by_name(&self, name: &str) -> Option<&erabasic_bytecode::BytecodeGlobal> {

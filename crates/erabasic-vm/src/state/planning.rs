@@ -56,6 +56,8 @@ mod bulk_fill;
 pub(super) use bulk_fill::simple_bulk_fill_loop;
 mod bulk_copy;
 pub(super) use bulk_copy::simple_bulk_copy_loop;
+pub(super) mod literal_select;
+pub(crate) use literal_select::LiteralSelectPlan;
 
 pub(super) fn literal_group_match(
     artifact: &BytecodeArtifact,

@@ -31,9 +31,9 @@ mod planning;
 pub(crate) use path_memo::path_memo_cache_usage;
 
 use planning::{
-    build_function_memo_plans, case_insensitive_index, index_source_entries, literal_group_match,
-    memoized_indexed_read, path_memo_result_reads, simple_bulk_copy_loop, simple_bulk_fill_loop,
-    structured_scope_ranges,
+    LiteralSelectPlan, build_function_memo_plans, case_insensitive_index, index_source_entries,
+    literal_group_match, memoized_indexed_read, path_memo_result_reads, simple_bulk_copy_loop,
+    simple_bulk_fill_loop, structured_scope_ranges,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,6 +79,7 @@ pub(crate) struct ProgramGeneration {
     decoded_user_call_specs: user_call_specs::DecodedUserCallSpecs,
     bulk_fill_loop_plans: Vec<Vec<(u32, BulkFillLoopPlan)>>,
     literal_group_match_plans: Vec<Vec<(u32, LiteralGroupMatchPlan)>>,
+    literal_select_plans: Vec<Vec<(u32, LiteralSelectPlan)>>,
     function_memo_plans: Vec<Option<FunctionMemoPlan>>,
     memoized_indexed_read_plans: Vec<Option<MemoizedIndexedReadPlan>>,
     path_memo_result_read_plans: Vec<Vec<PathMemoResultReadPlan>>,

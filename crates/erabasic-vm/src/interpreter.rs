@@ -32,6 +32,8 @@ pub(crate) mod fault_hooks;
 mod host_calls;
 #[cfg(test)]
 pub(crate) mod literal_groupmatch_tests;
+#[cfg(test)]
+mod literal_select_tests;
 mod lookup;
 pub(crate) mod map_calls;
 pub(crate) mod matching;

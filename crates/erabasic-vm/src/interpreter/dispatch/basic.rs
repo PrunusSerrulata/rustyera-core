@@ -399,6 +399,9 @@ impl Vm {
                     .expect("active FOR loop was checked");
             }
             Opcode::SelectStart => {
+                if let Some(additional) = self.try_literal_select(fiber, position, policy) {
+                    return Ok(BasicOutcome::BulkProgress(additional));
+                }
                 let value = pop(&mut fiber.frames.last_mut().expect("frame exists").stack)?;
                 fiber
                     .frames

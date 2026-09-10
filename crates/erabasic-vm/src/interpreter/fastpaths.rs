@@ -1,6 +1,7 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 mod bulk_copy;
+mod literal_select;
 
 impl Vm {
     pub(super) fn reconcile_structured_jump(
