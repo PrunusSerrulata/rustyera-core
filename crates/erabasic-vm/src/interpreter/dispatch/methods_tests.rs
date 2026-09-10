@@ -235,6 +235,55 @@ fn decoded_user_call_origin_borrows_and_falls_back_without_weakening_checks() {
 }
 
 #[test]
+fn resolve_user_call_spec_borrows_only_exact_immutable_operands() {
+    let (vm, _, entry) = fixture();
+    let program = &vm.generations[&vm.current_generation];
+    let instruction = program
+        .function(entry)
+        .unwrap()
+        .code
+        .iter()
+        .position(|instruction| instruction.opcode == Opcode::ResolveUserCall as u16)
+        .unwrap();
+    let mut cursor = None;
+    let mut position = vm
+        .instruction_position_at(vm.current_generation, entry, instruction, &mut cursor)
+        .unwrap();
+    let expected = UserCallSpec::decode(position.encoded.payload).unwrap();
+    let actual = resolve_user_spec(&position, program).unwrap();
+    assert!(matches!(actual, Cow::Borrowed(_)));
+    assert_eq!(*actual, expected);
+    let mut uncached = (**program).clone();
+    uncached.disable_user_call_specs_for_test();
+    let fallback = resolve_user_spec(&position, &uncached).unwrap();
+    assert!(matches!(fallback, Cow::Owned(_)));
+    assert_eq!(*fallback, expected);
+    let copied = position.encoded.payload.to_vec();
+    position.encoded.payload = &copied;
+    let fallback = resolve_user_spec(&position, program).unwrap();
+    assert!(matches!(fallback, Cow::Owned(_)));
+    assert_eq!(*fallback, expected);
+    for malformed in [Vec::new(), vec![0xff; copied.len()]] {
+        let mut invalid_cursor = None;
+        let mut invalid_position = vm
+            .instruction_position_at(
+                vm.current_generation,
+                entry,
+                instruction,
+                &mut invalid_cursor,
+            )
+            .unwrap();
+        invalid_position.encoded.payload = &malformed;
+        assert_eq!(
+            resolve_user_spec(&invalid_position, program).unwrap_err(),
+            UserCallSpec::decode(&malformed)
+                .map_err(invalid)
+                .unwrap_err()
+        );
+    }
+}
+
+#[test]
 fn dynamic_user_call_borrowed_bindings_keep_nested_capture_and_defaults() {
     let source = "@SYSTEM_TITLE\nTRYCALLFORM TARGET(1, , NEXT_VALUE())\nRETURN RESULT\n\
         @NEXT_VALUE\n#FUNCTION\nFLAG:0 += 1\nRETURNF 2\n\

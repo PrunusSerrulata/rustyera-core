@@ -63,7 +63,7 @@ impl Vm {
         position: &InstructionPosition<'_>,
         program: &ProgramGeneration,
     ) -> Result<(), StepError> {
-        let spec = UserCallSpec::decode(position.encoded.payload).map_err(invalid)?;
+        let spec = resolve_user_spec(position, program)?;
         if spec.mode.expected_result().is_some() || spec.mode.unwinds_caller() {
             // GETMETH and deferred JUMP remain memo boundaries. Ordinary CALLFORM
             // and CALLFORMF keep their caller and can join its observed trace.
@@ -271,6 +271,27 @@ fn advance_user_actual(
 struct UserConsumer<'program> {
     spec: Cow<'program, UserCallSpec>,
     slot: usize,
+}
+
+fn resolve_user_spec<'program>(
+    position: &InstructionPosition<'_>,
+    program: &'program ProgramGeneration,
+) -> Result<Cow<'program, UserCallSpec>, StepError> {
+    // Only an exact borrow of this generation's immutable payload can use derived metadata.
+    // Synthetic or substituted operands retain their original decode and failure behavior.
+    let original = program
+        .function(position.function)
+        .and_then(|function| function.code.get(position.instruction));
+    if original.is_some_and(|instruction| {
+        instruction.opcode == Opcode::ResolveUserCall as u16
+            && std::ptr::eq(instruction.payload.as_ref(), position.encoded.payload)
+    }) && let Some(spec) = program.cached_user_call_spec(position.function, position.instruction)
+    {
+        return Ok(Cow::Borrowed(spec));
+    }
+    UserCallSpec::decode(position.encoded.payload)
+        .map(Cow::Owned)
+        .map_err(invalid)
 }
 
 fn checked_user_target(
