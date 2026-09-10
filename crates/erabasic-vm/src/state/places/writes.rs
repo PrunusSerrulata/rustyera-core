@@ -236,6 +236,10 @@ impl Vm {
         self.validate_script_character(definition.storage, character)?;
         let implicit_target = definition.storage == BytecodeStorage::Character
             && character == self.target_character_for_generation(definition.generation);
+        // A cell write cannot activate tracing; inactive paths can transfer ownership directly.
+        let observed_value = self
+            .path_memo_is_active_for(fiber.id)
+            .then(|| value.clone());
         self.memory
             .cell_mut(
                 definition.generation,
@@ -244,22 +248,24 @@ impl Vm {
                 character,
             )
             .ok_or_else(|| VmError::InvalidState("place storage is unavailable".into()))?
-            .write_execution(&place.indices, value.clone())
+            .write_execution(&place.indices, value)
             .map_err(VmError::ScriptFailure)?;
-        let global = self
-            .generations
-            .get(&definition.generation)
-            .and_then(|program| program.global(definition.key))
-            .expect("resolved place definition remains available");
-        self.observe_path_memo_write(
-            fiber.id,
-            definition.generation,
-            global,
-            character,
-            implicit_target,
-            &place.indices,
-            &value,
-        );
+        if let Some(value) = observed_value {
+            let global = self
+                .generations
+                .get(&definition.generation)
+                .and_then(|program| program.global(definition.key))
+                .expect("resolved place definition remains available");
+            self.observe_path_memo_write(
+                fiber.id,
+                definition.generation,
+                global,
+                character,
+                implicit_target,
+                &place.indices,
+                &value,
+            );
+        }
         Ok(())
     }
 

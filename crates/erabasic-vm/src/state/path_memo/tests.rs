@@ -12,6 +12,9 @@ use erabasic_csv::{CsvLoadOptions, ProjectFiles, load_project};
 use erabasic_validator::{ValidationContext, validate_bytecode};
 struct RejectHost;
 
+#[path = "tests/owned_writes.rs"]
+mod owned_writes;
+
 #[test]
 fn borrowed_dependency_comparison_tracks_string_changes_and_missing_identity() {
     let (mut vm, artifact) = compile_vm("@SYSTEM_TITLE\nRETURN\n");

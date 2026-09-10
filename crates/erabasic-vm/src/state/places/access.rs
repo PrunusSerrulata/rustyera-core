@@ -172,20 +172,26 @@ impl Vm {
         };
         let implicit_target = definition.storage == BytecodeStorage::Character
             && character == self.target_character_for_generation(generation);
+        // Storage owns the value; retain a second copy only for an active observer.
+        let observed_value = self
+            .path_memo_is_active_for(fiber.id)
+            .then(|| value.clone());
         self.memory
             .cell_mut(generation, definition.key, definition.storage, character)
             .ok_or_else(|| VmError::InvalidState("variable storage is unavailable".into()))?
-            .write(indices, value.clone())
+            .write(indices, value)
             .map_err(VmError::InvalidState)?;
-        self.observe_path_memo_write(
-            fiber.id,
-            generation,
-            definition,
-            character,
-            implicit_target,
-            indices,
-            &value,
-        );
+        if let Some(value) = observed_value {
+            self.observe_path_memo_write(
+                fiber.id,
+                generation,
+                definition,
+                character,
+                implicit_target,
+                indices,
+                &value,
+            );
+        }
         Ok(())
     }
 
