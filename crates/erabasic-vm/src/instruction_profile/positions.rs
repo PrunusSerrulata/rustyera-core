@@ -6,8 +6,8 @@ use serde::Serialize;
 
 use crate::{GenerationId, Vm};
 
-const MAXIMUM_POSITIONS: usize = 2048;
-const MAXIMUM_LOCATIONS: usize = 64;
+const MAXIMUM_POSITIONS: usize = 65536;
+const MAXIMUM_LOCATIONS: usize = 1024;
 type PositionKey = (GenerationId, SymbolKey, usize);
 
 #[derive(Debug, Default)]
@@ -106,6 +106,7 @@ impl PositionProfile {
                     samples: samples.to_string(),
                 })
                 .collect(),
+            unprojected_positions: self.counts.len().saturating_sub(MAXIMUM_LOCATIONS),
             locations,
         }
     }
@@ -121,6 +122,7 @@ pub(super) struct PositionSnapshot {
     dropped_samples: String,
     counts: Vec<PositionCount>,
     locations: Vec<PositionLocation>,
+    unprojected_positions: usize,
 }
 
 #[derive(Debug, Serialize)]

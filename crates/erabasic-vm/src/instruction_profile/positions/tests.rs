@@ -20,6 +20,7 @@ pub(in crate::instruction_profile) fn maximum_snapshot() -> PositionSnapshot {
                 samples: u64::MAX.to_string(),
             })
             .collect(),
+        unprojected_positions: MAXIMUM_POSITIONS - MAXIMUM_LOCATIONS,
         locations: (0..MAXIMUM_LOCATIONS)
             .map(|index| PositionLocation {
                 position: PositionIdentity::from(key(index)),
@@ -60,6 +61,35 @@ fn position_windows_exclude_startup_and_checkpoint_dispatches_and_reset_capacity
 }
 
 #[test]
+fn position_capacity_loss_keeps_opcode_distribution_independent() {
+    let mut profile = crate::instruction_profile::InstructionProfile::default();
+    let function = SymbolKey::derive("profile", b"capacity");
+    profile.positions.boundary(true, 0);
+    for instruction in 0..MAXIMUM_POSITIONS {
+        profile
+            .positions
+            .sample(GenerationId(1), function, instruction);
+    }
+    profile.dispatches = 1023;
+    profile.observe(GenerationId(1), function, MAXIMUM_POSITIONS, 3);
+    assert!(profile.positions.incomplete);
+    assert_eq!(profile.positions.dropped_samples, 1);
+    assert!(!profile.incomplete);
+    let opcodes = serde_json::to_value(profile.opcodes.snapshot()).unwrap();
+    assert_eq!(opcodes["incomplete"], false);
+    assert_eq!(opcodes["droppedSamples"], "0");
+    assert_eq!(
+        opcodes["counts"],
+        serde_json::json!([{"opcode": 3, "samples": "1"}])
+    );
+    let mut independent = crate::instruction_profile::InstructionProfile::default();
+    independent.positions.boundary(true, 0);
+    independent.opcodes.mark_incomplete();
+    assert!(!independent.positions.incomplete);
+    assert!(!independent.incomplete);
+}
+
+#[test]
 fn position_overflow_is_explicit_and_clone_does_not_inherit_window() {
     let mut profile = crate::instruction_profile::InstructionProfile::default();
     let function = SymbolKey::derive("profile", b"test");
@@ -75,14 +105,14 @@ fn position_overflow_is_explicit_and_clone_does_not_inherit_window() {
     assert!(clone.positions.counts.is_empty());
     profile.positions.incomplete = false;
     profile.dispatches = u64::MAX;
-    profile.observe(GenerationId(1), function, 0);
+    profile.observe(GenerationId(1), function, 0, 0);
     assert!(profile.positions.incomplete);
 }
 
 fn artifact() -> erabasic_bytecode::BytecodeArtifact {
     crate::interpreter::literal_groupmatch_tests::compile_cursor_fixture(format!(
         "@SYSTEM_TITLE\n{}RETURN\n",
-        "RESULT = 42\n".repeat(80)
+        "RESULT = 42\n".repeat(MAXIMUM_LOCATIONS + 1)
     ))
 }
 
@@ -149,7 +179,7 @@ fn position_snapshot_resolves_indices_not_byte_offsets_and_missing_locations() {
 }
 
 #[test]
-fn position_projection_ranks_real_top64_and_bounds_unicode_scalars() {
+fn position_projection_ranks_bounded_locations_and_bounds_unicode_scalars() {
     let original = artifact();
     for length in [160, 161] {
         let mut artifact = original.clone();
@@ -170,6 +200,9 @@ fn position_projection_ranks_real_top64_and_bounds_unicode_scalars() {
         }
         let snapshot = vm.instruction_profile.positions.snapshot(&vm);
         assert_eq!(snapshot.locations.len(), MAXIMUM_LOCATIONS);
+        assert_eq!(snapshot.unprojected_positions, code_len - MAXIMUM_LOCATIONS);
+        assert!(!snapshot.incomplete);
+        assert_eq!(snapshot.dropped_samples, "0");
         for (rank, location) in snapshot.locations.iter().enumerate() {
             assert_eq!(
                 location.position.instruction,
@@ -195,18 +228,18 @@ fn position_observe_keeps_existing_phase_when_action_starts_between_intervals() 
     let mut profile = crate::instruction_profile::InstructionProfile::default();
     let function = SymbolKey::derive("profile", b"phase");
     for _ in 0..1000 {
-        profile.observe(GenerationId(1), function, 0);
+        profile.observe(GenerationId(1), function, 0, 0);
     }
     profile.positions.boundary(true, profile.dispatches);
     for _ in 0..23 {
-        profile.observe(GenerationId(1), function, 1);
+        profile.observe(GenerationId(1), function, 1, 0);
     }
     assert!(profile.positions.counts.is_empty());
-    profile.observe(GenerationId(1), function, 2);
+    profile.observe(GenerationId(1), function, 2, 0);
     assert_eq!(profile.positions.counts[&(GenerationId(1), function, 2)], 1);
     profile.positions.boundary(false, profile.dispatches);
     for _ in 0..1024 {
-        profile.observe(GenerationId(1), function, 3);
+        profile.observe(GenerationId(1), function, 3, 0);
     }
     assert_eq!(profile.counts[&(GenerationId(1), function)], 2);
     assert_eq!(profile.positions.counts.len(), 1);
@@ -226,12 +259,15 @@ impl crate::VmHost for NoHost {
 fn real_vm_clone_replacement_and_snapshot_restore_reset_diagnostic_identity_only() {
     let artifact = artifact();
     let mut vm = Vm::new(validated(&artifact), crate::VmConfig::default());
+    assert!(!vm.instruction_profile.opcodes.allocated());
+    let _ = vm.instruction_profile_snapshot();
+    assert!(!vm.instruction_profile.opcodes.allocated());
     let mut natives = crate::NativeServiceRegistry::for_artifact(&artifact);
     let before = vm.encode_unrestricted_snapshot(&natives).unwrap();
     vm.instruction_profile_boundary(true);
     for _ in 0..1024 {
         vm.instruction_profile
-            .observe(vm.current_generation, artifact.functions[0].key, 1);
+            .observe(vm.current_generation, artifact.functions[0].key, 1, 0);
     }
     let instance = vm.instruction_profile.instance;
     let after = vm.encode_unrestricted_snapshot(&natives).unwrap();
@@ -245,7 +281,7 @@ fn real_vm_clone_replacement_and_snapshot_restore_reset_diagnostic_identity_only
         &mut natives,
     )
     .unwrap();
-    let clone = vm.clone();
+    let mut clone = vm.clone();
     let replacement = Vm::new(validated(&artifact), crate::VmConfig::default());
     let identities: std::collections::BTreeSet<_> = [&vm, &clone, &replacement, &restored]
         .into_iter()
@@ -257,7 +293,30 @@ fn real_vm_clone_replacement_and_snapshot_restore_reset_diagnostic_identity_only
         assert_eq!(reset.instruction_profile.dispatches, 0);
         assert!(!reset.instruction_profile.positions.active);
         assert!(reset.instruction_profile.positions.counts.is_empty());
+        assert!(!reset.instruction_profile.opcodes.allocated());
+        let snapshot = serde_json::to_value(reset.instruction_profile_snapshot()).unwrap();
+        assert_eq!(snapshot["opcodes"]["counts"], serde_json::json!([]));
+        assert!(!reset.instruction_profile.opcodes.allocated());
     }
+    let source_profile = serde_json::to_value(vm.instruction_profile_snapshot()).unwrap();
+    assert!(vm.instruction_profile.opcodes.allocated());
+    assert_eq!(
+        source_profile["opcodes"]["counts"],
+        serde_json::json!([{"opcode": 0, "samples": "1"}])
+    );
+    for _ in 0..1024 {
+        clone.instruction_profile.observe(
+            clone.current_generation,
+            artifact.functions[0].key,
+            1,
+            3,
+        );
+    }
+    assert!(clone.instruction_profile.opcodes.allocated());
+    assert_eq!(
+        serde_json::to_value(vm.instruction_profile_snapshot()).unwrap(),
+        source_profile
+    );
     assert!(vm.instruction_profile.positions.active);
     vm.instruction_profile_boundary(false);
     let stopped = serde_json::to_value(vm.instruction_profile_snapshot()).unwrap();

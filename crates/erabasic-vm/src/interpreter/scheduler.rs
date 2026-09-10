@@ -156,6 +156,7 @@ impl Vm {
                     position.generation,
                     position.function,
                     position.instruction,
+                    position.encoded.opcode,
                 );
                 let host_before = report.host_calls;
                 let policy = ExecutionPolicy {

@@ -7,6 +7,9 @@ use serde::Serialize;
 
 use crate::{GenerationId, Vm};
 
+mod opcodes;
+use opcodes::{OpcodeProfile, OpcodeSnapshot};
+
 mod positions;
 use positions::{PositionProfile, PositionSnapshot};
 
@@ -22,6 +25,7 @@ pub(crate) struct InstructionProfile {
     incomplete: bool,
     counts: BTreeMap<(GenerationId, SymbolKey), u64>,
     positions: PositionProfile,
+    opcodes: OpcodeProfile,
 }
 
 impl Default for InstructionProfile {
@@ -33,6 +37,7 @@ impl Default for InstructionProfile {
             incomplete: false,
             counts: BTreeMap::new(),
             positions: PositionProfile::default(),
+            opcodes: OpcodeProfile::default(),
         }
     }
 }
@@ -59,14 +64,17 @@ impl InstructionProfile {
         generation: GenerationId,
         function: SymbolKey,
         instruction: usize,
+        opcode: u16,
     ) {
         let Some(next) = self.dispatches.checked_add(1) else {
             self.incomplete = true;
             self.positions.mark_incomplete();
+            self.opcodes.mark_incomplete();
             return;
         };
         self.dispatches = next;
         if self.dispatches.is_multiple_of(INTERVAL) {
+            self.opcodes.sample(opcode);
             self.sample(generation, function);
             self.positions.sample(generation, function, instruction);
         }
@@ -101,6 +109,7 @@ pub struct InstructionProfileSnapshot {
     counts: Vec<FunctionCount>,
     symbols: Vec<FunctionSymbol>,
     positions: PositionSnapshot,
+    opcodes: OpcodeSnapshot,
 }
 
 #[derive(Debug, Serialize)]
@@ -168,6 +177,7 @@ impl Vm {
             counts,
             symbols,
             positions: profile.positions.snapshot(self),
+            opcodes: profile.opcodes.snapshot(),
         }
     }
 }
@@ -187,7 +197,7 @@ mod tests {
             dispatches: u64::MAX,
             ..Default::default()
         };
-        profile.observe(GenerationId(1), key, 0);
+        profile.observe(GenerationId(1), key, 0, 0);
         assert!(profile.incomplete);
         assert!(profile.counts.is_empty());
         profile.incomplete = false;
@@ -222,9 +232,10 @@ mod tests {
             counts,
             symbols,
             positions: positions::tests::maximum_snapshot(),
+            opcodes: opcodes::tests::maximum_snapshot(),
         };
         // Leave room for the bounded JSONL boundary envelope.
-        assert!(serde_json::to_vec(&snapshot).unwrap().len() < 1024 * 1024 - 1024);
+        assert!(serde_json::to_vec(&snapshot).unwrap().len() < 32 * 1024 * 1024 - 1024);
     }
 
     #[test]
@@ -232,13 +243,13 @@ mod tests {
         let mut profile = InstructionProfile::default();
         let key = SymbolKey::derive("profile.test", b"first");
         for _ in 0..1023 {
-            profile.observe(GenerationId(1), key, 0);
+            profile.observe(GenerationId(1), key, 0, 0);
         }
         assert!(profile.counts.is_empty());
-        profile.observe(GenerationId(1), key, 0);
+        profile.observe(GenerationId(1), key, 0, 0);
         assert_eq!(profile.counts[&(GenerationId(1), key)], 1);
         for _ in 0..1024 {
-            profile.observe(GenerationId(2), key, 0);
+            profile.observe(GenerationId(2), key, 0, 0);
         }
         assert_eq!(profile.counts[&(GenerationId(2), key)], 1);
         assert_eq!(profile.dispatches, 2048);
@@ -264,5 +275,79 @@ mod tests {
         let existing = SymbolKey::derive("profile.test", &0usize.to_le_bytes());
         profile.sample(GenerationId(1), existing);
         assert_eq!(profile.counts[&(GenerationId(1), existing)], 2);
+    }
+    #[test]
+    fn opcode_samples_share_dispatch_phase_and_ignore_position_window_boundaries() {
+        let mut profile = InstructionProfile::default();
+        let key = SymbolKey::derive("profile.test", b"opcode-phase");
+        for _ in 0..INTERVAL - 1 {
+            profile.observe(GenerationId(1), key, 0, 1);
+        }
+        assert!(
+            serde_json::to_value(profile.opcodes.snapshot()).unwrap()["counts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        profile.positions.boundary(true, profile.dispatches);
+        profile.observe(GenerationId(1), key, 0, 3);
+        profile.positions.boundary(false, profile.dispatches);
+        for _ in 0..INTERVAL {
+            profile.observe(GenerationId(1), key, 0, 4);
+        }
+        let snapshot = serde_json::to_value(profile.opcodes.snapshot()).unwrap();
+        assert_eq!(
+            snapshot["counts"],
+            serde_json::json!([
+                {"opcode": 3, "samples": "1"}, {"opcode": 4, "samples": "1"}
+            ])
+        );
+        let clone = profile.clone();
+        assert_ne!(clone.instance, profile.instance);
+        assert!(
+            serde_json::to_value(clone.opcodes.snapshot()).unwrap()["counts"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        profile.dispatches = u64::MAX;
+        profile.observe(GenerationId(1), key, 0, 5);
+        assert!(
+            serde_json::to_value(profile.opcodes.snapshot()).unwrap()["incomplete"]
+                .as_bool()
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn function_capacity_loss_does_not_truncate_opcode_samples() {
+        let mut profile = InstructionProfile::default();
+        for index in 0..MAXIMUM_FUNCTIONS {
+            profile.sample(
+                GenerationId(1),
+                SymbolKey::derive("profile", &index.to_le_bytes()),
+            );
+            profile.opcodes.sample(1);
+        }
+        profile.dispatches = (MAXIMUM_FUNCTIONS as u64 + 1) * INTERVAL - 1;
+        profile.observe(
+            GenerationId(1),
+            SymbolKey::derive("profile", b"extra"),
+            0,
+            3,
+        );
+        assert!(profile.incomplete);
+        assert_eq!(profile.dropped_samples, 1);
+        let opcodes = serde_json::to_value(profile.opcodes.snapshot()).unwrap();
+        assert_eq!(opcodes["incomplete"], false);
+        assert_eq!(opcodes["droppedSamples"], "0");
+        assert_eq!(
+            opcodes["counts"][1],
+            serde_json::json!({"opcode": 3, "samples": "1"})
+        );
+        let mut independent = InstructionProfile::default();
+        independent.positions.boundary(true, 0);
+        independent.opcodes.mark_incomplete();
+        assert!(!independent.incomplete);
     }
 }
