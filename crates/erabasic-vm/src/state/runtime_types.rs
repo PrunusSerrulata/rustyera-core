@@ -266,10 +266,19 @@ pub(crate) struct BulkFillLoopPlan {
     pub counter: SymbolKey,
     pub counter_indices: Vec<u64>,
     pub target: SymbolKey,
-    pub value: VmValue,
+    pub operation: BulkArrayOperation,
     pub after_loop: usize,
     pub iteration_instructions: u64,
     pub stack_peak: usize,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum BulkArrayOperation {
+    Fill(VmValue),
+    Copy {
+        source: SymbolKey,
+        target_offset: i64,
+    },
 }
 
 #[derive(Clone, Debug)]

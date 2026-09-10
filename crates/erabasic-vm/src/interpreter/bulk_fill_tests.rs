@@ -1,5 +1,6 @@
 use super::literal_groupmatch_tests::compile_cursor_fixture;
 use super::*;
+mod copy;
 
 struct NoHost;
 impl VmHost for NoHost {
@@ -19,6 +20,14 @@ fn fixture_source(
     source: String,
     config: crate::VmConfig,
 ) -> (Vm, NativeServiceRegistry, SymbolKey) {
+    fixture_source_custom(source, config, |_| {})
+}
+
+fn fixture_source_custom(
+    source: String,
+    config: crate::VmConfig,
+    configure: impl FnOnce(&mut erabasic_bytecode::BytecodeArtifact),
+) -> (Vm, NativeServiceRegistry, SymbolKey) {
     let mut artifact = compile_cursor_fixture(source);
     // Keep both storage variants small; bytecode still comes from the real compiler and validator.
     for global in &mut artifact.globals {
@@ -30,6 +39,7 @@ fn fixture_source(
             global.initial_values.truncate(16);
         }
     }
+    configure(&mut artifact);
     artifact.refresh_ids().unwrap();
     let entry = artifact.functions[0].key;
     let target = artifact
@@ -63,6 +73,16 @@ fn dispatch_first_fill(
     natives: &mut NativeServiceRegistry,
     bulk: bool,
     allow_bulk: bool,
+) -> u64 {
+    dispatch_first_loop(vm, natives, bulk, allow_bulk, 3)
+}
+
+fn dispatch_first_loop(
+    vm: &mut Vm,
+    natives: &mut NativeServiceRegistry,
+    bulk: bool,
+    allow_bulk: bool,
+    backward: u64,
 ) -> u64 {
     let id = *vm.fibers.keys().next().unwrap();
     let entry = vm.fibers[&id].frames.last().unwrap().function;
@@ -124,7 +144,7 @@ fn dispatch_first_fill(
         used += 1 + additional;
         assert_eq!(fiber.frames.last().unwrap().instruction, after_loop);
         assert_eq!(vm.read_place(&fiber, &counter).unwrap(), end);
-        assert_eq!(fiber.backward_branches_without_progress, 3);
+        assert_eq!(fiber.backward_branches_without_progress, backward);
     } else {
         assert!(matches!(outcome, StepOutcome::Continue));
         used += 1;

@@ -32,7 +32,8 @@ pub(crate) use path_memo::path_memo_cache_usage;
 
 use planning::{
     build_function_memo_plans, case_insensitive_index, index_source_entries, literal_group_match,
-    memoized_indexed_read, path_memo_result_reads, simple_bulk_fill_loop, structured_scope_ranges,
+    memoized_indexed_read, path_memo_result_reads, simple_bulk_copy_loop, simple_bulk_fill_loop,
+    structured_scope_ranges,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -127,8 +128,8 @@ pub(crate) mod user_calls;
 
 pub use runtime_types::Vm;
 pub(crate) use runtime_types::{
-    ActivePathMemo, BulkFillLoopPlan, EventDispatch, EventDispatchEntry, Fiber, FiberState,
-    FindElementCacheKey, FindElementNeedle, ForLoopState, Frame, FunctionMemoEntry,
+    ActivePathMemo, BulkArrayOperation, BulkFillLoopPlan, EventDispatch, EventDispatchEntry, Fiber,
+    FiberState, FindElementCacheKey, FindElementNeedle, ForLoopState, Frame, FunctionMemoEntry,
     FunctionMemoKey, FunctionMemoPlan, LiteralGroupMatchCandidates, LiteralGroupMatchPlan,
     MemoValue, MemoizedIndexedReadPlan, PathMemoBaseKey, PathMemoCache, PathMemoDependency,
     PathMemoEntry, PathMemoHead, PathMemoMutation, PathMemoMutationGroup, PathMemoPlace,

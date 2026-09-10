@@ -1,5 +1,6 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
+mod bulk_copy;
 
 impl Vm {
     pub(super) fn reconcile_structured_jump(
@@ -210,7 +211,7 @@ impl Vm {
         .map_err(map_vm_error)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(super) fn try_bulk_fill_loop(
         &mut self,
         fiber: &mut Fiber,
@@ -261,42 +262,64 @@ impl Vm {
         ) else {
             return Ok(None);
         };
-        let Some((character, flat_start, flat_end)) =
-            bulk_fill_target_range(target, prefix_index, start, end)
-        else {
-            return Ok(None);
+        let fill = match &plan.operation {
+            crate::state::BulkArrayOperation::Fill(value) => Some(value),
+            crate::state::BulkArrayOperation::Copy {
+                source,
+                target_offset,
+            } => {
+                if !bulk_copy::copy_range(
+                    self,
+                    fiber,
+                    position.generation,
+                    program,
+                    target,
+                    (*source, *target_offset),
+                    (prefix_index, start, end),
+                ) {
+                    return Ok(None);
+                }
+                None
+            }
         };
-        // Preflight without mutating storage, so invalid characters/cells retain the ordinary
-        // StoreVariable failure position and all earlier per-instruction effects.
-        if self
-            .validate_script_character(target.storage, character.unwrap_or(0))
-            .is_err()
-            || self
-                .memory
-                .cell(position.generation, target, character.unwrap_or(0))
-                .is_none_or(|cell| {
-                    flat_end > cell.len()
-                        || cell.value_type != BytecodeType::Integer
-                        || (plan.value != VmValue::Integer(0) && cell.integers().is_none())
-                })
-        {
-            return Ok(None);
+        if let Some(value) = fill {
+            let Some((character, flat_start, flat_end)) =
+                bulk_fill_target_range(target, prefix_index, start, end)
+            else {
+                return Ok(None);
+            };
+            // Preflight without mutating storage, so invalid characters/cells retain the ordinary
+            // StoreVariable failure position and all earlier per-instruction effects.
+            if self
+                .validate_script_character(target.storage, character.unwrap_or(0))
+                .is_err()
+                || self
+                    .memory
+                    .cell(position.generation, target, character.unwrap_or(0))
+                    .is_none_or(|cell| {
+                        flat_end > cell.len()
+                            || cell.value_type != BytecodeType::Integer
+                            || (*value != VmValue::Integer(0) && cell.integers().is_none())
+                    })
+            {
+                return Ok(None);
+            }
+            self.fill_place_array_range(
+                fiber,
+                &PlaceDescriptor {
+                    backing: None,
+                    variable: target.key,
+                    indices: Vec::new(),
+                    character: character.and_then(|value| u64::try_from(value).ok()),
+                    fiber: Some(fiber.id),
+                    frame: None,
+                },
+                flat_start,
+                flat_end,
+                value.clone(),
+            )
+            .map_err(map_vm_error)?;
         }
-        self.fill_place_array_range(
-            fiber,
-            &PlaceDescriptor {
-                backing: None,
-                variable: target.key,
-                indices: Vec::new(),
-                character: character.and_then(|value| u64::try_from(value).ok()),
-                fiber: Some(fiber.id),
-                frame: None,
-            },
-            flat_start,
-            flat_end,
-            plan.value.clone(),
-        )
-        .map_err(map_vm_error)?;
         self.write_place(fiber, counter, VmValue::Integer(end))
             .map_err(map_vm_error)?;
         let frame = fiber.frames.last_mut().expect("frame exists");

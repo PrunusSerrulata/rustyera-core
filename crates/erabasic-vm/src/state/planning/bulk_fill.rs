@@ -69,14 +69,14 @@ pub(in crate::state) fn simple_bulk_fill_loop(
         counter: counter.key,
         counter_indices,
         target: target.key,
-        value: VmValue::Integer(value),
+        operation: BulkArrayOperation::Fill(VmValue::Integer(value)),
         after_loop,
         iteration_instructions: u64::try_from(after_loop.checked_sub(body_start)?).ok()?,
         stack_peak,
     })
 }
 
-fn supports_fill(
+pub(super) fn supports_fill(
     prefix: &BytecodeGlobal,
     counter: &BytecodeGlobal,
     target: &BytecodeGlobal,
@@ -128,7 +128,7 @@ fn supports_fill(
     true
 }
 
-fn constant_indexed_read(
+pub(super) fn constant_indexed_read(
     function: &BytecodeFunction,
     globals: &[u32],
     cursor: &mut usize,

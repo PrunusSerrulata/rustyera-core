@@ -183,6 +183,15 @@ impl ProgramGeneration {
                             &variable_global_indices,
                             &reference_variable_keys,
                         )
+                        .or_else(|| {
+                            simple_bulk_copy_loop(
+                                &artifact,
+                                function_index,
+                                instruction,
+                                &variable_global_indices,
+                                &reference_variable_keys,
+                            )
+                        })
                         .zip(u32::try_from(instruction).ok())
                         .map(|(plan, index)| (index, plan))
                     })
