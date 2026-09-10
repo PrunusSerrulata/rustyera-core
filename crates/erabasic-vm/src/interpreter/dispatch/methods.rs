@@ -1,7 +1,7 @@
 #[allow(clippy::wildcard_imports)]
 use super::super::*;
 use crate::state::user_calls::{
-    PendingUserCall, ResolvedUserCall, UserArgumentBinding, UserCallOrigin, resolve_user_call,
+    PendingUserCall, UserArgumentBinding, UserCallOrigin, resolve_user_call,
 };
 use erabasic_bytecode::{UserArgumentAdvance, UserArgumentSpec, UserCallSpec};
 use std::borrow::Cow;
@@ -131,8 +131,7 @@ impl Vm {
     ) -> Result<(), StepError> {
         let slot = operands.slot;
         let spec = &operands.spec;
-        let call = &operands.call;
-        let binding = call.bindings.get(slot);
+        let binding = pending_user_call(fiber).call.bindings.get(slot);
         match opcode {
             Opcode::GuardUserArgument => {
                 if matches!(spec.arguments[slot], UserArgumentSpec::Omitted) {
@@ -169,6 +168,7 @@ impl Vm {
                     return Err(invalid("user capture differs from the retained formal"));
                 }
                 let actual = pop(&mut fiber.frames.last_mut().expect("caller exists").stack)?;
+                let call = &pending_user_call(fiber).call;
                 let value = self
                     .capture_user_argument(
                         fiber,
@@ -203,7 +203,7 @@ impl Vm {
                 self.invoke_user_call(
                     fiber,
                     owner,
-                    call,
+                    &pending.call,
                     &spec.arguments,
                     &pending.captured,
                     UserCallOrigin::Bytecode {
@@ -219,6 +219,16 @@ impl Vm {
     }
 }
 
+fn pending_user_call(fiber: &Fiber) -> &PendingUserCall {
+    fiber
+        .frames
+        .last()
+        .expect("caller exists")
+        .user_calls
+        .last()
+        .expect("resolution checked")
+}
+
 fn advance_user_actual(
     fiber: &mut Fiber,
     operands: &UserConsumer<'_>,
@@ -226,7 +236,7 @@ fn advance_user_actual(
 ) -> Result<(), StepError> {
     let slot = operands.slot;
     let spec = &operands.spec;
-    let binding = operands.call.bindings.get(slot);
+    let binding = pending_user_call(fiber).call.bindings.get(slot);
     let reason = UserArgumentAdvance::decode(payload[6]).map_err(invalid)?;
     match reason {
         UserArgumentAdvance::Omitted => {
@@ -243,6 +253,7 @@ fn advance_user_actual(
             }
         }
     }
+    let retained = binding.is_some();
     let pending = fiber
         .frames
         .last_mut()
@@ -250,7 +261,7 @@ fn advance_user_actual(
         .user_calls
         .last_mut()
         .expect("resolution checked");
-    if binding.is_some() {
+    if retained {
         pending.captured.push(None);
     }
     pending.next_slot += 1;
@@ -260,7 +271,6 @@ fn advance_user_actual(
 struct UserConsumer<'program> {
     spec: Cow<'program, UserCallSpec>,
     slot: usize,
-    call: ResolvedUserCall,
 }
 
 fn checked_user_target(
@@ -347,11 +357,7 @@ fn decode_user_consumer<'program>(
             "user token, generation, origin or slot progress differs",
         ));
     }
-    Ok(UserConsumer {
-        spec,
-        slot,
-        call: pending.call.clone(),
-    })
+    Ok(UserConsumer { spec, slot })
 }
 
 fn abandon_user_call(

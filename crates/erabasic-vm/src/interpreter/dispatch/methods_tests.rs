@@ -9,9 +9,13 @@ impl VmHost for NoHost {
 }
 
 fn fixture() -> (Vm, NativeServiceRegistry, SymbolKey) {
-    let artifact = compile_cursor_fixture(
-        "@SYSTEM_TITLE\nTRYCALLFORM TARGET(1, 2)\nTRYCALLFORM ABSENT(3)\nRETURN RESULT\n@TARGET(ARG, ARG:1)\nRESULT = ARG + ARG:1\nRETURN RESULT\n".into(),
-    );
+    fixture_source(
+        "@SYSTEM_TITLE\nTRYCALLFORM TARGET(1, 2)\nTRYCALLFORM ABSENT(3)\nRETURN RESULT\n@TARGET(ARG, ARG:1)\nRESULT = ARG + ARG:1\nRETURN RESULT\n",
+    )
+}
+
+fn fixture_source(source: &str) -> (Vm, NativeServiceRegistry, SymbolKey) {
+    let artifact = compile_cursor_fixture(source.into());
     let entry = artifact
         .functions
         .iter()
@@ -228,6 +232,41 @@ fn decoded_user_call_origin_borrows_and_falls_back_without_weakening_checks() {
     assert_eq!(fallback_resolve, resolve);
     assert!(matches!(fallback, Cow::Owned(_)));
     assert_eq!(*fallback, expected);
+}
+
+#[test]
+fn dynamic_user_call_borrowed_bindings_keep_nested_capture_and_defaults() {
+    let source = "@SYSTEM_TITLE\nTRYCALLFORM TARGET(1, , NEXT_VALUE())\nRETURN RESULT\n\
+        @NEXT_VALUE\n#FUNCTION\nFLAG:0 += 1\nRETURNF 2\n\
+        @TARGET(ARG, ARGS = \"fallback\", ARG:1 = 3)\nRESULT = ARG * 10 + ARG:1\nRESULTS '= ARGS\nRETURN RESULT\n";
+    for maximum in [1, 16, 100_000] {
+        let (mut cached, mut natives, entry) = fixture_source(source);
+        let (mut uncached, mut other_natives, _) = fixture_source(source);
+        for program in uncached.generations.values_mut() {
+            Arc::make_mut(program).disable_user_call_specs_for_test();
+        }
+        cached.spawn_entry(entry, Vec::new()).unwrap();
+        uncached.spawn_entry(entry, Vec::new()).unwrap();
+        assert_eq!(
+            finish(&mut cached, &mut natives, maximum),
+            finish(&mut uncached, &mut other_natives, maximum)
+        );
+        let program = &cached.generations[&cached.current_generation];
+        for (name, value) in [
+            ("RESULT", VmValue::Integer(12)),
+            ("RESULTS", VmValue::String("fallback".into())),
+            ("FLAG", VmValue::Integer(1)),
+        ] {
+            let key = program
+                .artifact
+                .globals
+                .iter()
+                .find(|global| global.name == name)
+                .unwrap()
+                .key;
+            assert_eq!(cached.read_variable(key, &[0], None).unwrap(), value);
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
