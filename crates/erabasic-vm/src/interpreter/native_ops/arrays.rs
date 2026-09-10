@@ -331,7 +331,6 @@ pub(in super::super) fn execute_variable_fill(
         .generations
         .get(&generation)
         .and_then(|generation| generation.global(place.variable))
-        .cloned()
         .ok_or_else(|| VmError::InvalidState("VARSET variable is missing".into()))?;
     if !definition.mutable {
         return Err(script_native_error(
