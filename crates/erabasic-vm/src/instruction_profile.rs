@@ -7,6 +7,9 @@ use serde::Serialize;
 
 use crate::{GenerationId, Vm};
 
+mod positions;
+use positions::{PositionProfile, PositionSnapshot};
+
 const INTERVAL: u64 = 1024;
 const MAXIMUM_FUNCTIONS: usize = 4096;
 static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(1);
@@ -18,6 +21,7 @@ pub(crate) struct InstructionProfile {
     dropped_samples: u64,
     incomplete: bool,
     counts: BTreeMap<(GenerationId, SymbolKey), u64>,
+    positions: PositionProfile,
 }
 
 impl Default for InstructionProfile {
@@ -28,6 +32,7 @@ impl Default for InstructionProfile {
             dropped_samples: 0,
             incomplete: false,
             counts: BTreeMap::new(),
+            positions: PositionProfile::default(),
         }
     }
 }
@@ -49,14 +54,21 @@ impl Clone for InstructionProfile {
 
 impl InstructionProfile {
     #[inline]
-    pub(crate) fn observe(&mut self, generation: GenerationId, function: SymbolKey) {
+    pub(crate) fn observe(
+        &mut self,
+        generation: GenerationId,
+        function: SymbolKey,
+        instruction: usize,
+    ) {
         let Some(next) = self.dispatches.checked_add(1) else {
             self.incomplete = true;
+            self.positions.mark_incomplete();
             return;
         };
         self.dispatches = next;
         if self.dispatches.is_multiple_of(INTERVAL) {
             self.sample(generation, function);
+            self.positions.sample(generation, function, instruction);
         }
     }
 
@@ -88,6 +100,7 @@ pub struct InstructionProfileSnapshot {
     incomplete: bool,
     counts: Vec<FunctionCount>,
     symbols: Vec<FunctionSymbol>,
+    positions: PositionSnapshot,
 }
 
 #[derive(Debug, Serialize)]
@@ -106,6 +119,14 @@ struct FunctionSymbol {
 }
 
 impl Vm {
+    /// Start a fresh position window or stop it, without changing game state.
+    /// Call only at diagnostic action boundaries, outside any latency clock.
+    pub fn instruction_profile_boundary(&mut self, begin: bool) {
+        self.instruction_profile
+            .positions
+            .boundary(begin, self.instruction_profile.dispatches);
+    }
+
     /// Inspect bounded counters outside the measured action. No game state is changed.
     #[must_use]
     pub fn instruction_profile_snapshot(&self) -> InstructionProfileSnapshot {
@@ -138,7 +159,7 @@ impl Vm {
             })
             .collect();
         InstructionProfileSnapshot {
-            schema_version: 1,
+            schema_version: 2,
             instance: profile.instance.to_string(),
             interval: INTERVAL,
             dispatches: profile.dispatches.to_string(),
@@ -146,6 +167,7 @@ impl Vm {
             incomplete: profile.incomplete || profile.instance == 0,
             counts,
             symbols,
+            positions: profile.positions.snapshot(self),
         }
     }
 }
@@ -165,7 +187,7 @@ mod tests {
             dispatches: u64::MAX,
             ..Default::default()
         };
-        profile.observe(GenerationId(1), key);
+        profile.observe(GenerationId(1), key, 0);
         assert!(profile.incomplete);
         assert!(profile.counts.is_empty());
         profile.incomplete = false;
@@ -191,7 +213,7 @@ mod tests {
             })
             .collect();
         let snapshot = InstructionProfileSnapshot {
-            schema_version: 1,
+            schema_version: 2,
             instance: u64::MAX.to_string(),
             interval: INTERVAL,
             dispatches: u64::MAX.to_string(),
@@ -199,6 +221,7 @@ mod tests {
             incomplete: true,
             counts,
             symbols,
+            positions: positions::tests::maximum_snapshot(),
         };
         // Leave room for the bounded JSONL boundary envelope.
         assert!(serde_json::to_vec(&snapshot).unwrap().len() < 1024 * 1024 - 1024);
@@ -209,13 +232,13 @@ mod tests {
         let mut profile = InstructionProfile::default();
         let key = SymbolKey::derive("profile.test", b"first");
         for _ in 0..1023 {
-            profile.observe(GenerationId(1), key);
+            profile.observe(GenerationId(1), key, 0);
         }
         assert!(profile.counts.is_empty());
-        profile.observe(GenerationId(1), key);
+        profile.observe(GenerationId(1), key, 0);
         assert_eq!(profile.counts[&(GenerationId(1), key)], 1);
         for _ in 0..1024 {
-            profile.observe(GenerationId(2), key);
+            profile.observe(GenerationId(2), key, 0);
         }
         assert_eq!(profile.counts[&(GenerationId(2), key)], 1);
         assert_eq!(profile.dispatches, 2048);

@@ -152,8 +152,11 @@ impl Vm {
                     break;
                 }
                 #[cfg(feature = "vm-instruction-profile")]
-                self.instruction_profile
-                    .observe(position.generation, position.function);
+                self.instruction_profile.observe(
+                    position.generation,
+                    position.function,
+                    position.instruction,
+                );
                 let host_before = report.host_calls;
                 let policy = ExecutionPolicy {
                     allow_function_memo: !debug_checks_active,

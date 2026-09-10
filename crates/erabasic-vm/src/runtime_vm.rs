@@ -38,6 +38,11 @@ impl RuntimeVm {
     pub fn instruction_profile_snapshot(&self) -> crate::InstructionProfileSnapshot {
         self.vm.instruction_profile_snapshot()
     }
+
+    /// Change only the opt-in diagnostic window, never the runtime transaction.
+    pub fn instruction_profile_boundary(&mut self, begin: bool) {
+        self.vm.instruction_profile_boundary(begin);
+    }
 }
 
 /// Distinguish an unforked runtime from a fork whose artifact has no structured services.

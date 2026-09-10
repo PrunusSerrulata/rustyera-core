@@ -29,7 +29,7 @@ mod fastpaths;
 pub(crate) mod fault_hooks;
 mod host_calls;
 #[cfg(test)]
-mod literal_groupmatch_tests;
+pub(crate) mod literal_groupmatch_tests;
 mod lookup;
 pub(crate) mod map_calls;
 pub(crate) mod matching;

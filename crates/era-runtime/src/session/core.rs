@@ -14,6 +14,14 @@ impl RuntimeSession {
             .map(RuntimeVm::instruction_profile_snapshot)
     }
 
+    /// Open or close a diagnostic position window outside timed gameplay.
+    #[cfg(feature = "vm-instruction-profile")]
+    pub fn instruction_profile_boundary(&mut self, begin: bool) {
+        if let Some(vm) = self.vm.as_mut() {
+            vm.instruction_profile_boundary(begin);
+        }
+    }
+
     /// Return the current project's selectable traditional-save slot count.
     #[must_use]
     pub fn traditional_save_slot_count(&self) -> Option<u32> {
