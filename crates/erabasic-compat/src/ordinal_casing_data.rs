@@ -1,10 +1,10 @@
-#[path = "compat_text_data/bmp_high.rs"]
+#[path = "ordinal_casing_data/bmp_high.rs"]
 mod bmp_high;
-#[path = "compat_text_data/bmp_low.rs"]
+#[path = "ordinal_casing_data/bmp_low.rs"]
 mod bmp_low;
-#[path = "compat_text_data/latin.rs"]
+#[path = "ordinal_casing_data/latin.rs"]
 mod latin;
-#[path = "compat_text_data/supplementary.rs"]
+#[path = "ordinal_casing_data/supplementary.rs"]
 mod supplementary;
 
 pub(super) use bmp_high::ICU72_BMP_SIMPLE_UPPER_HIGH;

@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 
 mod calls;
 mod integer;
+mod ordinal_casing;
+pub use ordinal_casing::OrdinalCasing;
 
 pub use calls::{UserCallArgumentPolicy, UserCallArityDecision, UserCallArityDiagnostic};
 
@@ -131,7 +133,7 @@ impl CompatibilityIdentity {
     pub fn for_profile(profile: CompatibilityProfileId) -> Self {
         let version = match profile {
             CompatibilityProfileId::EmueraEm => 3,
-            CompatibilityProfileId::EmueraSkiaSnake => 14,
+            CompatibilityProfileId::EmueraSkiaSnake => 15,
         };
         Self {
             profile,
@@ -209,6 +211,12 @@ impl CompatibilityIdentity {
     #[must_use]
     pub const fn clamps_integer_rand(&self) -> bool {
         self.supports_snake_policy(14)
+    }
+
+    /// Snake v15 merges preset ERD names and prices before reverse lookup construction.
+    #[must_use]
+    pub const fn supports_snake_preset_erd(&self) -> bool {
+        self.supports_snake_policy(15)
     }
 
     /// Snake v13 shares the original save-version check and result contract.
@@ -347,7 +355,7 @@ mod tests {
             assert_ne!(previous.digest(), current.digest());
         }
         let snake = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
-        assert_eq!((snake.semantic_version, snake.policy_version), (14, 14));
+        assert_eq!((snake.semantic_version, snake.policy_version), (15, 15));
         assert!(snake.validate().is_ok());
         assert!(snake.uses_utf16_legacy_counting());
     }
@@ -374,10 +382,32 @@ mod tests {
         let mut snake = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
         assert!(snake.clamps_integer_rand());
         assert!(!CompatibilityIdentity::reference().clamps_integer_rand());
+        snake.semantic_version = 14;
+        snake.policy_version = 14;
+        assert!(snake.clamps_integer_rand());
         snake.semantic_version = 13;
         snake.policy_version = 13;
         assert!(!snake.clamps_integer_rand());
         assert!(snake.validate().is_err());
+    }
+
+    #[test]
+    fn preset_erd_policy_has_an_independent_v15_boundary() {
+        let current = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
+        assert_eq!((current.semantic_version, current.policy_version), (15, 15));
+        assert!(current.supports_snake_preset_erd());
+        assert!(current.validate().is_ok());
+        assert!(!CompatibilityIdentity::reference().supports_snake_preset_erd());
+        for (semantic, policy) in [(14, 14), (14, 15), (15, 14)] {
+            let mut old = current.clone();
+            old.semantic_version = semantic;
+            old.policy_version = policy;
+            if semantic == 14 && policy == 14 {
+                assert!(!old.supports_snake_preset_erd());
+            }
+            assert!(old.validate().is_err());
+            assert_ne!(old.digest(), current.digest());
+        }
     }
 
     #[test]
@@ -389,8 +419,8 @@ mod tests {
         assert_ne!(reference.arithmetic, snake.arithmetic);
         assert_eq!(reference.rng_algorithm, snake.rng_algorithm);
         assert!(snake.is_experimental());
-        assert_eq!(snake.semantic_version, 14);
-        assert_eq!(snake.policy_version, 14);
+        assert_eq!(snake.semantic_version, 15);
+        assert_eq!(snake.policy_version, 15);
         assert_eq!(snake.save_codec, SNAKE_INTEROP_SAVE_CODEC);
         assert!(snake.uses_snake_alias_rules());
         assert!(snake.supports_safe_sql());

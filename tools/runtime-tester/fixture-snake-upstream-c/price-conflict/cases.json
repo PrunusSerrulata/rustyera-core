@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "7b69ebd27378c03c32b6477b74901bfc3d33223c",
+    "snake": "57170459b3d5ca175a1c57933058b569088bee0e"
+  },
+  "requiredRustPolicy": {
+    "original": {
+      "semantic_version": 3,
+      "policy_version": 3
+    },
+    "snake": {
+      "semantic_version": 15,
+      "policy_version": 15
+    }
+  },
+  "allowedOracles": [
+    "original",
+    "snake"
+  ],
+  "loadExpect": {
+    "ok": true,
+    "result": {
+      "termination": "waitingInput"
+    }
+  },
+  "cases": [
+    {
+      "id": "preset-erd-price-conflict",
+      "group": "PRESET_ERD",
+      "targetBatch": "snake-upstream-C",
+      "requireSuccessfulLoad": true,
+      "allowedOracles": [
+        "original",
+        "snake"
+      ],
+      "rustCurrentPolicy": "snake_preset_erd_v15",
+      "snakeTargetStatus": "source_derived_candidate_not_executed",
+      "expectedSource": "5717045 loadDataTo records a present price column even for zero; mergePresetErdFile only fills source -1, warns only if source 0 (CSV) differs, silently retains a first ERD price (source 1).",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PRESET_ERD_CASE",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULTS:10",
+              "RESULTS:11"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 0,
+                  "RESULT:11": 0,
+                  "RESULTS:10": "csv_zero",
+                  "RESULTS:11": "csv_absent"
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 0,
+                  "RESULT:11": 5,
+                  "RESULTS:10": "csv_zero",
+                  "RESULTS:11": "csv_absent"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "expectedLoadDiagnosticsSourceContract": {
+    "original": [],
+    "snake": [
+      {
+        "kind": "preset_price_conflict_csv",
+        "file": "erb/a/ITEMPRICE.erd",
+        "sourceLineOneBased": 1,
+        "rustCode": "csv.duplicateindex"
+      }
+    ],
+    "note": "Explicit CSV zero conflicts with ERD 4 and remains zero. Missing CSV price accepts 5; later ERD 99 is ignored silently. Parent acceptor owns wire-level matching."
+  }
+}

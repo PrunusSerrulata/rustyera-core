@@ -12,6 +12,7 @@ mod gamebase;
 mod input;
 mod loader;
 mod options;
+mod preset_erd;
 mod reader;
 mod special;
 mod tables;

@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "7b69ebd27378c03c32b6477b74901bfc3d33223c",
+    "snake": "57170459b3d5ca175a1c57933058b569088bee0e"
+  },
+  "requiredRustPolicy": {
+    "original": {
+      "semantic_version": 3,
+      "policy_version": 3
+    },
+    "snake": {
+      "semantic_version": 15,
+      "policy_version": 15
+    }
+  },
+  "allowedOracles": [
+    "snake"
+  ],
+  "loadExpect": {
+    "ok": true,
+    "result": {
+      "termination": "waitingInput"
+    }
+  },
+  "cases": [
+    {
+      "id": "preset-erd-named-character",
+      "group": "PRESET_ERD",
+      "targetBatch": "snake-upstream-C",
+      "requireSuccessfulLoad": true,
+      "allowedOracles": [
+        "snake"
+      ],
+      "rustCurrentPolicy": "snake_preset_erd_v15",
+      "snakeTargetStatus": "source_derived_candidate_not_executed",
+      "expectedSource": "5717045 ConstantData.cs: mergePresetErdFromErbDir precedes reverse-table construction, which precedes loadCharacterData. ABL uses a name absent from CSV and ALS, so loading value 7 at index 5 proves the merge is visible during character-template parsing. Snake-only by explicit parent decision; original existing-name character loading is covered in main.",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PRESET_ERD_CASE",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULTS:10",
+              "RESULTS:11"
+            ]
+          },
+          "expect": {
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 7,
+                  "RESULT:11": 5,
+                  "RESULTS:10": "only_erd_ability",
+                  "RESULTS:11": "erd_named_character"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "expectedLoadDiagnosticsSourceContract": {
+    "original": [],
+    "snake": [],
+    "note": "No source loading warnings expected. Existing profile setup notices are not source diagnostics. Parent acceptor must inspect actual raw schemas; this metadata is not interpreted by the generic oracle runner."
+  }
+}

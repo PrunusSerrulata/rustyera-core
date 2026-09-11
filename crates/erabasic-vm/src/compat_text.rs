@@ -3,8 +3,7 @@
 //! MATCH string elements remain ordinal. Source-derived, not oracle-verified.
 #![forbid(unsafe_code)]
 mod culture_search;
-#[path = "compat_text_data.rs"]
-mod data;
+pub(crate) use erabasic_compat::OrdinalCasing;
 mod search_boundaries;
 mod search_boundary_data;
 
@@ -216,73 +215,4 @@ pub(crate) fn map_entry_at_utf16_index(
         budget.copy(&entry[..key_end])?,
         budget.copy(&entry[value_start..])?,
     ))
-}
-
-/// A complete, sorted sparse BMP simple-uppercase table; omitted entries are identity.
-/// This is immutable product data, never an input supplied by scripts or frontends.
-pub(crate) struct OrdinalCasing {
-    bmp_simple_upper_low: &'static [(u16, u16)],
-    bmp_simple_upper_high: &'static [(u16, u16)],
-}
-
-impl OrdinalCasing {
-    /// Fixed .NET 8 ICU-mode casing, bound to Unicode 15 / ICU72 input.
-    pub(crate) const fn fixed_dotnet8_icu72() -> Self {
-        Self {
-            bmp_simple_upper_low: data::ICU72_BMP_SIMPLE_UPPER_LOW,
-            bmp_simple_upper_high: data::ICU72_BMP_SIMPLE_UPPER_HIGH,
-        }
-    }
-
-    pub(crate) fn equals(&self, left: &str, right: &str, ignore_case: bool) -> bool {
-        if !ignore_case || left == right {
-            return left == right;
-        }
-        // .NET StringComparer rejects different UTF-16 lengths before casing.
-        if left.encode_utf16().count() != right.encode_utf16().count() {
-            return false;
-        }
-        let mut left = left.chars();
-        let mut right = right.chars();
-        loop {
-            match (left.next(), right.next()) {
-                (None, None) => return true,
-                (Some(a), Some(b)) if a == b => {}
-                (Some(a), Some(b))
-                    if a.len_utf16() == b.len_utf16() && self.upper(a) == self.upper(b) => {}
-                _ => return false,
-            }
-        }
-    }
-
-    fn upper(&self, value: char) -> u32 {
-        let scalar = u32::from(value);
-        if scalar > 0xffff {
-            // In ICU mode, .NET uses its own CharUnicodeInfo table for pairs.
-            return data::DOTNET_SUPPLEMENTARY
-                .binary_search_by_key(&scalar, |pair| pair.0)
-                .map_or(scalar, |index| data::DOTNET_SUPPLEMENTARY[index].1);
-        }
-        let Ok(unit) = u16::try_from(scalar) else {
-            return scalar;
-        };
-        if unit < 256 {
-            return u32::from(data::LATIN_UPPER[usize::from(unit)]);
-        }
-        let page = usize::from(unit >> 8);
-        // These pages are identity even if a newer ICU adds a casing mapping.
-        if data::NO_CASING_PAGES[page / 8] & (0x80 >> (page % 8)) != 0
-            || matches!(unit, 0x0131 | 0x017f)
-        {
-            return scalar;
-        }
-        let table = if unit < 0x214e {
-            self.bmp_simple_upper_low
-        } else {
-            self.bmp_simple_upper_high
-        };
-        table
-            .binary_search_by_key(&unit, |pair| pair.0)
-            .map_or(scalar, |index| u32::from(table[index].1))
-    }
 }

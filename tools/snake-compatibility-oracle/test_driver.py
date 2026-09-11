@@ -598,12 +598,15 @@ class DriverTests(unittest.TestCase):
         validate_rust_evidence(modern_snake, "snake", fixture, 1,
                                {"semantic_version": 12, "policy_version": 12})
         current_snake = {**modern_snake, "profile": {**modern_snake["profile"],
-                         "semantic_version": 14, "policy_version": 14}}
+                         "semantic_version": 15, "policy_version": 15}}
         validate_rust_evidence(current_snake, "snake", fixture, 1,
-                               {"semantic_version": 14, "policy_version": 14})
+                               {"semantic_version": 15, "policy_version": 15})
         with self.assertRaises(ValueError):
             validate_rust_evidence(current_snake, "snake", fixture, 1,
                                    {"semantic_version": 13, "policy_version": 13})
+        with self.assertRaises(ValueError):
+            validate_rust_evidence(current_snake, "snake", fixture, 1,
+                                   {"semantic_version": 14, "policy_version": 14})
         for candidate in (modern_snake, current_snake):
             for fields in ({"services": []}, {"save_codec": "rustyera_envelope_v1:emuera1808"},
                            {"arithmetic": "wrapping_i64_v1"}, {"policy_version": 11}):

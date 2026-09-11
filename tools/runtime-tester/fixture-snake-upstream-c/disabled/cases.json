@@ -1,0 +1,123 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "7b69ebd27378c03c32b6477b74901bfc3d33223c",
+    "snake": "57170459b3d5ca175a1c57933058b569088bee0e"
+  },
+  "requiredRustPolicy": {
+    "original": {
+      "semantic_version": 3,
+      "policy_version": 3
+    },
+    "snake": {
+      "semantic_version": 15,
+      "policy_version": 15
+    }
+  },
+  "allowedOracles": [
+    "original",
+    "snake"
+  ],
+  "loadExpect": {
+    "ok": true,
+    "result": {
+      "termination": "waitingInput"
+    }
+  },
+  "cases": [
+    {
+      "id": "preset-erd-disabled",
+      "group": "PRESET_ERD",
+      "targetBatch": "snake-upstream-C",
+      "requireSuccessfulLoad": true,
+      "allowedOracles": [
+        "original",
+        "snake"
+      ],
+      "rustCurrentPolicy": "snake_preset_erd_v15",
+      "snakeTargetStatus": "source_derived_candidate_not_executed",
+      "expectedSource": "Same source payloads as main, with Use ERD:NO. ConstantData.LoadData guards preset merging with Config.UseERD; original has no preset merge in either setting.",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "PRESET_ERD_CASE",
+            "watch": [
+              "RESULTS:10",
+              "RESULTS:11",
+              "RESULTS:12",
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15",
+              "RESULT:16",
+              "RESULT:17",
+              "RESULT:18",
+              "RESULT:19",
+              "RESULTS:13"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:10": "csv_abl",
+                  "RESULTS:11": "",
+                  "RESULTS:12": "",
+                  "RESULT:10": 0,
+                  "RESULT:11": 2,
+                  "RESULT:12": 0,
+                  "RESULT:13": -1,
+                  "RESULT:14": 0,
+                  "RESULT:15": 0,
+                  "RESULT:16": 20,
+                  "RESULT:17": 0,
+                  "RESULT:18": -1,
+                  "RESULT:19": 4,
+                  "RESULTS:13": "preset_char"
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULTS:10": "csv_abl",
+                  "RESULTS:11": "",
+                  "RESULTS:12": "",
+                  "RESULT:10": 0,
+                  "RESULT:11": 2,
+                  "RESULT:12": 0,
+                  "RESULT:13": -1,
+                  "RESULT:14": 0,
+                  "RESULT:15": 0,
+                  "RESULT:16": 20,
+                  "RESULT:17": 0,
+                  "RESULT:18": -1,
+                  "RESULT:19": 4,
+                  "RESULTS:13": "preset_char"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "expectedLoadDiagnosticsSourceContract": {
+    "original": [],
+    "snake": [],
+    "note": "No source loading warnings expected. Existing profile setup notices are not source diagnostics. Parent acceptor must inspect actual raw schemas; this metadata is not interpreted by the generic oracle runner."
+  }
+}

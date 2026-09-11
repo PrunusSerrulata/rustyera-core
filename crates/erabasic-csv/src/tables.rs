@@ -5,6 +5,7 @@ use erabasic_data::{NameAlias, NameTable, NameTableKind, ProjectSchema};
 use crate::{
     CsvDiagnostic, CsvDiagnosticCode, CsvDiagnosticSeverity, CsvLoadOptions,
     input::FileIndex,
+    preset_erd::{ItemPrices, merge_preset_erd},
     reader::{EnabledLine, enabled_lines},
 };
 
@@ -58,7 +59,7 @@ pub(crate) fn load_name_tables(
         .index_spaces
         .get(&NameTableKind::Item)
         .map_or(0, |space| space.length);
-    let mut item_prices = vec![0; item_length];
+    let mut item_prices = ItemPrices::new(item_length);
 
     for (filename, kind) in TABLE_FILES {
         let Some(file) = files.csv_file(filename) else {
@@ -91,6 +92,9 @@ pub(crate) fn load_name_tables(
             );
         }
     }
+    if options.use_erd && options.compatibility.supports_snake_preset_erd() {
+        merge_preset_erd(files, &mut tables, &mut item_prices, options, diagnostics);
+    }
     // STR is deliberately excluded in the reference because its values are data rather
     // than symbolic names.
     for (kind, table) in &mut tables {
@@ -98,7 +102,7 @@ pub(crate) fn load_name_tables(
             table.rebuild_lookup();
         }
     }
-    (tables, item_prices)
+    (tables, item_prices.values)
 }
 
 fn load_table(
@@ -106,7 +110,7 @@ fn load_table(
     content: &str,
     kind: NameTableKind,
     table: &mut NameTable,
-    item_prices: &mut [i64],
+    item_prices: &mut ItemPrices,
     options: &CsvLoadOptions,
     diagnostics: &mut Vec<CsvDiagnostic>,
 ) {
@@ -166,7 +170,7 @@ fn load_table(
             && let Some(price) = tokens.next()
         {
             match price.trim().parse::<i64>() {
-                Ok(price) => item_prices[index_usize] = price,
+                Ok(price) => item_prices.set_csv(index_usize, price),
                 Err(_) => diagnostics.push(at_line(
                     CsvDiagnosticCode::InvalidInteger,
                     CsvDiagnosticSeverity::Warning,

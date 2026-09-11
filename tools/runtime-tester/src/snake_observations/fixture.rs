@@ -13,6 +13,8 @@ use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 
+mod preset_erd;
+
 #[derive(Deserialize)]
 pub(super) struct Fixture {
     pub(super) version: u32,
@@ -130,6 +132,7 @@ fn load_fixture_files(root: &Path, group: &str) -> AuditResult<Vec<SubmittedFile
         "TOINT" => "toint",
         "GETKEY" => "getkey",
         "INDEX" => "index",
+        "PRESET_ERD" => "preset_erd",
         "METHODS" => "methods",
         "COLUMNS" => "columns",
         "FAULT_HOOKS" => "fault_hooks",
@@ -149,6 +152,9 @@ fn load_fixture_files(root: &Path, group: &str) -> AuditResult<Vec<SubmittedFile
             category,
             fs::read_to_string(root.join(&path))?,
         ));
+    }
+    if group == "PRESET_ERD" {
+        preset_erd::load_inputs(root, &mut files)?;
     }
     if group == "UPSTREAM_A" {
         for (path, category) in [
