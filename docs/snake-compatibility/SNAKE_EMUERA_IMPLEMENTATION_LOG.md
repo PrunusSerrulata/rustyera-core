@@ -52,6 +52,7 @@ core SHA、库/bundle 路径及后续发布绑定变更，须在对应实施批�
 | [原版 upstream C](#upstream-c) | TUI、WASM 与 Tauri 最终绑定 | 已完成 | 2026-09-11 / Codex | 四条真实客户端链路通过；TUI 验证旧缓存回退及旧快照拒绝 |
 | [原版 upstream B](#upstream-b) | UTF-16 传统字符串语义 | 已完成 | 2026-09-11 / Codex | 四编码原版 8、蛇版 4 固定观察验收；最终客户端绑定由 C 推进 |
 | [原版 upstream A](#upstream-a) | 别名与普通存档版本检查 | 已完成 | 2026-09-11 / Codex | 原版 9、蛇版 5 固定差分通过；B/C 独立推进 |
+| [蛇版 upstream A](#snake-upstream-a) | 复用 UTF-16 字符串与 CHKDATA 版本检查 | 已完成 | 2026-09-11 / Codex | 32 个双参考观察验收；8 个孤立代理项差异保留，客户端绑定属于 D |
 
 <a id="batch-0"></a>
 
@@ -1915,6 +1916,56 @@ StrForm padding 保留可移植显示列宽，U 系列不变。TOINT/ISNUMERIC �
 C 无新增语言有意差异；B 的孤立代理项 U+FFFD 差异仍适用，传统存档格式不变。
 所有本批必需客户端结果齐全；未开展自主游戏、性能循环、额外平台或全面 snake Unicode
 差分。A/B oracle 身份与证据原样保留，本批不重复相同输入 oracle 捕获。未推送远端。
+
+<a id="snake-upstream-a"></a>
+
+## 蛇版 Skiav13 A：复用字符串与普通存档检查
+
+计划入口：[Skiav13 跟进](SNAKE_EMUERA_MIGRATION_PLAN.md#snake-upstream-5717045)。
+2026-09-11 完成。两个局部功能共用一次审查和测试预算，分别提交；snake
+semantic/policy 12→13，原版仍为 3，传统存档格式和 CHKCHARADATA 不变。
+
+- `7021063`：analyzer、Native 和动态 FORM 复用原版传统字符串的 UTF-16 编码往返
+  计数；共用原版四张宽度表。实际蛇版 .NET 8 provider 的 262,144 个记录与既有表
+  全部一致，未复制映射或改写原版 provider 来源记录。U 系列和显示列宽不变。
+- `72564c8`：普通 CHKDATA 复用原版头检查、版本判断、RESULT:1 写入及清零路径。
+  新存档 fixture 按 binary 属性提交，索引及工作树的原始字节已核对。
+- 唯一独立重构审查要求补齐 policy 13 的完整 codec/services 校验及负例、保护存档
+  fixture 字节；首条测试前均落实。未追加第二次审查。
+
+### 首次全量与定向复验
+
+首次 `cargo test --workspace --locked --offline` 在旧字符串期望处停止：此前
+**1,355 passed / 1 failed / 0 ignored**。未重跑全量，后续未到达的无关 target/doc-test
+不宣称通过。旧 Native 及动态 STRFIND 预期改为新蛇版规则后，失败项定向通过；
+受影响 FORM 集合首次 109 passed / 1 failed，最后失败单项修正后通过。新增 VM 测试
+曾因 RETURN 覆盖 RESULT:0 失败，改用 RESULT:10 后通过。产品算法未因这些失败改动。
+fmt、workspace check、Clippy、兼容身份、存档、常量折叠、VM 最小回归、探针构建与
+比较器测试通过；测试空串构造的 lint 失败修复后仅复验相应 Clippy。
+
+### 双参考与差异
+
+原版语义 `7b69ebd27378c03c32b6477b74901bfc3d33223c` / wrapper `c94bf1de`；
+蛇版语义 `57170459b3d5ca175a1c57933058b569088bee0e` / wrapper `851c40c9`。
+两套 smoke 与身份检查通过，各自独立 publish、Wine prefix、fixture 副本；seed 123456。
+8 组 CHKDATA × 两个 profile 共 16 个差分一致；四种编码的字符串及孤立代理项 ×
+两个 profile 共 16 个验收，其中 8 个孤立代理项观察保留原始 different，严格限定为
+Rust U+FFFD 与参考不可表示代理项的既有差异。未把该差异改写为完全一致。
+
+简中蛇版参考启动曾被旧 headless 驱动的“连续两次相同观察”规则提前终止；按当前根
+规范，该规则仅用于 Web/Tauri。驱动保留请求和总预算超时，并新增模拟时钟回归；
+失败 oracle 单独重试通过，复用已有 Rust 捕获。成功捕获、smoke、provider 和构建
+均未为整理结果重跑。两个参考仓库在 A 实施期间无额外源码修改。
+
+### 证据与交付边界
+
+`.audit/snake-upstream-5717045-20260911/a/final-evidence.json` 记录每个观察的摘要、
+原始 verdict、源码内容绑定、首次全量结果及命令索引；`commands.ndjson` 保留完整
+命令、环境、实际退出与首失败。收集时累计约 29 分钟，未超过共享 60 分钟预算。
+探针 SHA256 为 `9c589de3e4f58bd8fa6834659a86f7b9d16358295a214771e4e967cfefe51365`。
+采集基于 `b7aa6288` 加最终内容摘要，随后提交仅改变 Git 身份，未以提交作为重建理由。
+本批范围已完成，B/C/D 的 RAND、预设 ERD 和客户端集成尚不属于本批验收；不代表
+完整蛇版语义或蛇版 TW 可玩性。未推送、未修改发布版本，最终客户端 pin 由 D 统一更新。
 
 <a id="batch-7"></a>
 
