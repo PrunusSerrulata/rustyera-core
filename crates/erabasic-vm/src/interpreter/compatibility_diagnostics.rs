@@ -9,6 +9,8 @@ use erabasic_compat::{IntegerArithmeticWarning, UserCallArityDiagnostic};
 pub(crate) enum CompatibilityWarning {
     Arithmetic(IntegerArithmeticWarning),
     ExcessUserArguments,
+    RandVariable,
+    RandFunction,
 }
 
 impl CompatibilityWarning {
@@ -24,6 +26,16 @@ impl CompatibilityWarning {
                 "compat.arithmetic.divide_by_zero",
                 "integer division or remainder by zero returned zero under snake policy",
             ),
+            Self::RandVariable => (
+                3,
+                "compat.rand.variable_range",
+                "RAND variable maximum was nonpositive; snake policy returned zero",
+            ),
+            Self::RandFunction => (
+                4,
+                "compat.rand.function_range",
+                "RAND function range was empty or reversed; snake policy returned its minimum",
+            ),
             Self::ExcessUserArguments => (
                 2,
                 "compat.call.excess_arguments",
@@ -35,7 +47,7 @@ impl CompatibilityWarning {
 
 impl Vm {
     pub(super) fn queue_compatibility_warning(&mut self, warning: CompatibilityWarning) {
-        // The queue contains at most the three distinct warning kinds, regardless of
+        // The queue contains at most the five distinct warning kinds, regardless of
         // nested expression size. Diagnostics themselves never enter game history.
         if !self.pending_compatibility_warnings.contains(&warning) {
             self.pending_compatibility_warnings.push(warning);
@@ -93,7 +105,21 @@ impl Vm {
                 position.instruction,
                 tag,
             );
-            if self.compatibility_warning_sites.insert(site) {
+            // RAND warnings belong to the session, not a source location or generation.
+            let first = match warning {
+                CompatibilityWarning::RandVariable | CompatibilityWarning::RandFunction => {
+                    let mask = if warning == CompatibilityWarning::RandVariable {
+                        1
+                    } else {
+                        2
+                    };
+                    let first = self.rand_warning_mask & mask == 0;
+                    self.rand_warning_mask |= mask;
+                    first
+                }
+                _ => self.compatibility_warning_sites.insert(site),
+            };
+            if first {
                 events.push(VmEvent::Diagnostic {
                     fiber,
                     code: code.into(),

@@ -114,7 +114,8 @@ impl Builder<'_> {
                 } else {
                     arguments
                         .iter()
-                        .filter_map(|argument| match argument {
+                        .enumerate()
+                        .filter_map(|(index, argument)| match argument {
                             HirCallArgument::Value(argument) => {
                                 Some(self.lower_expression(argument, fallback))
                             }
@@ -122,7 +123,17 @@ impl Builder<'_> {
                                 Some(self.lower_place(place, expression.location))
                             }
                             HirCallArgument::Omitted if builtin => {
-                                self.emit(opcode::push_integer(i64::MIN), expression.location);
+                                // Native bytecode carries no omission payload. RAND's
+                                // omitted lower bound has the exact value default zero;
+                                // apply it from HIR metadata, never from a user integer.
+                                let value = if index == 0
+                                    && matches!(target, CallTarget::Builtin { name } if name == "RAND")
+                                {
+                                    0
+                                } else {
+                                    i64::MIN
+                                };
+                                self.emit(opcode::push_integer(value), expression.location);
                                 Some(BytecodeType::Integer)
                             }
                             HirCallArgument::Omitted => None,

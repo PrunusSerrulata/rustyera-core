@@ -11,7 +11,7 @@ pub fn canonical_native_contract(name: &str) -> OperationContract {
         name.starts_with("map_") || name.starts_with("xml_") || name.starts_with("dt_");
     let random = matches!(
         name.as_str(),
-        "rand" | "randomize" | "initrand" | "dumprand"
+        "rand" | "__rand_variable" | "randomize" | "initrand" | "dumprand"
     );
     let variable_read = matches!(name.as_str(), "getvar" | "getvars" | "existmeth");
     let variable_mutation = matches!(

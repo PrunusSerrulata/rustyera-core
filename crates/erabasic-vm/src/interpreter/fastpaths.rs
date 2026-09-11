@@ -2,6 +2,7 @@
 use super::*;
 mod bulk_copy;
 mod literal_select;
+mod rand;
 
 impl Vm {
     pub(super) fn reconcile_structured_jump(
@@ -67,6 +68,14 @@ impl Vm {
         omitted_arguments: Vec<usize>,
         natives: &mut NativeServiceRegistry,
     ) -> Result<(NativeReady, Option<Vec<u8>>), StepError> {
+        // Check the provider before applying language policy; a missing provider
+        // remains a host-contract failure even when the sample would be clamped.
+        if natives.contains(key)
+            && let Some(value) =
+                self.clamp_integer_rand(fiber, &import.name, &arguments, &omitted_arguments)
+        {
+            return Ok((NativeReady::value(VmValue::Integer(value)), None));
+        }
         let places = native_place_views(self, fiber, &arguments).map_err(map_vm_error)?;
         let implicit_place_names = natives
             .implicit_place_names(key)

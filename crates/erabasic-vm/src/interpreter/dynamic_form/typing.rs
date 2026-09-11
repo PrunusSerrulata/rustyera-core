@@ -109,7 +109,9 @@ impl<'a> TypeAnalysis<'a> {
                     ExprKind::Variable { indices, .. } => indices.as_slice(),
                     _ => &[],
                 };
-                if self.probe {
+                let rand_variable = definition.name.eq_ignore_ascii_case("RAND")
+                    && definition.storage == erabasic_bytecode::BytecodeStorage::Calculated;
+                if self.probe || rand_variable {
                     probe_variable_shape(self.program, definition, indices)?;
                 }
                 for index in indices {
@@ -120,7 +122,21 @@ impl<'a> TypeAnalysis<'a> {
                         return Err(bad_type("runtime variable index must be an integer"));
                     }
                 }
-                Ok(definition.value_type)
+                if rand_variable && !self.probe {
+                    let shapes = indices
+                        .iter()
+                        .map(|_| {
+                            Some(RuntimeExpressionShape {
+                                value_type: BytecodeType::Integer,
+                                variable: false,
+                                mutable: false,
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    self.native_call("RAND", &shapes, expression.span)
+                } else {
+                    Ok(definition.value_type)
+                }
             }
             ExprKind::Group(inner) => self.expression(inner, depth + 1),
             ExprKind::Unary { op, operand } => {
@@ -300,6 +316,18 @@ impl<'a> TypeAnalysis<'a> {
             )
             .map_err(map_vm_error)?;
             return Ok(result);
+        }
+        if name.eq_ignore_ascii_case("RAND")
+            && self
+                .program
+                .artifact
+                .manifest
+                .compatibility
+                .clamps_integer_rand()
+            && !self.program.artifact.call_compatibility.compatible_rand
+            && args.first().is_some_and(Option::is_none)
+        {
+            return Err(bad_type("RAND first source argument may not be omitted"));
         }
         if let Some(operation) = erabasic_bytecode::BitOperation::from_name(name) {
             if !self.probe {

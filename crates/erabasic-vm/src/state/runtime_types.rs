@@ -176,6 +176,7 @@ pub struct Vm {
     pub(crate) next_request: u64,
     pub(crate) next_generation: u64,
     pub(crate) pending_reload: Option<HotReloadPlan>,
+    pub(crate) rand_warning_mask: u8,
     pub(crate) compatibility_warning_sites: BTreeSet<(GenerationId, SymbolKey, usize, u8)>,
     pub(crate) pending_compatibility_warnings:
         Vec<crate::interpreter::compatibility_diagnostics::CompatibilityWarning>,

@@ -131,7 +131,7 @@ impl CompatibilityIdentity {
     pub fn for_profile(profile: CompatibilityProfileId) -> Self {
         let version = match profile {
             CompatibilityProfileId::EmueraEm => 3,
-            CompatibilityProfileId::EmueraSkiaSnake => 13,
+            CompatibilityProfileId::EmueraSkiaSnake => 14,
         };
         Self {
             profile,
@@ -203,6 +203,12 @@ impl CompatibilityIdentity {
     pub const fn uses_utf16_legacy_counting(&self) -> bool {
         (matches!(self.profile, CompatibilityProfileId::EmueraEm) && self.policy_version >= 3)
             || self.supports_snake_policy(13)
+    }
+
+    /// Snake v14 clamps invalid ordinary integer RAND arguments without taking a sample.
+    #[must_use]
+    pub const fn clamps_integer_rand(&self) -> bool {
+        self.supports_snake_policy(14)
     }
 
     /// Snake v13 shares the original save-version check and result contract.
@@ -341,7 +347,7 @@ mod tests {
             assert_ne!(previous.digest(), current.digest());
         }
         let snake = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
-        assert_eq!((snake.semantic_version, snake.policy_version), (13, 13));
+        assert_eq!((snake.semantic_version, snake.policy_version), (14, 14));
         assert!(snake.validate().is_ok());
         assert!(snake.uses_utf16_legacy_counting());
     }
@@ -364,6 +370,17 @@ mod tests {
     }
 
     #[test]
+    fn integer_rand_policy_has_an_explicit_identity_boundary() {
+        let mut snake = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
+        assert!(snake.clamps_integer_rand());
+        assert!(!CompatibilityIdentity::reference().clamps_integer_rand());
+        snake.semantic_version = 13;
+        snake.policy_version = 13;
+        assert!(!snake.clamps_integer_rand());
+        assert!(snake.validate().is_err());
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn identities_are_explicit_and_validate_all_policy_fields() {
         let reference = CompatibilityIdentity::reference();
@@ -372,8 +389,8 @@ mod tests {
         assert_ne!(reference.arithmetic, snake.arithmetic);
         assert_eq!(reference.rng_algorithm, snake.rng_algorithm);
         assert!(snake.is_experimental());
-        assert_eq!(snake.semantic_version, 13);
-        assert_eq!(snake.policy_version, 13);
+        assert_eq!(snake.semantic_version, 14);
+        assert_eq!(snake.policy_version, 14);
         assert_eq!(snake.save_codec, SNAKE_INTEROP_SAVE_CODEC);
         assert!(snake.uses_snake_alias_rules());
         assert!(snake.supports_safe_sql());

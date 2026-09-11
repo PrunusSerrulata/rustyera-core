@@ -105,13 +105,19 @@ impl NativeService for RandomNative {
             .lock()
             .map_err(|_| native_contract_failure("SFMT state lock is poisoned"))?;
         match self.name.as_str() {
-            "rand" => {
+            "rand" | "__rand_variable" => {
                 let (minimum, maximum) = match request.arguments.as_slice() {
                     [VmValue::Integer(maximum)] => (0, *maximum),
                     [VmValue::Integer(minimum), VmValue::Integer(maximum)] => {
-                        // The internal expression ABI represents an omitted first
-                        // operand as i64::MIN. RAND(, max) is equivalent to RAND(max).
-                        (if *minimum == i64::MIN { 0 } else { *minimum }, *maximum)
+                        // Omission is source metadata, never an integer sentinel.
+                        (
+                            if request.omitted_arguments.contains(&0) {
+                                0
+                            } else {
+                                *minimum
+                            },
+                            *maximum,
+                        )
                     }
                     _ => {
                         return Err(native_contract_failure(

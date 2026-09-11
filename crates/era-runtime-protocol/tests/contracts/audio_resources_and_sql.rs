@@ -59,7 +59,7 @@ fn protocol_46_audio_targets_effects_and_observations_are_exact() {
     let current = erabasic_compat::CompatibilityIdentity::for_profile(
         erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
     );
-    assert_eq!((current.semantic_version, current.policy_version), (13, 13));
+    assert_eq!((current.semantic_version, current.policy_version), (14, 14));
     assert_eq!(
         current.save_codec,
         erabasic_compat::SNAKE_INTEROP_SAVE_CODEC

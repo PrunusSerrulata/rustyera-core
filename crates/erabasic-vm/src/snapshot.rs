@@ -22,7 +22,7 @@ pub use self::model::{
 };
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"RERAVMS\0";
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 20;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 21;
 const SNAPSHOT_HEADER_BYTES: usize = 60;
 const SNAPSHOT_COMPRESSION_LEVEL: i32 = 1;
 
@@ -43,6 +43,7 @@ pub struct VmSnapshot {
     // A sorted pair list keeps native state deterministic and independent from
     // a serializer's map-key representation.
     native_states: Vec<(erabasic_bytecode::SymbolKey, Vec<u8>)>,
+    rand_warning_mask: u8,
     compatibility_warning_sites:
         std::collections::BTreeSet<(GenerationId, erabasic_bytecode::SymbolKey, usize, u8)>,
 }
@@ -62,6 +63,7 @@ struct VmSnapshotRef<'a> {
     next_request: u64,
     next_generation: u64,
     native_states: &'a [(erabasic_bytecode::SymbolKey, Vec<u8>)],
+    rand_warning_mask: u8,
     compatibility_warning_sites:
         &'a std::collections::BTreeSet<(GenerationId, erabasic_bytecode::SymbolKey, usize, u8)>,
 }

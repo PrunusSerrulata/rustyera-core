@@ -18,7 +18,7 @@ fn invalid_compatibility_warning_sites_reject_before_restoring_native_random_sta
         artifact
             .native_imports
             .iter()
-            .any(|import| import.import.name == "rand")
+            .any(|import| import.import.name == "__rand_variable")
     );
     let entry = &artifact.functions[0];
     let mut natives = NativeServiceRegistry::for_artifact_with_seed(&artifact, 1234);

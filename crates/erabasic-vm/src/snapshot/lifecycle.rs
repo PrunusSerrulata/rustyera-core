@@ -95,6 +95,7 @@ impl Vm {
             next_frame: self.next_frame,
             next_request: self.next_request,
             next_generation: self.next_generation,
+            rand_warning_mask: self.rand_warning_mask,
             compatibility_warning_sites: self.compatibility_warning_sites.clone(),
             native_states: natives
                 .snapshots()
@@ -146,6 +147,7 @@ impl Vm {
             next_request: self.next_request,
             next_generation: self.next_generation,
             native_states: &native_states,
+            rand_warning_mask: self.rand_warning_mask,
             compatibility_warning_sites: &self.compatibility_warning_sites,
         })
     }
@@ -194,17 +196,7 @@ impl Vm {
             &crate::interpreter::map_calls::live_map_leases(snapshot.fibers.values()),
         )
         .map_err(VmError::Snapshot)?;
-        snapshot
-            .memory
-            .materialize_snapshot()
-            .map_err(VmError::Snapshot)?;
-        for fiber in snapshot.fibers.values_mut() {
-            for frame in &mut fiber.frames {
-                for cell in frame.locals.values_mut() {
-                    cell.materialize_snapshot().map_err(VmError::Snapshot)?;
-                }
-            }
-        }
+        materialize_snapshot_memory(&mut snapshot)?;
         let rebinds = snapshot
             .fibers
             .iter()
@@ -235,6 +227,7 @@ impl Vm {
             next_request: snapshot.next_request,
             next_generation: snapshot.next_generation,
             pending_reload: None,
+            rand_warning_mask: snapshot.rand_warning_mask,
             compatibility_warning_sites: snapshot.compatibility_warning_sites,
             pending_compatibility_warnings: Vec::new(),
             debug: crate::debug::DebugState::default(),
@@ -266,6 +259,21 @@ impl Vm {
         vm.retire_terminal_fibers();
         Ok(vm)
     }
+}
+
+fn materialize_snapshot_memory(snapshot: &mut VmSnapshot) -> Result<(), VmError> {
+    snapshot
+        .memory
+        .materialize_snapshot()
+        .map_err(VmError::Snapshot)?;
+    for fiber in snapshot.fibers.values_mut() {
+        for frame in &mut fiber.frames {
+            for cell in frame.locals.values_mut() {
+                cell.materialize_snapshot().map_err(VmError::Snapshot)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_restored_continuations(vm: &Vm) -> Result<(), VmError> {
@@ -346,6 +354,15 @@ fn validate_snapshot(
     artifact: &erabasic_bytecode::BytecodeArtifact,
     config: VmConfig,
 ) -> Result<(), VmError> {
+    if snapshot.rand_warning_mask & !3 != 0
+        || (snapshot.rand_warning_mask != 0
+            && (!artifact.manifest.compatibility.clamps_integer_rand()
+                || artifact.call_compatibility.compatible_rand))
+    {
+        return Err(VmError::Snapshot(
+            "snapshot RAND diagnostic mask is invalid".into(),
+        ));
+    }
     validate_compatibility_warning_sites(snapshot, artifact)?;
     let detached_bytes =
         snapshot

@@ -149,6 +149,10 @@ pub fn default_host_registry() -> HostRegistry {
         registry.bindings.entry(name).or_insert(binding);
     }
     registry.register_execution(
+        "__RAND_VARIABLE",
+        ExecutionBinding::Native(native_contract("__RAND_VARIABLE")),
+    );
+    registry.register_execution(
         "__INDEXBYNAME",
         ExecutionBinding::Native(native_contract("__INDEXBYNAME")),
     );

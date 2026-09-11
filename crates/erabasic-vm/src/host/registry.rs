@@ -107,7 +107,10 @@ impl NativeServiceRegistry {
                 if compiler_native_path_memo_safe(name) {
                     registry.path_memo_safe_keys.insert(service_key);
                 }
-            } else if matches!(name, "rand" | "randomize" | "initrand" | "dumprand") {
+            } else if matches!(
+                name,
+                "rand" | "__rand_variable" | "randomize" | "initrand" | "dumprand"
+            ) {
                 registry.register(
                     service_key,
                     RandomNative {

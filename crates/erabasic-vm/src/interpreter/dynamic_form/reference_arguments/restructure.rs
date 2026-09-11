@@ -218,7 +218,11 @@ impl PreparedReferenceArguments {
             .iter()
             .find(|item| item.key == *key)
             .ok_or_else(|| invalid("reference argument variable metadata is missing"))?;
-        if metadata.reference || matches!(definition.name.as_str(), "ARG" | "ARGS") {
+        if metadata.reference
+            || matches!(definition.name.as_str(), "ARG" | "ARGS")
+            || (definition.storage == BytecodeStorage::Calculated
+                && definition.name.eq_ignore_ascii_case("RAND"))
+        {
             return Ok(false);
         }
         let character = definition.storage == BytecodeStorage::Character

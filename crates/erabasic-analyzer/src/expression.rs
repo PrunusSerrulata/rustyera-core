@@ -153,11 +153,29 @@ impl ExpressionAnalyzer<'_> {
         location: SourceLocation,
     ) -> HirExpr {
         if name.eq_ignore_ascii_case("RAND") {
-            // RAND predates expression-function syntax and remains exposed as a
-            // pseudo variable (`RAND:max`) by Emuera. Lower both spellings to the
-            // same native call so the zero-length schema placeholder is never read.
+            // The pseudo-variable is not a storage read. Keep its entry identity
+            // without publishing another expression function in the catalog.
+            if self.options.compatibility.clamps_integer_rand()
+                && !self.options.compatible_rand
+                && (indices.len() != 1 || indices.first().is_some_and(rand_literal_zero))
+            {
+                self.diagnostic(
+                    AnalyzerDiagnosticCode::InvalidArgument,
+                    location,
+                    "RAND requires one nonzero literal or runtime index",
+                );
+                return self.error_expression(location);
+            }
             let arguments = indices.iter().cloned().map(Some).collect::<Vec<_>>();
-            return self.analyze_call(name, &arguments, location);
+            let mut expression = self.analyze_call(name, &arguments, location);
+            if self.options.compatibility.clamps_integer_rand()
+                && let HirExprKind::Call { target, .. } = &mut expression.kind
+            {
+                *target = CallTarget::Builtin {
+                    name: "__RAND_VARIABLE".into(),
+                };
+            }
+            return expression;
         }
         if indices.is_empty()
             && let Some(value) = self.index_resolver.resolve_rename(name)
@@ -512,5 +530,19 @@ impl ExpressionAnalyzer<'_> {
 
     pub(super) fn key(&self, name: &str) -> String {
         identifier_key(name, self.options.ignore_case)
+    }
+}
+
+// Only SingleLongTerm zero is rejected before evaluation. Unary minus and
+// arithmetic expressions retain their runtime behavior, even if constant-foldable.
+fn rand_literal_zero(expression: &Expr) -> bool {
+    match &expression.kind {
+        ExprKind::Integer(0) => true,
+        ExprKind::Group(inner)
+        | ExprKind::Unary {
+            op: UnaryOp::Plus,
+            operand: inner,
+        } => rand_literal_zero(inner),
+        _ => false,
     }
 }

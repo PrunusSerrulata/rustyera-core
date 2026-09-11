@@ -175,6 +175,7 @@ impl Vm {
             next_request: 1,
             next_generation: 2,
             pending_reload: None,
+            rand_warning_mask: 0,
             compatibility_warning_sites: BTreeSet::new(),
             pending_compatibility_warnings: Vec::new(),
             debug: DebugState::default(),

@@ -86,16 +86,10 @@ impl RuntimeCallPlan {
     fn expressions(&self) -> SourceExpressions<'_> {
         SourceExpressions::new(&self.source)
     }
-    fn call_arguments(&self, span: Span) -> Option<&[Option<Expr>]> {
-        self.expressions().find_map(|expression| {
-            if expression.span == span
-                && let ExprKind::Call { args, .. } = &expression.kind
-            {
-                Some(args.as_slice())
-            } else {
-                None
-            }
-        })
+    fn call_arguments(&self, span: Span) -> Option<Vec<Option<Expr>>> {
+        self.expressions()
+            .find(|expression| expression.span == span)
+            .and_then(native_source_arguments)
     }
     fn valid(
         &self,
@@ -163,6 +157,16 @@ impl RuntimeFormContinuation {
             .ok_or_else(|| invalid("runtime expression lacks its source plan"))?;
         Ok(RuntimeCallSite { plan, span })
     }
+    pub(super) fn is_rand_variable_site(&self, site: RuntimeCallSite) -> bool {
+        self.call_plan(site.plan).is_some_and(|plan| {
+            plan.expressions().any(|expression| {
+                expression.span == site.span
+                    && matches!(&expression.kind,
+                ExprKind::Identifier(name) | ExprKind::Variable { name, .. }
+                    if name.eq_ignore_ascii_case("RAND"))
+            })
+        })
+    }
     pub(super) fn lookup_bound_call(&self, site: RuntimeCallSite) -> Option<&RuntimeBoundCall> {
         self.call_plan(site.plan)?.bound(site.span)
     }
@@ -212,14 +216,30 @@ impl RuntimeFormContinuation {
             };
             let Some(index) = pending.graph.template.nodes.iter().position(|node| {
                 node.span == site.span
-                    && matches!(node.kind, erabasic_bytecode::ReferenceTermKind::Call { .. })
+                    && matches!(
+                        node.kind,
+                        erabasic_bytecode::ReferenceTermKind::Call { .. }
+                            | erabasic_bytecode::ReferenceTermKind::Variable { .. }
+                    )
             }) else {
                 return false;
             };
-            return pending.graph.expression(program, &super::reference_arguments::graph::TermRef::Original(match u32::try_from(index) { Ok(id) => id, Err(_) => return false }))
-                .is_ok_and(|expression| matches!(expression.kind, ExprKind::Call { args, .. } if args == source));
+            return pending
+                .graph
+                .expression(
+                    program,
+                    &super::reference_arguments::graph::TermRef::Original(
+                        match u32::try_from(index) {
+                            Ok(id) => id,
+                            Err(_) => return false,
+                        },
+                    ),
+                )
+                .is_ok_and(|expression| {
+                    native_source_arguments(&expression).as_deref() == Some(source)
+                });
         }
-        plan.call_arguments(site.span) == Some(source)
+        plan.call_arguments(site.span).as_deref() == Some(source)
     }
     pub(super) fn validate_planned_expression(
         &self,
@@ -498,4 +518,17 @@ fn source_form_resources(source: &RuntimePlanSource) -> Option<(usize, usize)> {
         }
     }
     Some((slots, bytes))
+}
+
+// RAND's variable spelling retains its original AST for revalidation and probes,
+// but uses the same source-authorized Native continuation as RAND(...).
+fn native_source_arguments(expression: &Expr) -> Option<Vec<Option<Expr>>> {
+    match &expression.kind {
+        ExprKind::Call { args, .. } => Some(args.clone()),
+        ExprKind::Variable { name, indices } if name.eq_ignore_ascii_case("RAND") => {
+            Some(indices.iter().cloned().map(Some).collect())
+        }
+        ExprKind::Identifier(name) if name.eq_ignore_ascii_case("RAND") => Some(Vec::new()),
+        _ => None,
+    }
 }

@@ -253,9 +253,14 @@ impl RuntimeFormContinuation {
                     else_expr
                 }));
             }
-            RuntimeFormTask::FinishNative { bound, source, .. } => {
+            RuntimeFormTask::FinishNative {
+                site,
+                bound,
+                source,
+            } => {
                 let arguments = self.take_values(source.len())?;
-                self.finish_native(vm, fiber, natives, bound, arguments)?;
+                let rand_variable = self.is_rand_variable_site(site);
+                self.finish_native(vm, fiber, natives, bound, arguments, rand_variable)?;
             }
             RuntimeFormTask::FinishCall { name, arguments } => {
                 let arguments = self.take_values(arguments)?;
@@ -501,6 +506,13 @@ impl RuntimeFormContinuation {
         match expression.kind {
             ExprKind::Integer(value) => self.values.push(VmValue::Integer(value)),
             ExprKind::String(value) => self.values.push(VmValue::String(value)),
+            ExprKind::Identifier(name) if name.eq_ignore_ascii_case("RAND") => {
+                self.schedule_planned_call(vm, fiber, expression.span, &[])?;
+            }
+            ExprKind::Variable { name, indices } if name.eq_ignore_ascii_case("RAND") => {
+                let arguments = indices.into_iter().map(Some).collect::<Vec<_>>();
+                self.schedule_planned_call(vm, fiber, expression.span, &arguments)?;
+            }
             ExprKind::Identifier(name) => {
                 self.work
                     .push(RuntimeFormTask::ReadVariable { name, indices: 0 });
@@ -551,44 +563,7 @@ impl RuntimeFormContinuation {
                 self.work.push(RuntimeFormTask::Evaluate(*condition));
             }
             ExprKind::Call { name, args } => {
-                let user_defined = vm
-                    .generations
-                    .get(&self.generation)
-                    .is_some_and(|program| program.function_by_name(&name).is_some());
-                if user_defined {
-                    self.schedule_direct_user_call(vm, &name, args)?;
-                    return Ok(());
-                }
-                if self.schedule_input_host(vm, &name, &args)? {
-                    return Ok(());
-                }
-                if name.eq_ignore_ascii_case("EXISTVAR") {
-                    self.schedule_existvar(&args)?;
-                    return Ok(());
-                }
-                if name.eq_ignore_ascii_case("EXISTMETH") {
-                    let program = vm.generations.get(&self.generation).ok_or_else(|| {
-                        StepError::new(VmFaultCode::MissingSymbol, "EXISTMETH generation missing")
-                    })?;
-                    native_binding::authorization(program, &name)?;
-                }
-                if self.schedule_method(&name, &args)? {
-                    return Ok(());
-                }
-                if !name.eq_ignore_ascii_case("STRFORM")
-                    && !name.eq_ignore_ascii_case("STRFORMCHECK")
-                {
-                    self.schedule_planned_call(vm, fiber, expression.span, &args)?;
-                    return Ok(());
-                }
-                let count = args.len();
-                self.work.push(RuntimeFormTask::FinishCall {
-                    name,
-                    arguments: count,
-                });
-                self.work.extend(args.into_iter().rev().map(|argument| {
-                    argument.map_or(RuntimeFormTask::PushOmitted, RuntimeFormTask::Evaluate)
-                }));
+                self.schedule_expression_call(vm, fiber, expression.span, name, args)?;
             }
             ExprKind::Formatted(formatted) => {
                 self.work.push(RuntimeFormTask::StartForm(formatted));
@@ -597,6 +572,53 @@ impl RuntimeFormContinuation {
                 return Err(unsupported("STRFORM contains an invalid expression"));
             }
         }
+        Ok(())
+    }
+
+    fn schedule_expression_call(
+        &mut self,
+        vm: &Vm,
+        fiber: &Fiber,
+        span: erabasic_ast::Span,
+        name: String,
+        args: Vec<Option<Expr>>,
+    ) -> Result<(), StepError> {
+        let user_defined = vm
+            .generations
+            .get(&self.generation)
+            .is_some_and(|program| program.function_by_name(&name).is_some());
+        if user_defined {
+            self.schedule_direct_user_call(vm, &name, args)?;
+            return Ok(());
+        }
+        if self.schedule_input_host(vm, &name, &args)? {
+            return Ok(());
+        }
+        if name.eq_ignore_ascii_case("EXISTVAR") {
+            self.schedule_existvar(&args)?;
+            return Ok(());
+        }
+        if name.eq_ignore_ascii_case("EXISTMETH") {
+            let program = vm.generations.get(&self.generation).ok_or_else(|| {
+                StepError::new(VmFaultCode::MissingSymbol, "EXISTMETH generation missing")
+            })?;
+            native_binding::authorization(program, &name)?;
+        }
+        if self.schedule_method(&name, &args)? {
+            return Ok(());
+        }
+        if !name.eq_ignore_ascii_case("STRFORM") && !name.eq_ignore_ascii_case("STRFORMCHECK") {
+            self.schedule_planned_call(vm, fiber, span, &args)?;
+            return Ok(());
+        }
+        let count = args.len();
+        self.work.push(RuntimeFormTask::FinishCall {
+            name,
+            arguments: count,
+        });
+        self.work.extend(args.into_iter().rev().map(|argument| {
+            argument.map_or(RuntimeFormTask::PushOmitted, RuntimeFormTask::Evaluate)
+        }));
         Ok(())
     }
 
@@ -689,6 +711,7 @@ impl RuntimeFormContinuation {
         natives: &mut NativeServiceRegistry,
         bound: erabasic_bytecode::BoundRuntimeNative,
         arguments: Vec<VmValue>,
+        rand_variable: bool,
     ) -> Result<(), StepError> {
         let generation =
             std::sync::Arc::clone(vm.generations.get(&self.generation).ok_or_else(|| {
@@ -722,7 +745,12 @@ impl RuntimeFormContinuation {
             ));
         }
         let omitted_arguments = bound.omitted_arguments;
-        let native = bound.import;
+        let mut native = bound.import;
+        if rand_variable {
+            // Only the already validated variable syntax selects this private entry;
+            // its provider and source authorization remain the ordinary RAND family.
+            native.name = "__rand_variable".into();
+        }
         let expected = native.result;
         let owner_stack = owner_frame(fiber, self.frame)?.stack.len();
         let (ready, rollback) = if let Some(ready) = vm

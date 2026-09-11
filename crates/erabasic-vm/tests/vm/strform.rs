@@ -329,3 +329,6 @@ use checkpoints::restructuring::{
 };
 use dynamic_method_snapshots::take_fault;
 use lease_snapshots::lease_snapshot_natives;
+
+#[path = "strform/rand.rs"]
+mod rand;

@@ -123,6 +123,17 @@ impl ExpressionAnalyzer<'_> {
                 location,
             );
         }
+        if key == "RAND"
+            && self.options.compatibility.clamps_integer_rand()
+            && !self.options.compatible_rand
+            && args.first().is_some_and(Option::is_none)
+        {
+            self.diagnostic(
+                AnalyzerDiagnosticCode::InvalidArgument,
+                location,
+                "RAND first source argument may not be omitted",
+            );
+        }
         self.check_map_output(key, values, location);
         self.check_graphics_call(key, values, location);
         if existvar_mode && values.first().is_some_and(Option::is_none) {

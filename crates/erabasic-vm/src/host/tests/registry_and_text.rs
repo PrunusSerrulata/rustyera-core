@@ -583,15 +583,19 @@ fn random_native_implements_one_and_two_argument_ranges() {
         .value
         .unwrap();
     assert!(matches!(value, VmValue::Integer(27..=30)));
+    let mut omitted = request(vec![VmValue::Integer(i64::MIN), VmValue::Integer(3)]);
+    omitted.omitted_arguments = vec![0];
+    let value = native.call(omitted).unwrap().value.unwrap();
+    assert!(matches!(value, VmValue::Integer(0..=2)));
     let value = native
         .call(request(vec![
             VmValue::Integer(i64::MIN),
-            VmValue::Integer(3),
+            VmValue::Integer(i64::MIN + 1),
         ]))
         .unwrap()
         .value
         .unwrap();
-    assert!(matches!(value, VmValue::Integer(0..=2)));
+    assert_eq!(value, VmValue::Integer(i64::MIN));
     assert!(native.call(request(vec![VmValue::Integer(0)])).is_err());
     assert!(
         native

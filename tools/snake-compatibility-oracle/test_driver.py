@@ -18,6 +18,13 @@ spec.loader.exec_module(driver)
 
 
 class DriverTests(unittest.TestCase):
+    def test_completed_case_summary_does_not_require_historical_policy_label(self):
+        case = {"id": "new", "group": "RNG", "targetBatch": "B", "snakeTargetStatus": "candidate"}
+        self.assertIsNone(driver.observed_case_summary(case, [])["rustCurrentPolicy"])
+        case["rustCurrentPolicy"] = "historical"
+        self.assertEqual(driver.observed_case_summary(case, [])["rustCurrentPolicy"], "historical")
+
+
     def test_upstream_a_load_diagnostics_are_checked_separately(self):
         case = {"id": "aliases", "group": "UPSTREAM_A", "requests": [],
                 "targetBatch": "A", "snakeTargetStatus": "unchanged"}
@@ -591,12 +598,12 @@ class DriverTests(unittest.TestCase):
         validate_rust_evidence(modern_snake, "snake", fixture, 1,
                                {"semantic_version": 12, "policy_version": 12})
         current_snake = {**modern_snake, "profile": {**modern_snake["profile"],
-                         "semantic_version": 13, "policy_version": 13}}
+                         "semantic_version": 14, "policy_version": 14}}
         validate_rust_evidence(current_snake, "snake", fixture, 1,
-                               {"semantic_version": 13, "policy_version": 13})
+                               {"semantic_version": 14, "policy_version": 14})
         with self.assertRaises(ValueError):
             validate_rust_evidence(current_snake, "snake", fixture, 1,
-                                   {"semantic_version": 12, "policy_version": 12})
+                                   {"semantic_version": 13, "policy_version": 13})
         for candidate in (modern_snake, current_snake):
             for fields in ({"services": []}, {"save_codec": "rustyera_envelope_v1:emuera1808"},
                            {"arithmetic": "wrapping_i64_v1"}, {"policy_version": 11}):

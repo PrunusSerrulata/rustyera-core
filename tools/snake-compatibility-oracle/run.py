@@ -371,6 +371,17 @@ def close_oracle(oracle, evidence, failure):
     return failure
 
 
+def observed_case_summary(case, findings):
+    """Keep historical policy labels optional; they are not observation assertions."""
+    return {
+        "id": case["id"], "group": case["group"],
+        "status": "observed" if case.get("observation") or findings else "passed",
+        "findings": findings, "targetBatch": case["targetBatch"],
+        "rustCurrentPolicy": case.get("rustCurrentPolicy"),
+        "snakeTargetStatus": case["snakeTargetStatus"],
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--oracle", choices=["original", "snake"], required=True)
@@ -491,17 +502,7 @@ def main():
             evidence["rustComparison"]["cases"].append(
                 compare_case(case, observed_steps, rust_cases.get(case["id"]), load_response, rust["profile"])
             )
-            evidence["cases"].append(
-                {
-                    "id": case["id"],
-                    "group": case["group"],
-                    "status": "observed" if case.get("observation") or findings else "passed",
-                    "findings": findings,
-                    "targetBatch": case["targetBatch"],
-                    "rustCurrentPolicy": case["rustCurrentPolicy"],
-                    "snakeTargetStatus": case["snakeTargetStatus"],
-                }
-            )
+            evidence["cases"].append(observed_case_summary(case, findings))
             # Report completed observable state even when every individual case
             # finishes before its first periodic sample. The outer Wine monitor
             # must see real case progress across multiple fresh CLI processes.
