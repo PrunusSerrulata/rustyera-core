@@ -55,6 +55,7 @@ core SHA、库/bundle 路径及后续发布绑定变更，须在对应实施批�
 | [蛇版 upstream A](#snake-upstream-a) | 复用 UTF-16 字符串与 CHKDATA 版本检查 | 已完成 | 2026-09-11 / Codex | 32 个双参考观察验收；8 个孤立代理项差异保留，客户端绑定属于 D |
 | [蛇版 upstream B](#snake-upstream-b) | 整数 RAND 钳制与会话警告 | 已完成 | 2026-09-11 / Codex | 6 个双参考观察验收；快照 21，客户端绑定属于 D |
 | [蛇版 upstream C](#snake-upstream-c) | 预设 ERD 名表与 ITEM 价格 | 已完成 | 2026-09-11 / Codex | 首次全量 1731 通过；13 个双参考观察验收，1 个 ICU72/NLS 差异保留；客户端绑定属于 D |
+| [蛇版 upstream D](#snake-upstream-d) | TUI、WASM 三浏览器、Tauri 绑定与旧产物边界 | 已完成 | 2026-09-11 / Codex | 双 profile 10 个客户端链及打包库链验收；输入回显差异与首屏旧投影拒绝单独登记 |
 
 <a id="batch-0"></a>
 
@@ -2111,3 +2112,80 @@ VM 快照格式保持 B 的 21，无新增公共 service、协议或发布版本
 - 各组件提交、分项对应关系、发布/迁移注意事项、CHANGELOG_PENDING 更新情况：待填写。
 - 当前轮次/起止时间、最近观察状态或指标、材料与复现命令、下一步恢复入口：待填写。
 - 临时材料保留/清理、相关进程停止与资源释放情况：待填写。
+
+<a id="snake-upstream-d"></a>
+
+## 蛇版 Skiav13 D：统一客户端绑定与旧产物验收
+
+2026-09-11 完成授权固定范围。计划见 [Skiav13 跟进](SNAKE_EMUERA_MIGRATION_PLAN.md#snake-upstream-5717045)。
+实际 core 发布绑定 `c70b1c2db71ff808890de3d8e4d7bd9fe97fd6c6`，snake semantic/policy 15、
+original 3、VM snapshot 21。后续纯文档提交不改变已验证产品输入，也不引起重建。
+
+### 实际改动与提交
+
+| 组件 | 改动 | 提交 |
+|---|---|---|
+| TUI | 保留完整公共诊断和实际加载请求/响应关联，复用原事件流 | `d30302853a88e1a80ae34a2542989f3339f86659` |
+| TUI | 测试缓存按既有 profile storage namespace 安装 | `873122791436ef035fedfe2ccda80d92758094c8` |
+| TUI | core pin、显示 revision 与固定蛇版场景 | `4da8e2b6ea6919604f63f9fed734d5e5acf1b947` |
+| Web/Tauri | 全部 Git rev、发布锁统一，固定双阶段真实客户端场景复用完整观察 | `a209f34ff2115043ef5e8070032e476576096c5d` |
+
+未复制 runtime 语义或新建私有接口。唯一独立重构审查在首条测试前完成；R1–R5 要求已落实：
+正确初始 load/输入 7、严格分端 trace、当前客户端诊断、旧缓存事务及来源绑定、单执行器退出清理。
+后续仅修复实际失败的测试适配与重复观察，不追加审查或重跑全量。
+
+### 首次全量及定向复验
+
+- TUI 首次全量 592 通过、3 失败、5 跳过。失败为显示 core revision 和安装版本元数据，
+  修正后仅 3 个失败节点复验通过；5 个显式 opt-in 的旧 1D service 用例未运行，不记为通过。
+  最小协议观测/缓存路由回归、Ruff、真实 C ABI、PyInstaller 启动与打包库消费通过。
+- Web 首次 Vitest 2183 通过、2 失败。旧 policy 文本定向修正；既有大输出边界用例在隔离
+  执行后于原超时内通过。未重复全量。类型、lint、格式、Web 构建均通过。
+- Rust workspace check/clippy/fmt 通过；首次 Rust 测试 152 通过、0 失败、1 ignored。
+  WASM 构建指定现有 ARM64 linker 后通过；Tauri build-only 与严格缓存复用通过，未下载工具。
+- Safari 原版首次真实执行因重复首阶段调试读取触发 5 秒相同完整快照看门狗；复用单次
+  观察并通过受影响静态门禁后，定向复验完成。所有 Web/Tauri 用例保留原 5 秒完整快照规则。
+- 其余适配器修正均对原有捕获离线复算，包括无损整数字符串、完整请求 ledger、实际诊断
+  行号及生命周期来源；不为整理报告重新执行游戏、参考引擎或构建。
+
+### 真实客户端与兼容边界
+
+TUI、Chromium、Firefox、Safari、macOS Tauri 均按原版/蛇版各两个稳定输入点执行，
+固定 seed `123456`，可见输入 `7`；浏览器使用固定 clock，实际值与工具路径见命令/构建记录。
+共 10 条客户端链加 1 条打包库蛇版链完成执行、身份、结构化诊断、watch、终态和参考差分。
+原版语义 `7b69ebd2` / wrapper `c94bf1de`，蛇版 `5717045` / wrapper `851c40c9`，
+每个 profile 的参考捕获复用到其后续客户端，TUI/Web 的实际 fixture 已逐字节绑定。
+
+11 条比较均登记同一项输入回显差异：continued 的 READY 后，参考输出为 `7`，客户端
+canonical output 为一个空行。仅这一位置接受差异，其余顺序、文本、数值与等待必须一致；
+结果为 `accepted_with_registered_output_difference`，不改写成完全 matched。
+浏览器首屏的 recoverable `stale_request` 逐条绑定实际 revision 0 的 projection_observation、
+correlation ID、session/epoch，以及首份 canonical presentation 前的时序；Safari 可观察到
+两次视口调整，其它拒绝仍失败，第二阶段不得新增或改变已登记拒绝。
+
+原版重复别名按现有规则静默保留首项，无游戏警告。蛇版当前客户端诊断库存为：CSV/ERD
+价格冲突一次、实验 profile 提示在加载报告和启动事件各一次、RAND 变量与函数各一次；
+第二阶段 RAND 不重复。CSV 行号与 runtime 行号保留实际协议约定，完整 source/context、
+通知方式及所有权均验证。两种 oracle 与客户端诊断 schema 不可直接等价，单独记录为
+`incomparable_schema`，不以旧 B/C 证据替代当前客户端诊断。
+
+旧 core `d16907d5dfacef6b07e903ef481c01a1057af580` 实际产生 policy 12 缓存和旧快照，
+旧库成功消费同一摘要产物；新库 cache-only 请求拒绝后以源码提交恢复，实际两个请求和
+对应 report ID 逐一关联。新库拒绝旧快照后保留等待并能输入 `7` 继续。该前端测试先拒绝
+旧 runtime compatibility identity，不声称已执行嵌套 VM20 解码；VM 格式拒绝由 B 独立覆盖。
+
+### 证据、产物与未完成项
+
+证据根 `.audit/snake-upstream-5717045-20260911/d/`：`final-evidence.json` 汇总每条实际命令、
+退出、首次失败、定向结果、11 条比较与诊断摘要；`commands.ndjson`、原始 trace、Web/Tauri
+完整快照和 oracle 响应保留。`build-binding.json` / `final-product-binding.json` 证明最终
+产品输入与产物未改变；`client-fixtures-binding.json`、`old-artifact-binding.json` 绑定来源。
+提交仅移植已验收文件，任务专属依赖、target、库、游戏副本和浏览器会话不纳入提交。
+
+- 新 C ABI SHA256：`b47875e662bf5dec07b5923632aaf3c05f0b504b4fe87aa22932381c9cccf921`。
+- WASM SHA256：`27487e2bfef1164aa2467830359e91d0516442853096cb0dc4d62301d0b1d94a`。
+- Tauri binary SHA256：`5802b85783bf41785f372b9910dd0c98dc0c44e54737630bacf28055635b7481`。
+
+D 测试及最终产品绑定检查共约 56 分 29 秒，未重置 60 分钟预算。授权固定矩阵无剩余项；
+上述显式跳过/ignored、回显与诊断差异如实保留。未扩展通用 Float、来源探针、额外平台、
+TW 自主游玩或性能迭代，也不声称整个 Skiav13/TW 完全兼容。暂停续做及验收证据继续保留。

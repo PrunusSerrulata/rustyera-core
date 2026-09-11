@@ -1,6 +1,23 @@
 # 蛇版 Emuera、蛇版 TW 与 RustyEra 兼容性详查
 
-> 2026-09-11：当前蛇版参考目标已升级为 Skiav13（`57170459b3d5ca175a1c57933058b569088bee0e`），见[基准升级与待验收边界](../runtime-reference-mapping.zh-CN.md#2026-09-11-蛇版参考基准升级)。本文既有审计、批次方案及证据中的旧 SHA 保留原意，不代表新基准已验收。
+> 2026-09-11 当前状态：蛇版参考目标为 Skiav13（`57170459b3d5ca175a1c57933058b569088bee0e`），A–D 已完成本轮授权范围；snake semantic/policy 为 15、原版为 3、VM snapshot 为 21。见[当前基准与验收边界](../runtime-reference-mapping.zh-CN.md#2026-09-11-蛇版参考基准升级)。本文下方既有审计、批次方案及旧 SHA 保留历史原意，不能作为当前未实现清单或完整兼容证明。
+
+当前增量复用已有能力：A 复用 UTF-16 往返/CP932 宽度和普通 `CHKDATA` 的 `RESULT:1`；
+B 跟进整数 `RAND` 变量、函数与动态 FORM，无效区间不推进 SFMT，两入口分别按会话去重
+LogOnly 警告，保留源码遗漏/字面量零拒绝与原版、CompatiRAND 边界；C 在 CSV/ALS 后
+补全预设 ERD 名表和 ITEM 价格，复用 GETNUM、角色模板与编译缓存，CSV 与显式零价格
+优先，受 UseERD 和 snake profile 控制。普通用户 ERD 保持原有行为。
+
+已登记的边界包括 UTF-16 孤立代理项转 U+FFFD、既有 RNG 差异，以及预设 ERD 路径排序
+固定 ICU72 与本次 Wine NLS 的 Deseret 次序差异；后者保留原始 `different`，不宣称 NLS/ICU
+完全等价。`EXIST_IN_CSV`、`EXIST_IN_ERD` 来源探针与通用 Float 暂缓。
+C 产品提交 `b77d731`；D 的实际 core 绑定为
+`c70b1c2db71ff808890de3d8e4d7bd9fe97fd6c6`，TUI、三浏览器及 macOS Tauri 已完成双 profile 固定验收；详见
+[D 最终记录](SNAKE_EMUERA_IMPLEMENTATION_LOG.md#snake-upstream-d)。
+这不代表整个 Skiav13 或蛇版 TW 已完整兼容；实际范围以
+[A](SNAKE_EMUERA_IMPLEMENTATION_LOG.md#snake-upstream-a)、
+[B](SNAKE_EMUERA_IMPLEMENTATION_LOG.md#snake-upstream-b)、
+[C](SNAKE_EMUERA_IMPLEMENTATION_LOG.md#snake-upstream-c)最终记录为准。
 
 > 2026-09-11：当前原版语义基准已升级为 `7b69ebd27378c03c32b6477b74901bfc3d33223c`。
 > 本文保留历史审计的旧 SHA 与结论；新基准增量及待跟进项见[参考映射](../runtime-reference-mapping.zh-CN.md#2026-09-11-原版基准升级)。

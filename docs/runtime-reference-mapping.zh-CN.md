@@ -37,19 +37,19 @@
 | 上游提交 | 新参考行为 | RustyEra 状态与边界 |
 | --- | --- | --- |
 | `72a1db2f` | `.als` 重复别名保留首次定义，继续读取后续行；重复数字索引警告保留。 | A 批已实现并通过双 oracle：原版忽略后续同名项，继续加载；数字索引警告与蛇版空白、诊断规则保留。 |
-| `7b69ebd2` | `CHKDATA` 在成功和版本不兼容时将存档内版本写入 `RESULT:1`，其他正常返回的错误路径写入 0。 | A 批已实现并通过双 oracle：仅原版普通存档检查更新版本；不兼容版本在读取描述前返回，不扩展到 `CHKCHARADATA` 或蛇版。 |
-| `250d6635` | 所选编码无法往返还原字符时尝试 CP932，以其编码宽度参与传统字符串计数。 | B 批已实现并通过四编码差分：共享 UTF-16 单元往返计数供常量求值、VM 长度/截取/查找使用。截断代理项转为 U+FFFD 是有意差异；蛇版、U 系列和 FORM 显示列宽不变。 |
+| `7b69ebd2` | `CHKDATA` 在成功和版本不兼容时将存档内版本写入 `RESULT:1`，其他正常返回的错误路径写入 0。 | A 批已实现并通过双 oracle：该原版批次更新普通存档检查；不兼容版本在读取描述前返回，不扩展到 `CHKCHARADATA`。蛇版后续跟进见下节。 |
+| `250d6635` | 所选编码无法往返还原字符时尝试 CP932，以其编码宽度参与传统字符串计数。 | B 批已实现并通过四编码差分：共享 UTF-16 单元往返计数供常量求值、VM 长度/截取/查找使用。截断代理项转为 U+FFFD 是有意差异；该原版批次未改变蛇版，U 系列和 FORM 显示列宽不变。蛇版后续复用见下节。 |
 
 旧批次实施记录、原始捕获、fixture 中的 `referenceCommit`、历史基线采集器及其
 SHA 断言仍属于旧基准证据，不得仅替换 SHA 就宣称新基准通过。使用固定旧 SHA 的
 历史测试入口前，应显式选择对应旧 checkout；迁移到新 oracle 时需核对入口约束并重新
 取得受影响行为的证据。既有构建产物也不能因文档更新而视作新基准产物。
-原版 `CompatibilityIdentity` 的 semantic/policy 在 A 批 1→2、B 批 2→3，当前为 3；蛇版保持 12。
+原版 `CompatibilityIdentity` 的 semantic/policy 在 A 批 1→2、B 批 2→3，当前为 3；该历史批次结束时蛇版为 12，当前蛇版为 15（见下节）。
 完整身份不匹配的字节码、编译缓存和 VM snapshot 拒绝或失效，重新编译源码，不迁移旧
 snapshot；传统游戏存档格式及游戏标识、版本检查规则保持不变。
 A 批结果见[最终实施记录](snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md#upstream-a)；
 B 批结果见[字符串最终记录](snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md#upstream-b)。
-TUI、Web/WASM 与 Tauri 已统一绑定 core `d16907d5dfacef6b07e903ef481c01a1057af580`，
+该原版升级的客户端验收统一绑定 core `d16907d5dfacef6b07e903ef481c01a1057af580`，
 真实 C ABI、三浏览器与原生 host 固定场景均通过；旧缓存/快照在 TUI 真实链路完成
 拒绝/回退验证。详见[客户端最终记录](snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md#upstream-c)。
 
@@ -63,14 +63,28 @@ README 冲突通过保留 CLI 入口并采用上游 Skiav13 版本说明解决�
 
 | 上游提交 | 参考增量 | RustyEra 跟进边界 |
 | --- | --- | --- |
-| `4849416` | 多语言编码逐字符往返回退；CHKDATA 在 RESULT:1 返回存档版本。 | 既有原版 A/B 验收不能替代蛇版验收；蛇版行为需重新对照。 |
+| `4849416` | 多语言编码逐字符往返回退；CHKDATA 在 RESULT:1 返回存档版本。 | 蛇版 A 已完成双 oracle 验收：复用既有 UTF-16 往返/CP932 宽度与普通 CHKDATA RESULT:1 契约；孤立代理项保持 U+FFFD，U 系列与 FORM 列宽不变。 |
 | `ebd8574`、`624cdc5` | README/功能说明及 .trae 跟踪规则更新。 | 无 RustyEra 产品契约变化。 |
-| `71ff453` | RAND 非法参数钳制，首次触发警告。 | 需核对整数、浮点、变量入口及警告副作用；不改变已登记 RNG 有意差异。 |
-| `10c08ae`、`5717045` | 预设变量同名 ERD 补充名表与 ITEM 价格；EXIST_IN_CSV / EXIST_IN_ERD 来源查询。 | 需核对 CSV 优先、显式零价格、重名/越界与来源语义，再实施并验收。 |
+| `71ff453` | RAND 非法参数钳制，首次触发警告。 | 蛇版 B 已完成整数变量/函数及动态 FORM 跟进：无效区间钳制且不推进 SFMT，两入口分别每会话一次 LogOnly 警告；不改变原版、CompatiRAND 与既有有效区间算法，Float 暂缓。 |
+| `10c08ae`、`5717045` | 预设变量同名 ERD 补充名表与 ITEM 价格；EXIST_IN_CSV / EXIST_IN_ERD 来源查询。 | 蛇版 C 已完成预设 ERD 名表/ITEM 价格补全及运行时、缓存往返验收；CSV 与显式零价格优先，复用 GETNUM/角色模板，受 UseERD 控制。来源探针 EXIST_IN_CSV / EXIST_IN_ERD 暂缓。 |
 
-本次完成参考仓库同步与基准说明更新，未修改 RustyEra 运行时、协议、policy 或前端绑定；
-snake semantic/policy 仍为 12，不能据此宣称已兼容 Skiav13 新增行为。
-本次未构建新 oracle、运行 smoke 或 Rust/蛇版差分；旧产物与历史通过结果不属于新基准证据。
+本次 core A–C 已完成：snake semantic/policy 依次 12→13→14→15，原版保持 3；
+VM snapshot 格式为 21，旧身份缓存失效、旧快照拒绝，不迁移旧快照。
+C 产品提交为 `b77d731`，D 客户端实际绑定 core
+`c70b1c2db71ff808890de3d8e4d7bd9fe97fd6c6`；TUI、三浏览器和 macOS Tauri 已完成双 profile 固定验收。
+[D 最终记录](snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md#snake-upstream-d)保留输入回显差异、
+预期旧投影拒绝、首次全量失败与定向复验；不等同完整 Skiav13 或 TW 可玩性验收。
+具体结果见[蛇版 A](snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md#snake-upstream-a)、
+[蛇版 B](snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md#snake-upstream-b)及
+[蛇版 C](snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md#snake-upstream-c)。
+
+RAND 保留非 Compati 下变量遗漏/字面量零的解析拒绝；蛇版普通函数首参数遗漏也在源码检查
+拒绝，显式 `i64::MIN` 不作为遗漏哨兵。原版/Compati 的既有边界和已登记 RNG 差异保留。
+预设 ERD 路径复用固定 .NET 8／ICU72 casing 与 Windows 分隔符排序键；本次 Wine NLS
+的 Deseret 次序与产品不同，已逐项登记名称、GETNUM 和冲突警告差异，原始 `different`
+不改写为 matched。原版不启用预设 ERD，其空结果不能证明 NLS/ICU 排序等价。
+这些验收仅覆盖本次选定增量，不代表整个 Skiav13 或蛇版 TW 已完整兼容；来源探针与通用
+Float 均未纳入。旧产物与历史通过结果不属于本次新基准证据。
 历史报告、fixture、捕获和批次专用 runner 保留旧 SHA；执行前须核对其固定身份，使用匹配
 的历史 checkout，或显式迁移入口并重新取得受影响行为证据，禁止仅替换历史结果中的 SHA。
 

@@ -1,6 +1,6 @@
 # 蛇版 Emuera 适配：RustyEra 改造思路
 
-> 2026-09-11：当前蛇版参考目标已升级为 Skiav13（`57170459b3d5ca175a1c57933058b569088bee0e`），见[基准升级与待验收边界](../runtime-reference-mapping.zh-CN.md#2026-09-11-蛇版参考基准升级)。本文既有审计、批次方案及证据中的旧 SHA 保留原意，不代表新基准已验收。
+> 2026-09-11：当前蛇版参考目标已升级为 Skiav13（`57170459b3d5ca175a1c57933058b569088bee0e`），见[基准升级与待验收边界](../runtime-reference-mapping.zh-CN.md#2026-09-11-蛇版参考基准升级)。本文既有审计、批次方案及证据中的旧 SHA 保留原意，不代表新基准整体已验收；本轮 A–D 授权增量已完成，见[最终记录](SNAKE_EMUERA_IMPLEMENTATION_LOG.md#snake-upstream-d)。
 
 > 来源：从[功能分类文档](SNAKE_EMUERA_BASELINE_MIGRATION_CLASSIFICATION.md)原第 7 章独立抽取，保留已核对的批次 0–7 范围与依赖关系。本文是实施计划，不是完成状态或运行通过证明。
 
