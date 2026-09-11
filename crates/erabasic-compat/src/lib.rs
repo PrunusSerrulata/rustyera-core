@@ -130,7 +130,7 @@ impl CompatibilityIdentity {
     #[must_use]
     pub fn for_profile(profile: CompatibilityProfileId) -> Self {
         let version = match profile {
-            CompatibilityProfileId::EmueraEm => 1,
+            CompatibilityProfileId::EmueraEm => 2,
             CompatibilityProfileId::EmueraSkiaSnake => 12,
         };
         Self {
@@ -312,6 +312,18 @@ impl std::error::Error for CompatibilityError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn original_upgrade_rejects_previous_identity() {
+        let current = CompatibilityIdentity::reference();
+        assert_eq!((current.semantic_version, current.policy_version), (2, 2));
+        assert!(current.validate().is_ok());
+        let mut previous = current.clone();
+        previous.semantic_version = 1;
+        previous.policy_version = 1;
+        assert!(previous.validate().is_err());
+        assert_ne!(previous.digest(), current.digest());
+    }
 
     #[test]
     #[allow(clippy::too_many_lines)]

@@ -171,6 +171,7 @@ fn snapshot_identity_mismatches_preserve_the_live_vm_and_wait() {
 
     for mismatch in [
         "outer_profile",
+        "old_original",
         "inner_profile",
         "outer_artifact",
         "inner_artifact",
@@ -179,6 +180,10 @@ fn snapshot_identity_mismatches_preserve_the_live_vm_and_wait() {
             runtime_snapshot::decode(&bytes.copy_range(0..bytes.len()), usize::MAX).unwrap();
         match mismatch {
             "outer_profile" => payload.compatibility = snake.clone(),
+            "old_original" => {
+                payload.compatibility.semantic_version = 1;
+                payload.compatibility.policy_version = 1;
+            }
             "outer_artifact" => payload.artifact_id = erabasic_bytecode::Digest([7; 32]),
             "inner_profile" | "inner_artifact" => {
                 let vm = erabasic_vm::VmSnapshot::decode(&payload.vm_snapshot, usize::MAX).unwrap();
@@ -500,10 +505,8 @@ fn runtime_drive_reinstalls_the_vm_before_propagating_host_event_errors() {
 fn old_snapshot_repairs_live_canvas_sprite_before_first_presentation() {
     let mut client = capabilities();
     client.graphics = true;
-    let mut session = super::key_macro_input::start_snake_input_project(
-        "@SYSTEM_TITLE\nINPUT\nRETURN\n",
-        client,
-    );
+    let mut session =
+        super::key_macro_input::start_snake_input_project("@SYSTEM_TITLE\nINPUT\nRETURN\n", client);
     session
         .export_state(
             100,
@@ -556,10 +559,8 @@ fn old_snapshot_repairs_live_canvas_sprite_before_first_presentation() {
 fn old_snapshot_labels_ambiguous_current_and_historical_sprite_aliases() {
     let mut client = capabilities();
     client.graphics = true;
-    let mut session = super::key_macro_input::start_snake_input_project(
-        "@SYSTEM_TITLE\nINPUT\nRETURN\n",
-        client,
-    );
+    let mut session =
+        super::key_macro_input::start_snake_input_project("@SYSTEM_TITLE\nINPUT\nRETURN\n", client);
     session
         .export_state(
             100,

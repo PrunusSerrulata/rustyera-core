@@ -214,3 +214,30 @@ fn bump_compatibility_service_version(
         .expect("compatibility identity carries the requested service contract")
         .version += 1;
 }
+
+#[test]
+fn original_upgrade_rejects_previous_full_project_identity() {
+    let project = manifest("@SYSTEM_TITLE\nRETURN\n", 1);
+    let build = crate::project::build_project(&project, None);
+    assert!(build.report.success, "{:?}", build.report.diagnostics);
+    let bytes = encode_full_project_for_test(
+        &project,
+        &[],
+        build.artifact.as_ref().unwrap(),
+        &build.incremental,
+        build.snapshot.as_ref().unwrap(),
+        &build.report.diagnostics,
+    )
+    .unwrap();
+    assert!(decode_project_file(&bytes, bytes.len()).is_ok());
+    let mut old = project.compatibility.clone();
+    old.semantic_version = 1;
+    old.policy_version = 1;
+    assert_historical_profile_rejected(&bytes, &old);
+    let mut old_project = project.clone();
+    old_project.compatibility = old;
+    assert_ne!(
+        project_key(&project_identity(&project), &[]),
+        project_key(&project_identity(&old_project), &[])
+    );
+}
