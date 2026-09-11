@@ -53,6 +53,7 @@ core SHA、库/bundle 路径及后续发布绑定变更，须在对应实施批�
 | [原版 upstream B](#upstream-b) | UTF-16 传统字符串语义 | 已完成 | 2026-09-11 / Codex | 四编码原版 8、蛇版 4 固定观察验收；最终客户端绑定由 C 推进 |
 | [原版 upstream A](#upstream-a) | 别名与普通存档版本检查 | 已完成 | 2026-09-11 / Codex | 原版 9、蛇版 5 固定差分通过；B/C 独立推进 |
 | [蛇版 upstream A](#snake-upstream-a) | 复用 UTF-16 字符串与 CHKDATA 版本检查 | 已完成 | 2026-09-11 / Codex | 32 个双参考观察验收；8 个孤立代理项差异保留，客户端绑定属于 D |
+| [蛇版 upstream B](#snake-upstream-b) | 整数 RAND 钳制与会话警告 | 已完成 | 2026-09-11 / Codex | 6 个双参考观察验收；快照 21，客户端绑定属于 D |
 
 <a id="batch-0"></a>
 
@@ -1966,6 +1967,54 @@ Rust U+FFFD 与参考不可表示代理项的既有差异。未把该差异改�
 采集基于 `b7aa6288` 加最终内容摘要，随后提交仅改变 Git 身份，未以提交作为重建理由。
 本批范围已完成，B/C/D 的 RAND、预设 ERD 和客户端集成尚不属于本批验收；不代表
 完整蛇版语义或蛇版 TW 可玩性。未推送、未修改发布版本，最终客户端 pin 由 D 统一更新。
+
+<a id="snake-upstream-b"></a>
+
+## 蛇版 Skiav13 B：整数 RAND 与会话警告
+
+2026-09-11 完成，产品提交 `ff684b4`。计划入口：[Skiav13 跟进](SNAKE_EMUERA_MIGRATION_PLAN.md#snake-upstream-5717045)。
+snake semantic/policy 13→14，原版仍为 3；VM snapshot 20→21。
+
+- 复用 Native SFMT、调用绑定、动态 FORM continuation 和现有结构化诊断。变量和函数
+  保留不同内部入口；普通蛇版非法范围返回 0 或下界，钳制不推进 SFMT。原版和
+  CompatiRAND 的既有范围拒绝不变；合法 i64::MIN 不再充当遗漏哨兵。
+- 每 VM 会话、每入口仅一次 LogOnly 警告；fiber、热重载、快照恢复保留去重状态，
+  新 VM 重置。不新增 opcode、服务协议或平行随机实现。
+- 唯一审查要求严格核对警告来源/参数/实际终态，以及快照 source/site/bound、旧格式、
+  原版与 Compati mask 负例；首条测试前已落实。负例确认拒绝先于 Host 重绑定和
+  Native checkpoint 恢复，不追加第二次审查。
+
+### 首次全量与定向复验
+
+首次 workspace 全量 **1,716 passed / 0 failed / 0 ignored**。其后参考执行揭示源码
+参数边界，修正后只复验相关静态门禁和 RAND 集合：**17 passed / 0 failed**，没有
+重跑全量。fmt、workspace check、Clippy、Native/compat 最小回归、探针构建及比较器
+测试通过。首次静态暴露过函数长度 lint 与字段路径错误，修复后定向通过。
+
+真实参考确认 `RAND:(LOCAL:3)` 合法、`RAND:LOCAL:3` 超维，且函数首参数不能显式
+遗漏。已移除不适用的 RAND 索引归一化，蛇版普通 RAND 在静态/动态源码处拒绝这些
+输入；执行器内部遗漏元数据与合法最小整数仍分开。原版 policy 3 既有的首参数遗漏
+接受缺口及 Compati 源码边界未扩大修改，不宣称这些边界完全兼容。
+
+### 双参考、差异与证据
+
+原版 `7b69ebd2` / wrapper `c94bf1de`，蛇版 `5717045` / wrapper `851c40c9`；沿用
+A 已核验的独立参考构建与 provider，seed 123456。6 个新观察全部验收：两 profile
+合法回放一致；蛇版钳制和动态 FORM 保留 2 个原始 output different（参考控制台警告，
+Rust LogOnly）；原版两种非法范围均保留 matched observed rejection，诊断 schema
+分别验证、不宣称相等。蛇版警告的 VM 会话去重与上游进程静态去重边界明确保留。
+
+fixture 按 profile 隔离，reference 标题入口与探针已有 wrapper 分开，Rust 加载
+报告先通过 adapter 才启动 oracle。早期 fixture/报告错误及实际失败均保留；完整
+观测的报告元数据缺项与错误文本信封解析修复优先离线重算，没有为重整报告重复
+执行已有效通过的观察。最终参考捕获源码与验收入口位于
+`tools/runtime-tester/fixture-snake-upstream-b/` 和 `validate_rand_observations.py`。
+
+`.audit/snake-upstream-5717045-20260911/b/final-evidence.json` 保存 6 个验收、原始
+verdict、源码摘要、探针摘要及完整命令索引；收集时累计约 36 分钟，未超 60 分钟。
+探针 SHA256 `7e49ca31321764355bbb9ff40fdf2a798f6065f26c77d6b24f261cdd0b4c7ec3`，
+捕获基于 `841a47e` 加最终产品内容，提交仅改变 Git 身份，不据此重建。本批范围完成；
+C/D 和完整蛇版 TW 可玩性不属于本批验收。未推送或更改发布版本。
 
 <a id="batch-7"></a>
 
