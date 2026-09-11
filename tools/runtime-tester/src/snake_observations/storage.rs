@@ -139,6 +139,35 @@ impl FixtureStorage {
         Ok(storage)
     }
 
+    /// Seed the exact committed header bytes also consumed by the reference CLI.
+    pub(super) fn from_upstream_fixture(
+        manifest: &ProjectManifest,
+        root: &std::path::Path,
+    ) -> AuditResult<Self> {
+        let mut storage = Self::from_manifest(manifest)?;
+        for slot in 0..8 {
+            let path = format!("save{slot:02}.sav");
+            let source = root.join(&path);
+            let metadata = std::fs::symlink_metadata(&source)?;
+            if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 4096 {
+                return Err(
+                    "upstream save header must be a regular file of at most 4096 bytes".into(),
+                );
+            }
+            let bytes = std::fs::read(source)?;
+            if bytes.len() as u64 != metadata.len() {
+                return Err("upstream save header changed while reading".into());
+            }
+            storage.retained_bytes += bytes.len();
+            storage.retained_path_bytes += path.len();
+            storage.writable.insert(
+                (StorageNamespace::Save, path.clone()),
+                File::new(path, bytes, 0),
+            );
+        }
+        Ok(storage)
+    }
+
     pub(super) fn respond(&mut self, request: &StorageRequest) -> StorageResponse {
         if matches!(
             request.operation,

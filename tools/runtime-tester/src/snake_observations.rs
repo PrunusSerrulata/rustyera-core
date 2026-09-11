@@ -110,7 +110,11 @@ fn observe_case(
     }
     let (manifest, harness) =
         build_manifest(root, identity, &case.group, &case.requests[0].request)?;
-    let storage = if case.group == "COLUMNS" {
+    let storage = if case.group == "UPSTREAM_A" {
+        Some(storage::FixtureStorage::from_upstream_fixture(
+            &manifest, root,
+        )?)
+    } else if case.group == "COLUMNS" {
         Some(storage::FixtureStorage::from_manifest(&manifest)?)
     } else {
         None

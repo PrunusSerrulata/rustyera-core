@@ -108,9 +108,9 @@ def validate_rust_evidence(evidence, oracle, fixture, seed, required_policy=None
         raise ValueError("Rust evidence belongs to a different compatibility profile")
     versions = (identity.get("semantic_version"), identity.get("policy_version"))
     supported = (
-        {(1, 1)}
+        {(1, 1), (2, 2)}
         if oracle == "original"
-        else {(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8)}
+        else {(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8), (12, 12)}
     )
     if versions not in supported:
         raise ValueError(f"unsupported Rust semantic/policy versions: {versions!r}")
@@ -119,13 +119,19 @@ def validate_rust_evidence(evidence, oracle, fixture, seed, required_policy=None
             raise ValueError(f"fixture requires Rust policy {key}={value!r}")
     expected = {
         "arithmetic": ("snake_saturating_i64_v1"
-                       if oracle == "snake" and versions in {(3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8)} else "wrapping_i64_v1"),
+                       if oracle == "snake" and versions in {(3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8), (12, 12)} else "wrapping_i64_v1"),
         "rng_algorithm": "sfmt19937",
         "rng_state_version": 1,
         "layout": "unicode_column_v1",
         "save_codec": ("emuera1808" if oracle == "original" else "rustyera_envelope_v1:emuera1808"),
         "services": [],
     }
+    if oracle == "snake" and versions == (12, 12):
+        expected["save_codec"] = "snake_emuera1808_interop_v1"
+        expected["services"] = [
+            {"name": name, "version": 1}
+            for name in ("rustyera.sql", "rustyera.sql.limits", "rustyera.scene", "rustyera.audio")
+        ]
     for key, value in expected.items():
         if identity.get(key) != value:
             raise ValueError(f"unsupported Rust policy {key}: {identity.get(key)!r}")
@@ -179,6 +185,66 @@ def split_setup_diagnostics(diagnostics, identity):
         )
         (setup if is_setup else script).append(diagnostic)
     return setup, script
+
+
+def validate_upstream_a_load_diagnostics(rust_case, load_response, identity):
+    """Check each engine's load schema independently, preserving the raw evidence."""
+    rust_raw = (rust_case.get("load") or {}).get("diagnostics")
+    oracle_raw = (load_response or {}).get("diagnostics")
+    profile = (identity or {}).get("profile")
+    differences = []
+    setup, rust_script = [], None
+    if isinstance(rust_raw, list) and all(isinstance(item, dict) for item in rust_raw):
+        setup, rust_script = split_setup_diagnostics(rust_raw, identity)
+    snake = profile == "emuera.skia.snake"
+    if profile not in PROFILES.values():
+        differences.append("missing_or_unknown_compatibility_profile")
+    rust_valid = rust_script == [] if not snake else (
+        isinstance(rust_script, list) and len(rust_script) == 1
+        and rust_script[0].get("code") == "csv.duplicatealias"
+        and rust_script[0].get("level") == "warning"
+        and (rust_script[0].get("source") or {}).get("relative_path") == "csv/FLAG.als"
+        and type((rust_script[0].get("source") or {}).get("line")) is int
+        and rust_script[0]["source"]["line"] == 1
+    )
+    # The fixed snake CLI emits CSV warnings in load output, not diagnostics.
+    # Decode that concrete wire representation and retain it; do not invent a
+    # diagnostic code or equate its one-based positions with Rust's zero-based ones.
+    oracle_output = (load_response or {}).get("result", {}).get("output")
+    warnings, unknown = [], []
+    if isinstance(oracle_output, list):
+        for line in oracle_output:
+            if line == "Now Loading..." or (
+                isinstance(line, str) and re.fullmatch(r"Elapsed time:[0-9]+(?:\.[0-9]+)?ms", line)
+            ):
+                continue
+            match = re.fullmatch(r'Warning Lv([0-9]+):([^:]+): at line ([0-9]+):别名"([^"]+)"已被定义', line) if isinstance(line, str) else None
+            if match:
+                warnings.append({"level": int(match[1]), "file": match[2],
+                                 "line": int(match[3]), "alias": match[4], "raw": line})
+            else:
+                unknown.append(line)
+    expected_warnings = [{"level": 1, "file": "FLAG.als", "line": 2, "alias": "shared"}] if snake else []
+    oracle_valid = (
+        oracle_raw == [] and isinstance(oracle_output, list) and not unknown
+        and [{key: value for key, value in warning.items() if key != "raw"}
+             for warning in warnings] == expected_warnings
+    )
+    if not rust_valid:
+        differences.append("rust_load_diagnostic_contract")
+    if not oracle_valid:
+        differences.append("oracle_load_diagnostic_contract")
+    return {
+        "status": "different" if differences else "separately_checked_schemas",
+        "diagnosticEquivalence": False,
+        "differences": differences,
+        "rust": rust_raw,
+        "oracle": oracle_raw,
+        "setupDiagnostics": setup,
+        "oracleLoadOutput": oracle_output,
+        "oracleConsoleWarnings": warnings,
+        "oracleUnclassifiedOutput": unknown,
+    }
 
 
 def compare_case(case, oracle_steps, rust_case, load_response=None, identity=None):
@@ -381,9 +447,15 @@ def compare_case(case, oracle_steps, rust_case, load_response=None, identity=Non
         if results
         else "oracle_instrumentation_only"
     )
+    load_diagnostics = None
+    if case.get("group") == "UPSTREAM_A":
+        load_diagnostics = validate_upstream_a_load_diagnostics(rust_case, load_response, identity)
+        if load_diagnostics["differences"]:
+            status = "different"
     return {
         "case": case["id"],
         "status": status,
+        "loadDiagnosticComparison": load_diagnostics,
         "steps": results,
         "oracleLoad": load_response,
         "targetBatch": case["targetBatch"],

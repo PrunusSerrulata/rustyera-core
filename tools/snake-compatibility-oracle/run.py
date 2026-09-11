@@ -425,7 +425,8 @@ def main():
     selected = [
         case
         for case in manifest["cases"]
-        if not args.case or case["id"] in args.case or case["group"] in args.case
+        if (not args.case or case["id"] in args.case or case["group"] in args.case)
+        and args.oracle in case.get("allowedOracles", ["original", "snake"])
     ]
     if not selected:
         parser.error("no matching cases")

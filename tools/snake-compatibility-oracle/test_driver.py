@@ -18,6 +18,48 @@ spec.loader.exec_module(driver)
 
 
 class DriverTests(unittest.TestCase):
+    def test_upstream_a_load_diagnostics_are_checked_separately(self):
+        case = {"id": "aliases", "group": "UPSTREAM_A", "requests": [],
+                "targetBatch": "A", "snakeTargetStatus": "unchanged"}
+        warning = {"code": "csv.duplicatealias", "level": "warning",
+                   "source": {"relative_path": "csv/FLAG.als", "line": 1}}
+        console_warning = 'Warning Lv1:FLAG.als: at line 2:别名"shared"已被定义'
+        for profile in ("emuera.em", "emuera.skia.snake"):
+            identity = {"profile": profile}
+            snake = profile == "emuera.skia.snake"
+            rust_diags = [warning] if snake else []
+            rust = {"load": {"success": True, "diagnostics": rust_diags}, "steps": []}
+            output = ["Now Loading...", "Elapsed time:14.453ms"] + ([console_warning] if snake else [])
+            load = {"ok": True, "diagnostics": [], "result": {"output": output}}
+            checked = compare_case(case, [], rust, load, identity)["loadDiagnosticComparison"]
+            self.assertEqual(checked["status"], "separately_checked_schemas")
+            self.assertFalse(checked["diagnosticEquivalence"])
+            self.assertIs(checked["rust"], rust_diags)
+            self.assertIs(checked["oracleLoadOutput"], output)
+            for invalid in (None, [*rust_diags, warning]):
+                changed = {**rust, "load": {"diagnostics": invalid}}
+                self.assertEqual(compare_case(case, [], changed, load, identity)["status"], "different")
+            for invalid in (None, [console_warning]):
+                self.assertEqual(compare_case(case, [], rust, {**load, "diagnostics": invalid}, identity)["status"], "different")
+            for invalid in (None, output + [console_warning], output + ["unclassified warning"],
+                            output + ["Elapsed time:warning"]):
+                changed = {**load, "result": {"output": invalid}}
+                self.assertEqual(compare_case(case, [], rust, changed, identity)["status"], "different")
+            if snake:
+                setup = {"code": "runtime.experimental_compatibility_profile", "level": "warning",
+                         "context": {"stage": "configuration", "identity": identity},
+                         "source": {"relative_path": "reraconfig.toml", "byte_start": 0, "byte_end": 0}}
+                rust["load"]["diagnostics"] = [setup, warning]
+                self.assertEqual(compare_case(case, [], rust, load, identity)["loadDiagnosticComparison"]["setupDiagnostics"], [setup])
+                for invalid in ([], [{**warning, "code": "csv.other"}],
+                                [{**warning, "source": {"relative_path": "csv/FLAG.als", "line": 2}}]):
+                    self.assertEqual(compare_case(case, [], {**rust, "load": {"diagnostics": invalid}}, load, identity)["status"], "different")
+                for bad in ([], [console_warning.replace("Lv1", "Lv2")],
+                            [console_warning.replace("line 2", "line 3")],
+                            [console_warning.replace("FLAG.als", "OTHER.als")],
+                            [console_warning.replace("shared", "other")]):
+                    self.assertEqual(compare_case(case, [], rust, {**load, "result": {"output": bad}}, identity)["status"], "different")
+
     def test_oracle_process_uses_each_case_working_directory_and_keeps_prior_records(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -530,6 +572,22 @@ class DriverTests(unittest.TestCase):
             },
         }
         validate_rust_evidence(evidence, "original", fixture, 1)
+        upstream = {**evidence, "profile": {**evidence["profile"],
+                    "semantic_version": 2, "policy_version": 2}}
+        validate_rust_evidence(upstream, "original", fixture, 1,
+                               {"semantic_version": 2, "policy_version": 2})
+        modern_snake = {**evidence, "profile": {**evidence["profile"],
+            "profile": "emuera.skia.snake", "semantic_version": 12, "policy_version": 12,
+            "arithmetic": "snake_saturating_i64_v1", "save_codec": "snake_emuera1808_interop_v1",
+            "services": [{"name": name, "version": 1} for name in
+                         ("rustyera.sql", "rustyera.sql.limits", "rustyera.scene", "rustyera.audio")]}}
+        validate_rust_evidence(modern_snake, "snake", fixture, 1,
+                               {"semantic_version": 12, "policy_version": 12})
+        for fields in ({"services": []}, {"save_codec": "rustyera_envelope_v1:emuera1808"},
+                       {"arithmetic": "wrapping_i64_v1"}, {"policy_version": 11}):
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                validate_rust_evidence({**modern_snake, "profile": {**modern_snake["profile"], **fields}},
+                                       "snake", fixture, 1)
         with self.assertRaises(ValueError):
             validate_rust_evidence(evidence, "snake", fixture, 1)
         with self.assertRaises(ValueError):
@@ -621,14 +679,23 @@ class DriverTests(unittest.TestCase):
         cases = {case["id"]: case for case in manifest["cases"]}
         self.assertEqual(
             set(case["group"] for case in cases.values()),
-            {"PRINTC", "arithmetic", "RNG", "REF", "extra_args", "TOINT", "GETKEY"},
+            {"PRINTC", "arithmetic", "RNG", "REF", "extra_args", "TOINT", "GETKEY", "INPUT"},
         )
         for case in cases.values():
-            self.assertEqual(case["snakeTargetStatus"], "deferred_semantics")
+            self.assertEqual(
+                case["snakeTargetStatus"],
+                "implemented_pending_verification" if case["group"] == "INPUT" else "deferred_semantics",
+            )
         click = cases["key-same-pump-click"]["requests"][0]["request"]["inputTrace"]
         self.assertEqual([event["down"] for event in click["awaitPumps"][0]], [True, False])
         shared_invalid = cases["toint-invalid"]["requests"][0]["expect"]
         self.assertEqual(shared_invalid["original"], shared_invalid["snake"])
+
+    def test_upstream_entry_file_does_not_duplicate_the_rust_title_wrapper(self):
+        fixture = driver.FIXTURE.with_name("fixture-upstream-7b69-batch-a")
+        self.assertEqual((fixture / "erb/base.erb").read_text().strip(),
+                         "@SYSTEM_TITLE\nINPUT\nRETURN")
+        self.assertNotIn("@SYSTEM_TITLE", (fixture / "erb/upstream_a.erb").read_text())
 
     def test_index_fixture_keeps_extension_rejections_separate_from_successful_loads(self):
         fixture = driver.FIXTURE.with_name("fixture-snake-index-inputs")

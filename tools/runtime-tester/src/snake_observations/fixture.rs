@@ -120,6 +120,7 @@ pub(super) fn wrapper(request: &Value) -> AuditResult<String> {
 
 fn load_fixture_files(root: &Path, group: &str) -> AuditResult<Vec<SubmittedFile>> {
     let group_file = match group {
+        "UPSTREAM_A" => "upstream_a",
         "PRINTC" => "printc",
         "arithmetic" => "arithmetic",
         "RNG" => "rng",
@@ -147,6 +148,18 @@ fn load_fixture_files(root: &Path, group: &str) -> AuditResult<Vec<SubmittedFile
             category,
             fs::read_to_string(root.join(&path))?,
         ));
+    }
+    if group == "UPSTREAM_A" {
+        for (path, category) in [
+            ("csv/FLAG.csv", FileCategory::Csv),
+            ("csv/FLAG.als", FileCategory::Als),
+        ] {
+            files.push(submitted(
+                path,
+                category,
+                fs::read_to_string(root.join(path))?,
+            ));
+        }
     }
     if matches!(group, "METHODS" | "COLUMNS") {
         let header = format!("erb/{group_file}.erh");

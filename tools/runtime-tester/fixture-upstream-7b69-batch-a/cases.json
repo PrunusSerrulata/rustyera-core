@@ -1,0 +1,522 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "7b69ebd27378c03c32b6477b74901bfc3d33223c",
+    "snake": "fc4fb21416768c17256d0e82f997e5f99c9bba91"
+  },
+  "requiredRustPolicy": {
+    "original": {
+      "semantic_version": 2,
+      "policy_version": 2
+    },
+    "snake": {
+      "semantic_version": 12,
+      "policy_version": 12
+    }
+  },
+  "evidenceStatus": "source_derived_candidates_not_executed",
+  "allowedOracles": [
+    "original",
+    "snake"
+  ],
+  "loadExpect": {
+    "ok": true,
+    "result": {
+      "termination": "waitingInput"
+    }
+  },
+  "cases": [
+    {
+      "id": "upstream-als",
+      "group": "UPSTREAM_A",
+      "targetBatch": "upstream-A",
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "upstream_batch_A_candidate",
+      "snakeTargetStatus": "unchanged_regression",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "UPSTREAM_ALS",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": 3
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 1,
+                  "RESULT:11": 3
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "upstream-chkdata-0",
+      "group": "UPSTREAM_A",
+      "targetBatch": "upstream-A",
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "upstream_batch_A_candidate",
+      "snakeTargetStatus": "unchanged_regression",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "UPSTREAM_CHECK_0",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 0,
+                  "RESULT:11": 42,
+                  "RESULT:12": 0,
+                  "RESULT:13": 42,
+                  "RESULT:14": 1,
+                  "RESULT:15": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 0,
+                  "RESULT:11": 777,
+                  "RESULT:12": 0,
+                  "RESULT:13": 777,
+                  "RESULT:14": 1,
+                  "RESULT:15": 777
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "upstream-chkdata-1",
+      "group": "UPSTREAM_A",
+      "targetBatch": "upstream-A",
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "upstream_batch_A_candidate",
+      "snakeTargetStatus": "unchanged_regression",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "UPSTREAM_CHECK_1",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 0,
+                  "RESULT:11": 42,
+                  "RESULT:12": 0,
+                  "RESULT:13": 42,
+                  "RESULT:14": 1,
+                  "RESULT:15": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 0,
+                  "RESULT:11": 777,
+                  "RESULT:12": 0,
+                  "RESULT:13": 777,
+                  "RESULT:14": 1,
+                  "RESULT:15": 777
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "upstream-chkdata-2",
+      "group": "UPSTREAM_A",
+      "targetBatch": "upstream-A",
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "upstream_batch_A_candidate",
+      "snakeTargetStatus": "unchanged_regression",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "UPSTREAM_CHECK_2",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 3,
+                  "RESULT:11": 41,
+                  "RESULT:12": 3,
+                  "RESULT:13": 41,
+                  "RESULT:14": 1,
+                  "RESULT:15": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 3,
+                  "RESULT:11": 777,
+                  "RESULT:12": 3,
+                  "RESULT:13": 777,
+                  "RESULT:14": 1,
+                  "RESULT:15": 777
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "upstream-chkdata-3",
+      "group": "UPSTREAM_A",
+      "targetBatch": "upstream-A",
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "upstream_batch_A_candidate",
+      "snakeTargetStatus": "unchanged_regression",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "UPSTREAM_CHECK_3",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 3,
+                  "RESULT:11": 41,
+                  "RESULT:12": 3,
+                  "RESULT:13": 41,
+                  "RESULT:14": 1,
+                  "RESULT:15": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 3,
+                  "RESULT:11": 777,
+                  "RESULT:12": 3,
+                  "RESULT:13": 777,
+                  "RESULT:14": 1,
+                  "RESULT:15": 777
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "upstream-chkdata-4",
+      "group": "UPSTREAM_A",
+      "targetBatch": "upstream-A",
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "upstream_batch_A_candidate",
+      "snakeTargetStatus": "unchanged_regression",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "UPSTREAM_CHECK_4",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 3,
+                  "RESULT:11": 41,
+                  "RESULT:12": 3,
+                  "RESULT:13": 41,
+                  "RESULT:14": 1,
+                  "RESULT:15": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 3,
+                  "RESULT:11": 777,
+                  "RESULT:12": 3,
+                  "RESULT:13": 777,
+                  "RESULT:14": 1,
+                  "RESULT:15": 777
+                }
+              }
+            }
+          }
+        }
+      ],
+      "allowedOracles": [
+        "original"
+      ]
+    },
+    {
+      "id": "upstream-chkdata-5",
+      "group": "UPSTREAM_A",
+      "targetBatch": "upstream-A",
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "upstream_batch_A_candidate",
+      "snakeTargetStatus": "unchanged_regression",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "UPSTREAM_CHECK_5",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 3,
+                  "RESULT:11": 41,
+                  "RESULT:12": 3,
+                  "RESULT:13": 41,
+                  "RESULT:14": 1,
+                  "RESULT:15": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 3,
+                  "RESULT:11": 777,
+                  "RESULT:12": 3,
+                  "RESULT:13": 777,
+                  "RESULT:14": 1,
+                  "RESULT:15": 777
+                }
+              }
+            }
+          }
+        }
+      ],
+      "allowedOracles": [
+        "original"
+      ]
+    },
+    {
+      "id": "upstream-chkdata-6",
+      "group": "UPSTREAM_A",
+      "targetBatch": "upstream-A",
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "upstream_batch_A_candidate",
+      "snakeTargetStatus": "unchanged_regression",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "UPSTREAM_CHECK_6",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 3,
+                  "RESULT:11": 41,
+                  "RESULT:12": 3,
+                  "RESULT:13": 41,
+                  "RESULT:14": 1,
+                  "RESULT:15": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 3,
+                  "RESULT:11": 777,
+                  "RESULT:12": 3,
+                  "RESULT:13": 777,
+                  "RESULT:14": 1,
+                  "RESULT:15": 777
+                }
+              }
+            }
+          }
+        }
+      ],
+      "allowedOracles": [
+        "original"
+      ]
+    },
+    {
+      "id": "upstream-chkdata-7",
+      "group": "UPSTREAM_A",
+      "targetBatch": "upstream-A",
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "upstream_batch_A_candidate",
+      "snakeTargetStatus": "unchanged_regression",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "UPSTREAM_CHECK_7",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 3,
+                  "RESULT:11": 41,
+                  "RESULT:12": 3,
+                  "RESULT:13": 41,
+                  "RESULT:14": 1,
+                  "RESULT:15": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 3,
+                  "RESULT:11": 777,
+                  "RESULT:12": 3,
+                  "RESULT:13": 777,
+                  "RESULT:14": 1,
+                  "RESULT:15": 777
+                }
+              }
+            }
+          }
+        }
+      ],
+      "allowedOracles": [
+        "original"
+      ]
+    }
+  ]
+}
