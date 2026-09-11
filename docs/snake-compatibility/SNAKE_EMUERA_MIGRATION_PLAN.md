@@ -243,3 +243,7 @@ U 系列、UTF-8 源码输入和可移植 FORM 显示列宽不改变。策略必
 真实动态库、Chromium/Firefox/Safari WASM 和原生 Tauri，桌面串行并遵守快照看门狗。
 不扩展为自主游玩、性能循环或额外平台矩阵；不修改产品发布版本、不自动推送。
 历史入口/fixture/捕获保留原基准，新观察独立记录，不用替换元数据冒充验收。
+
+A/B/C 均已完成授权范围，最终行为绑定为 core `d16907d5dfacef6b07e903ef481c01a1057af580`。
+实际首次全量、定向复验、客户端消费与差异见[最终记录](SNAKE_EMUERA_IMPLEMENTATION_LOG.md#upstream-c)；
+后续纯文档提交不触发重新绑定或产品重建。

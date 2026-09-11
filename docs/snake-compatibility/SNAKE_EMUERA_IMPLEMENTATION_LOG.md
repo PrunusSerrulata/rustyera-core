@@ -49,6 +49,7 @@ core SHA、库/bundle 路径及后续发布绑定变更，须在对应实施批�
 | [5](#batch-5) | 蛇版存档互操作与音频 | 已完成确认范围 | 2026-09-04 / Codex | 标准 1808、音频、存档页及整包导出修复完成；Browser/Tauri 蛇版 TW 导出文件一致，TUI 真实 TW 保留像素能力限制 |
 | [6](#batch-6) | 完整蛇版语言 | 待登记 | 待填写 | 待填写 |
 | [7](#batch-7) | 可选 extension 与渲染能力 | 待登记 | 待填写 | 待填写 |
+| [原版 upstream C](#upstream-c) | TUI、WASM 与 Tauri 最终绑定 | 已完成 | 2026-09-11 / Codex | 四条真实客户端链路通过；TUI 验证旧缓存回退及旧快照拒绝 |
 | [原版 upstream B](#upstream-b) | UTF-16 传统字符串语义 | 已完成 | 2026-09-11 / Codex | 四编码原版 8、蛇版 4 固定观察验收；最终客户端绑定由 C 推进 |
 | [原版 upstream A](#upstream-a) | 别名与普通存档版本检查 | 已完成 | 2026-09-11 / Codex | 原版 9、蛇版 5 固定差分通过；B/C 独立推进 |
 
@@ -1837,6 +1838,83 @@ StrForm padding 保留可移植显示列宽，U 系列不变。TOINT/ISNUMERIC �
 仅四个孤立代理替换案例登记为本批有意差异；U/FORM 约定和蛇版既有映射不改变。
 蛇版固定案例覆盖稳定输入，不宣称全面 snake Unicode 差分。客户端 C、额外平台、
 自主游戏及性能不属于本批验收。发布版本未改动，未推送远端。
+
+<a id="upstream-c"></a>
+
+## 原版 upstream C：客户端最终绑定（2026-09-11 最终记录）
+
+状态：本批授权范围已完成。依赖 A/B 最终 core 契约
+`d16907d5dfacef6b07e903ef481c01a1057af580`；后续纯验收文档提交不重新绑定或构建。
+计划入口：[原版 upstream 跟进](SNAKE_EMUERA_MIGRATION_PLAN.md#upstream-7b69)。
+
+### 实际改动、审查与提交
+
+- TUI `ab65f37c014189e0d65108e1f7ce4e9b73bf0058`：绑定上述完整 core SHA，显示对应
+  revision，并将既有协议协商从遗漏的 47.0 同步为 core 已要求的 47.1；不新增协议字段。
+  增加固定场景、结构化加载报告及传输/开始恢复两个阶段的拒绝观察。二进制报告字段在
+  NDJSON 中用 `cbor_bytes_hex` 保留，判定仍使用原始报告。恢复失败沿用前端重同步，
+  待原 wait/phase/epoch 恢复后才判定可继续输入。
+- Web `ab91f86cc98bdc4246d64b7b5339f4e4693a6256`：revision、全部 Git 依赖及锁文件
+  同步到相同 core。新增共享 fixture、类型化 watch 和真实 Tauri 场景；普通 watch 观察
+  不再错误要求 GLOBAL 读取，传统存档/蛇版互操作恢复流程仍保留原存储断言。
+- 两仓标题分别为 `feat(compat): consume upstream original identity 3`、
+  `feat(compat): bind all hosts to upstream original identity 3`；正文记录绑定、动机、
+  实际首次全量和定向验证。原版 semantic/policy 为 3，蛇版仍为 12；产品发布版本未改。
+- 测试前完成本批唯一一次独立重构审查，落实结构化缓存拒绝证据、真实 CLI action
+  分发回归及正式测试接口文档。测试后定位的修复只做受影响定向检查，未追加审查或全量。
+
+### 首次全量与定向复验
+
+- TUI 首次全量：**574 passed / 14 failed / 5 skipped**。失败涉及旧显示 pin、47.0
+  协商、新增报告事件顺序及未安装的包元数据。修复后绑定/真实 C ABI 定向 21 passed，
+  包元数据单项 passed；最终拒绝、导出、配置及 presentation 定向 **76 passed**。
+  5 个跳过项为默认未启用的 D-service C ABI 专项，不是本次动态库缺失。
+- Web 首次 Vitest 全量：**2,184 passed / 1 failed**（139 个文件通过、1 个文件失败）。
+  既有 256 MiB 性能记录边界测试在并发全量中超时；同一用例隔离后 3.49 秒通过，
+  保留原 5 秒限制，未重跑全量。后续存储断言定向测试通过。
+- Web Rust workspace 首次全量：**152 passed / 0 failed / 1 ignored**；默认忽略项为
+  专用跨前端 source-index handoff driver，本批不扩展该流程。类型、Ruff、ESLint、
+  格式、core revision 一致性、Rust check/Clippy、Vue 构建均通过。
+- WASM 首次构建因既有 x86_64 wasm-pack 使 cc 继承 Rosetta、无法加载 ARM CLT 而失败；
+  显式使用已有 ARM clang 后通过。无下载或替代工具安装。新旧 C ABI 分开 target，
+  未接受早期共享 target 的误复用结果；Tauri 和 PyInstaller 构建均通过。
+- 动态首次失败及修复证据完整保留：原始报告 bytes 序列化、schema 4 自动迁移引起的
+  缓存身份变化、快照 Start 阶段及其非空协议上下文、Web 整数 watch 的字符串表示、
+  普通 watch 被误套 GLOBAL 恢复断言。均定位后仅复验失败最小集合，未改写原 verdict。
+
+### 真实客户端验收
+
+固定输入验证 `.als` 首次别名 1、重复项后有效别名 3；普通 `CHKDATA` 的状态/版本
+为 `0,42,1,0`；编译期长度、运行期长度与查找位置为 `4,4,3`。
+
+| 链路 | 实际结果与终态 |
+|---|---|
+| TUI 新 C ABI | 旧 core `312b5b624efdcad8df0985333787932a37736361` 生成的 policy 2 缓存/快照先在旧库命中、恢复并输入 7 成功；同一产物在新库触发结构化 cache ignored → requires source → 同项目编译成功，快照 code 3、完整 active identity 3/3 + protocol context 拒绝；原完整 wait/phase/epoch 恢复、pending import 清空，输入 7 后 goal passed |
+| TUI 打包 | PyInstaller 可执行文件启动通过；实际打包 C ABI 执行固定场景，三项结果和输入继续均 passed |
+| Chromium 151.0.7922.34 | 真实 WASM、可见输入 7，全部输出、10 项 watch 和终态 passed；seed 123456，clock 2026-09-11T00:00:00Z |
+| Firefox 155.0.1 / Safari 26.6.2 | 本机 WebDriver + 真实 WASM，三项可见输出和 9 项类型化 watch 全部匹配；官方流程 seed 123456、clock 2026-01-01T00:00:00Z |
+| Tauri | 严格 require-reuse-build 命中，真实原生 host/WebView，确认 bridgeKind=tauri；可见打开、输入 7、提交，三项输出及继续输出正确、fault=null，exit 0 |
+
+浏览器/Tauri 使用官方 5 秒完整 DOM/runtime 快照看门狗，桌面串行。未用 mock host、
+本地 Cargo patch 或旧 bundle 替代发布绑定。C 的旧产物拒绝集中在真实 TUI 链路验证；
+四类客户端共同验证三项可见行为，core A/B 覆盖更完整的参数矩阵及旧身份 1/2。
+
+### 证据、产物与边界
+
+证据入口 `.audit/upstream-7b69-20260911/c/`：`commands.ndjson` 保存每条完整命令、
+环境、实际退出与时刻；`final-artifacts.json` 保存源码 pin、库/旧状态/缓存/host 摘要，
+`tauri-build-manifest.json` 保存原生构建契约；`client-evidence/` 保留从隔离 Web 工作区
+复制的浏览器捕获、存储证据及原生完整快照。TUI/Chromium 原始 trace 同目录保留。
+首次失败、schema 4 旧产物与 schema 5 正式验收产物分别保留，未覆盖或冒充重新验证。
+
+- 新 C ABI SHA256：`534ae4407265891a8bf5f0f372e6f1e3d07a95208da8274f7cd8f151b77a5c68`。
+- 打包 C ABI SHA256：`e4203008e880a2bae2e92eb0e22a5508f4bac639d5df670f23f6710ab0f9583e`。
+- WASM SHA256：`669b660ac5844b93d2e7b15caa1a6518171b33925065fbc7c8c2434b5c74954f`。
+- Tauri SHA256：`9c581d2f64728cec3c366cfa7889dcfcb4a85eef5c9200b7810458efc5eeaa03`。
+
+C 无新增语言有意差异；B 的孤立代理项 U+FFFD 差异仍适用，传统存档格式不变。
+所有本批必需客户端结果齐全；未开展自主游戏、性能循环、额外平台或全面 snake Unicode
+差分。A/B oracle 身份与证据原样保留，本批不重复相同输入 oracle 捕获。未推送远端。
 
 <a id="batch-7"></a>
 

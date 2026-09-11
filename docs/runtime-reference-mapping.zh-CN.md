@@ -49,7 +49,9 @@ SHA 断言仍属于旧基准证据，不得仅替换 SHA 就宣称新基准通�
 snapshot；传统游戏存档格式及游戏标识、版本检查规则保持不变。
 A 批结果见[最终实施记录](snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md#upstream-a)；
 B 批结果见[字符串最终记录](snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md#upstream-b)。
-最终客户端绑定尚未完成，不能据 core 结果宣称三端已消费新行为。
+TUI、Web/WASM 与 Tauri 已统一绑定 core `d16907d5dfacef6b07e903ef481c01a1057af580`，
+真实 C ABI、三浏览器与原生 host 固定场景均通过；旧缓存/快照在 TUI 真实链路完成
+拒绝/回退验证。详见[客户端最终记录](snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md#upstream-c)。
 
 ## 有意的架构差异
 
