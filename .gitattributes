@@ -3,3 +3,6 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
+
+# Oracle fixtures must retain the exact bytes consumed by both engines.
+/tools/runtime-tester/fixture-upstream-7b69-batch-a/save*.sav binary
