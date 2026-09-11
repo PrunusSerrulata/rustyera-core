@@ -29,6 +29,30 @@ pub fn inspect_metadata(
     complete: bool,
     limits: SaveCodecLimits,
 ) -> Result<SaveMetadataInspection, SaveCodecError> {
+    inspect_header(data, complete, limits, true)
+}
+
+/// Inspect only the kind, game identity and version, without reading the description.
+///
+/// This staged entry point lets CHKDATA reject incompatible versions before malformed
+/// or absent description bytes are consumed. Complete results have an empty description.
+///
+/// # Errors
+/// Returns an error for malformed, unsupported, or over-limit identity headers.
+pub fn inspect_identity(
+    data: &[u8],
+    complete: bool,
+    limits: SaveCodecLimits,
+) -> Result<SaveMetadataInspection, SaveCodecError> {
+    inspect_header(data, complete, limits, false)
+}
+
+fn inspect_header(
+    data: &[u8],
+    complete: bool,
+    limits: SaveCodecLimits,
+    include_description: bool,
+) -> Result<SaveMetadataInspection, SaveCodecError> {
     if data.len() > limits.maximum_bytes {
         return Err(SaveCodecError::LimitExceeded("maximum bytes"));
     }
@@ -44,9 +68,9 @@ pub fn inspect_metadata(
         .map(u64::from_le_bytes);
     match header {
         Some(header) if header == HEADER || header == ZIP_HEADER => {
-            inspect_binary(data, complete, limits, header)
+            inspect_binary(data, complete, limits, header, include_description)
         }
-        _ => inspect_text(data, complete, limits),
+        _ => inspect_text(data, complete, limits, include_description),
     }
 }
 
@@ -54,6 +78,7 @@ fn inspect_text(
     data: &[u8],
     complete: bool,
     limits: SaveCodecLimits,
+    include_description: bool,
 ) -> Result<SaveMetadataInspection, SaveCodecError> {
     let data = data.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(data);
     // A header check must not decode any payload bytes, including a UTF-8 code point
@@ -62,7 +87,7 @@ fn inspect_text(
         .iter()
         .enumerate()
         .filter(|(_, byte)| **byte == b'\n')
-        .nth(2)
+        .nth(if include_description { 2 } else { 1 })
         .map_or(data.len(), |(index, _)| index + 1);
     let source = match std::str::from_utf8(&data[..header_end]) {
         Ok(source) => source,
@@ -88,6 +113,29 @@ fn inspect_text(
             SaveCodecError::InvalidFormat("text save lacks script version".into()),
         );
     };
+    if !include_description {
+        if !complete && (!unique.ends_with('\n') || !version.ends_with('\n')) {
+            return Ok(SaveMetadataInspection::NeedMore);
+        }
+        let unique_code = unique.trim_end_matches(['\r', '\n']).parse().map_err(|_| {
+            SaveCodecError::InvalidFormat("text save has invalid unique code".into())
+        })?;
+        let version = version
+            .trim_end_matches(['\r', '\n'])
+            .parse()
+            .map_err(|_| {
+                SaveCodecError::InvalidFormat("text save has invalid script version".into())
+            })?;
+        return Ok(SaveMetadataInspection::Complete {
+            format: SaveFormat::Text1808,
+            kind: SaveFileKind::Normal,
+            metadata: SaveMetadata {
+                unique_code,
+                version,
+                description: String::new(),
+            },
+        });
+    }
     let Some(description) = lines.next() else {
         return incomplete_or(
             complete,
@@ -127,6 +175,7 @@ fn inspect_binary(
     complete: bool,
     limits: SaveCodecLimits,
     header: u64,
+    include_description: bool,
 ) -> Result<SaveMetadataInspection, SaveCodecError> {
     let Some(version) = read_u32(data, 8) else {
         return incomplete_or(complete, SaveCodecError::InvalidHeader);
@@ -148,9 +197,15 @@ fn inspect_binary(
         return incomplete_or(complete, SaveCodecError::InvalidHeader);
     };
     if header == HEADER {
-        inspect_binary_body(body, complete, SaveFormat::Binary1808, limits)
+        inspect_binary_body(
+            body,
+            complete,
+            SaveFormat::Binary1808,
+            limits,
+            include_description,
+        )
     } else {
-        inspect_compressed_body(body, complete, limits)
+        inspect_compressed_body(body, complete, limits, include_description)
     }
 }
 
@@ -158,6 +213,7 @@ fn inspect_compressed_body(
     body: &[u8],
     complete: bool,
     limits: SaveCodecLimits,
+    include_description: bool,
 ) -> Result<SaveMetadataInspection, SaveCodecError> {
     let maximum = limits.maximum_string_bytes.saturating_add(32);
     let mut decoder = GzDecoder::new(body);
@@ -166,7 +222,13 @@ fn inspect_compressed_body(
     loop {
         match decoder.read(&mut chunk) {
             Ok(0) => {
-                return inspect_binary_body(&prefix, complete, SaveFormat::Binary1808Gzip, limits);
+                return inspect_binary_body(
+                    &prefix,
+                    complete,
+                    SaveFormat::Binary1808Gzip,
+                    limits,
+                    include_description,
+                );
             }
             Ok(count) => {
                 prefix.extend_from_slice(&chunk[..count]);
@@ -174,7 +236,13 @@ fn inspect_compressed_body(
                     return Err(SaveCodecError::LimitExceeded("string bytes"));
                 }
                 if let SaveMetadataInspection::Complete { metadata, kind, .. } =
-                    inspect_binary_body(&prefix, false, SaveFormat::Binary1808Gzip, limits)?
+                    inspect_binary_body(
+                        &prefix,
+                        false,
+                        SaveFormat::Binary1808Gzip,
+                        limits,
+                        include_description,
+                    )?
                 {
                     return Ok(SaveMetadataInspection::Complete {
                         format: SaveFormat::Binary1808Gzip,
@@ -194,6 +262,7 @@ fn inspect_binary_body(
     complete: bool,
     format: SaveFormat,
     limits: SaveCodecLimits,
+    include_description: bool,
 ) -> Result<SaveMetadataInspection, SaveCodecError> {
     let Some(kind) = body.first().copied() else {
         return incomplete_or(complete, SaveCodecError::InvalidHeader);
@@ -205,6 +274,17 @@ fn inspect_binary_body(
     let Some(version) = read_i64(body, 9) else {
         return incomplete_or(complete, SaveCodecError::InvalidHeader);
     };
+    if !include_description {
+        return Ok(SaveMetadataInspection::Complete {
+            format,
+            kind,
+            metadata: SaveMetadata {
+                unique_code,
+                version,
+                description: String::new(),
+            },
+        });
+    }
     let Some((length, prefix)) = read_7bit(body.get(17..).unwrap_or_default())? else {
         return incomplete_or(complete, SaveCodecError::InvalidHeader);
     };
@@ -290,6 +370,31 @@ mod tests {
             variables: Vec::new(),
             opaque_extensions: Vec::new(),
             text_payload: None,
+        }
+    }
+
+    #[test]
+    fn identity_inspection_does_not_consume_description_bytes() {
+        for suffix in [&[][..], &[0xff][..]] {
+            let mut text = b"7\n9\n".to_vec();
+            text.extend_from_slice(suffix);
+            let mut binary = encode(
+                &document(SaveFormat::Binary1808),
+                SaveFormat::Binary1808,
+                SaveCodecLimits::default(),
+            )
+            .unwrap();
+            binary.truncate(33);
+            binary.extend_from_slice(suffix);
+            for bytes in [text, binary] {
+                for complete in [false, true] {
+                    assert!(
+                        matches!(inspect_identity(&bytes, complete, SaveCodecLimits::default()).unwrap(),
+                        SaveMetadataInspection::Complete { metadata, kind: SaveFileKind::Normal, .. }
+                        if metadata.unique_code == 7 && metadata.version == 9 && metadata.description.is_empty())
+                    );
+                }
+            }
         }
     }
 

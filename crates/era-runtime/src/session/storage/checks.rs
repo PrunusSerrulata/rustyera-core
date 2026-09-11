@@ -29,7 +29,7 @@ impl RuntimeSession {
                 } else {
                     (4, error.message.as_str())
                 };
-                return self.finish_save_check(request, status, description);
+                return self.finish_save_check(request, kind, status, description, 0);
             }
             StorageResult::ReadChunk {
                 data,
@@ -43,7 +43,13 @@ impl RuntimeSession {
                     CommandErrorCode::InvalidValue,
                     "save check response kind differs from its request",
                 )?;
-                return self.finish_save_check(request, 4, "invalid save check response kind");
+                return self.finish_save_check(
+                    request,
+                    kind,
+                    4,
+                    "invalid save check response kind",
+                    0,
+                );
             }
         };
         if offset != data.len() as u64
@@ -58,21 +64,55 @@ impl RuntimeSession {
             )?;
             return self.finish_save_check(
                 request,
+                kind,
                 4,
                 "save check metadata changed during reading",
+                0,
             );
         }
         let limits = era_runtime_save::SaveCodecLimits::default();
         let maximum_chunk = (super::SAVE_CHECK_CHUNK_BYTES as usize)
             .min(limits.maximum_bytes.saturating_sub(data.len()));
         if chunk.as_slice().len() > maximum_chunk || (!complete && chunk.as_slice().is_empty()) {
-            return self.finish_save_check(request, 4, "invalid save metadata chunk size");
+            return self.finish_save_check(request, kind, 4, "invalid save metadata chunk size", 0);
         }
         data.extend_from_slice(chunk.as_slice());
+        let vm = self
+            .vm
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Internal("save check completion has no VM".into()))?;
+        if kind == era_runtime_save::SaveFileKind::Normal
+            && vm.vm().artifact().manifest.compatibility.profile
+                == erabasic_compat::CompatibilityProfileId::EmueraEm
+            && let Ok(era_runtime_save::SaveMetadataInspection::Complete {
+                kind: actual_kind,
+                metadata,
+                ..
+            }) = era_runtime_save::inspect_identity(&data, complete, limits)
+        {
+            let compatibility = vm
+                .vm()
+                .artifact()
+                .project_data
+                .save_load_context()
+                .compatibility;
+            if actual_kind == kind
+                && compatibility.unique_code_matches(metadata.unique_code)
+                && !compatibility.version_matches(metadata.version)
+            {
+                return self.finish_save_check(request, kind, 3, "", metadata.version);
+            }
+        }
         match era_runtime_save::inspect_metadata(&data, complete, limits) {
             Ok(era_runtime_save::SaveMetadataInspection::NeedMore) => {
                 if data.len() >= limits.maximum_bytes {
-                    return self.finish_save_check(request, 4, "save metadata exceeds limit");
+                    return self.finish_save_check(
+                        request,
+                        kind,
+                        4,
+                        "save metadata exceeds limit",
+                        0,
+                    );
                 }
                 let offset = data.len() as u64;
                 let maximum_bytes = u32::try_from(
@@ -123,19 +163,26 @@ impl RuntimeSession {
                 } else {
                     (0, metadata.description.as_str())
                 };
-                self.finish_save_check(request, status, description)
+                let version = if matches!(status, 0 | 3) {
+                    metadata.version
+                } else {
+                    0
+                };
+                self.finish_save_check(request, kind, status, description, version)
             }
-            Err(error) => self.finish_save_check(request, 4, &error.to_string()),
+            Err(error) => self.finish_save_check(request, kind, 4, &error.to_string(), 0),
         }
     }
 
     fn finish_save_check(
         &mut self,
         request: erabasic_vm::HostRequestId,
+        kind: era_runtime_save::SaveFileKind,
         status: i64,
         description: &str,
+        version: i64,
     ) -> Result<(), RuntimeError> {
-        let writes = self.check_data_writes(description)?;
+        let writes = self.check_data_writes(description, kind, version)?;
         self.resume_storage_host_value(request, VmValue::Integer(status), writes)
     }
 }

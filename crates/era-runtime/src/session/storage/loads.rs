@@ -93,6 +93,8 @@ impl RuntimeSession {
     pub(in super::super) fn check_data_writes(
         &self,
         description: &str,
+        kind: era_runtime_save::SaveFileKind,
+        version: i64,
     ) -> Result<Vec<HostWrite>, RuntimeError> {
         let vm = self
             .vm
@@ -103,6 +105,18 @@ impl RuntimeSession {
             writes.push(HostWrite {
                 target,
                 value: VmValue::String(description.to_owned()),
+            });
+        }
+        // Only the updated original CHKDATA exposes the checked header version.
+        // Character checks share this completion path but retain their old side effects.
+        if kind == era_runtime_save::SaveFileKind::Normal
+            && vm.vm().artifact().manifest.compatibility.profile
+                == erabasic_compat::CompatibilityProfileId::EmueraEm
+            && let Some(target) = global_place_at(vm, "RESULT", 1)
+        {
+            writes.push(HostWrite {
+                target,
+                value: VmValue::Integer(version),
             });
         }
         Ok(writes)
