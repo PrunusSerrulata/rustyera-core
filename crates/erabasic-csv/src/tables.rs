@@ -204,22 +204,17 @@ fn load_aliases(
         }
         let alias = if snake_rules { name.trim() } else { name }.to_owned();
         if !alias_names.insert(alias.clone()) {
-            diagnostics.push(at_line(
-                CsvDiagnosticCode::DuplicateAlias,
-                if snake_rules {
-                    CsvDiagnosticSeverity::Warning
-                } else {
-                    CsvDiagnosticSeverity::Error
-                },
-                if snake_rules { 1 } else { 3 },
-                &line,
-                format!("alias {alias:?} is defined more than once"),
-            ));
             if snake_rules {
-                continue;
+                diagnostics.push(at_line(
+                    CsvDiagnosticCode::DuplicateAlias,
+                    CsvDiagnosticSeverity::Warning,
+                    1,
+                    &line,
+                    format!("alias {alias:?} is defined more than once"),
+                ));
             }
-            // Original Dictionary.Add throws and abandons the rest of the alias file.
-            break;
+            // Original TryAdd silently keeps the first alias and continues reading.
+            continue;
         }
         table.aliases.push(NameAlias { name: alias, index });
     }

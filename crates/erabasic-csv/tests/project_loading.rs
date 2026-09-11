@@ -615,7 +615,7 @@ fn builtin_alias_duplicate_recovery_and_trimming_are_profile_scoped() {
             file("CFLAG.csv", "0,primary\n"),
             file(
                 "CFLAG.als",
-                "10, trimmed \n11,shared\n11,another\n300,shared\n300,later\n-1,negative\n11,primary\n",
+                "10, trimmed \n11,shared\n11,shared\n11,another\n300,shared\n300,later\n-1,negative\n11,primary\n12,Shared\n13,trimmed\n",
             ),
         ],
         erb: vec![],
@@ -629,33 +629,43 @@ fn builtin_alias_duplicate_recovery_and_trimming_are_profile_scoped() {
         let table = &project.static_data.name_tables[&NameTableKind::Cflag];
         assert_eq!(table.lookup["primary"], 0);
         assert_eq!(table.lookup["shared"], 11);
-        let duplicate = report
+        assert_eq!(table.lookup["Shared"], 12);
+        assert_eq!(table.lookup["another"], 11);
+        assert_eq!(table.lookup["later"], 300);
+        assert_eq!(table.lookup["negative"], -1);
+        let diagnostics: Vec<_> = report
             .diagnostics
             .iter()
-            .find(|diagnostic| diagnostic.code == CsvDiagnosticCode::DuplicateAlias)
-            .unwrap();
+            .map(|diagnostic| {
+                assert_eq!(diagnostic.severity, CsvDiagnosticSeverity::Warning);
+                assert_eq!(diagnostic.reference_level, 1);
+                let source = diagnostic.source.as_ref().unwrap();
+                assert_eq!(source.relative_path, "CFLAG.als");
+                (diagnostic.code, source.physical_line)
+            })
+            .collect();
         if profile == CompatibilityProfileId::EmueraSkiaSnake {
             assert_eq!(table.lookup["trimmed"], 10);
-            assert_eq!(table.lookup["another"], 11);
-            assert_eq!(table.lookup["later"], 300);
-            assert_eq!(table.lookup["negative"], -1);
-            assert_eq!(duplicate.severity, CsvDiagnosticSeverity::Warning);
-            assert!(
-                !report
-                    .diagnostics
-                    .iter()
-                    .any(|diagnostic| { diagnostic.code == CsvDiagnosticCode::DuplicateIndex })
+            assert!(!table.lookup.contains_key(" trimmed "));
+            assert_eq!(
+                diagnostics,
+                vec![
+                    (CsvDiagnosticCode::DuplicateAlias, 2),
+                    (CsvDiagnosticCode::DuplicateAlias, 4),
+                    (CsvDiagnosticCode::DuplicateAlias, 9),
+                ]
             );
         } else {
             assert_eq!(table.lookup[" trimmed "], 10);
-            assert!(!table.lookup.contains_key("later"));
-            assert!(!table.lookup.contains_key("negative"));
-            assert_eq!(duplicate.severity, CsvDiagnosticSeverity::Error);
-            assert!(
-                report
-                    .diagnostics
-                    .iter()
-                    .any(|diagnostic| { diagnostic.code == CsvDiagnosticCode::DuplicateIndex })
+            assert_eq!(table.lookup["trimmed"], 13);
+            assert_eq!(
+                diagnostics,
+                vec![
+                    (CsvDiagnosticCode::DuplicateIndex, 2),
+                    (CsvDiagnosticCode::DuplicateIndex, 3),
+                    (CsvDiagnosticCode::DuplicateIndex, 5),
+                    (CsvDiagnosticCode::DuplicateIndex, 7),
+                ]
             );
         }
     }
