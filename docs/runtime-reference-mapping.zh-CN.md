@@ -30,7 +30,7 @@
 `7b69ebd27378c03c32b6477b74901bfc3d33223c`（upstream/master，2026-08-13）。
 参考仓库已将 upstream 合并到现有 master，保留 reference CLI/headless 接入。合并提交为
 `6e82d12a6ee65c03a9082a424280bffbfd15878b`，同步 CLI 身份后的 wrapper 提交为
-`c94bf1de2c4ecc0f876a913f0c8ec1035d3f06b4`。运行时须同时记录语义 SHA 和实际 wrapper checkout SHA。蛇版基准保持不变。
+`c94bf1de2c4ecc0f876a913f0c8ec1035d3f06b4`。运行时须同时记录语义 SHA 和实际 wrapper checkout SHA。该原版升级批次使用的蛇版旧基准保持不变；当前蛇版参考目标见下节。
 
 上游增量按独立批次跟进；以下状态仅表示对应已验收范围：
 
@@ -52,6 +52,27 @@ B 批结果见[字符串最终记录](snake-compatibility/SNAKE_EMUERA_IMPLEMENT
 TUI、Web/WASM 与 Tauri 已统一绑定 core `d16907d5dfacef6b07e903ef481c01a1057af580`，
 真实 C ABI、三浏览器与原生 host 固定场景均通过；旧缓存/快照在 TUI 真实链路完成
 拒绝/回退验证。详见[客户端最终记录](snake-compatibility/SNAKE_EMUERA_IMPLEMENTATION_LOG.md#upstream-c)。
+
+## 2026-09-11 蛇版参考基准升级
+
+蛇版参考目标从 `fc4fb21416768c17256d0e82f997e5f99c9bba91` 升级到 upstream/main-skiasharp
+`57170459b3d5ca175a1c57933058b569088bee0e`（`1824+v24+EMv18+EEv56+Skiav13`）。
+本地 `main-skiasharp` 的合并提交为 `659892b`，同步 CLI 身份后的 wrapper 为
+`851c40c9bec73bd3819177d5f107ab8b6502a14a`。合并保留本地 reference CLI/headless 接入，
+README 冲突通过保留 CLI 入口并采用上游 Skiav13 版本说明解决。
+
+| 上游提交 | 参考增量 | RustyEra 跟进边界 |
+| --- | --- | --- |
+| `4849416` | 多语言编码逐字符往返回退；CHKDATA 在 RESULT:1 返回存档版本。 | 既有原版 A/B 验收不能替代蛇版验收；蛇版行为需重新对照。 |
+| `ebd8574`、`624cdc5` | README/功能说明及 .trae 跟踪规则更新。 | 无 RustyEra 产品契约变化。 |
+| `71ff453` | RAND 非法参数钳制，首次触发警告。 | 需核对整数、浮点、变量入口及警告副作用；不改变已登记 RNG 有意差异。 |
+| `10c08ae`、`5717045` | 预设变量同名 ERD 补充名表与 ITEM 价格；EXIST_IN_CSV / EXIST_IN_ERD 来源查询。 | 需核对 CSV 优先、显式零价格、重名/越界与来源语义，再实施并验收。 |
+
+本次完成参考仓库同步与基准说明更新，未修改 RustyEra 运行时、协议、policy 或前端绑定；
+snake semantic/policy 仍为 12，不能据此宣称已兼容 Skiav13 新增行为。
+本次未构建新 oracle、运行 smoke 或 Rust/蛇版差分；旧产物与历史通过结果不属于新基准证据。
+历史报告、fixture、捕获和批次专用 runner 保留旧 SHA；执行前须核对其固定身份，使用匹配
+的历史 checkout，或显式迁移入口并重新取得受影响行为证据，禁止仅替换历史结果中的 SHA。
 
 ## 有意的架构差异
 

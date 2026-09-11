@@ -157,7 +157,7 @@ Treat a passing platform smoke test only as proof that the oracle starts and res
 a differential comparison. Ignore only explicit environment metadata such as request IDs and
 absolute paths. Validate and retain each oracle's `schemaVersion` and `referenceCommit` before
 normalizing responses: original baseline `7b69ebd27378c03c32b6477b74901bfc3d33223c`, snake baseline
-`fc4fb21416768c17256d0e82f997e5f99c9bba91`. Also record the wrapper checkout commit. Do not hide
+`57170459b3d5ca175a1c57933058b569088bee0e`. Also record the wrapper checkout commit. Do not hide
 semantic differences as metadata; record every intentional difference in tests and the report.
 Historical fixtures, captures, and batch-specific runners may retain the old original baseline
 `26a35dc9334bb67590b96f7b8efbefbf199e391e`. Do not relabel them as new-baseline evidence.

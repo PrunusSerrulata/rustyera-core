@@ -297,7 +297,7 @@ WINEPREFIX="$(cd .. && pwd)/.wine-prefix/emuera-selfmodified-cli" \
   bash ../emuera_lazyloading_selfmodified_version/emuera-reference-cli/tests/test-macos-wine.sh
 ```
 
-蛇版语义基准为 `fc4fb21416768c17256d0e82f997e5f99c9bba91`。两套 oracle 的进程、
+蛇版语义基准为 `57170459b3d5ca175a1c57933058b569088bee0e`。两套 oracle 的进程、
 Wine prefix、临时 fixture 和结果必须分开；冒烟通过不等于差分通过。蛇版的具体覆盖、
 协议差异与失败后定向复验见
 [蛇版 oracle 测试指引](.agents/skills/test-rustyera-core/references/snake-oracle.md)。

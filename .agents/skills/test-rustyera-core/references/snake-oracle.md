@@ -8,7 +8,7 @@ baseline for unrelated original Emuera behavior. Follow the selection table in [
 
 - Source and protocol: `../emuera_lazyloading_selfmodified_version/emuera-reference-cli/README.md`.
   Read it before constructing requests; inspect `capabilities` before the first comparison.
-- Semantic baseline: `fc4fb21416768c17256d0e82f997e5f99c9bba91`.
+- Semantic baseline: `57170459b3d5ca175a1c57933058b569088bee0e`.
 - Check every response's `schemaVersion` (2) and `referenceCommit`; capabilities identifies
   `implementation = emuera_lazyloading_selfmodified_version`. A mismatched executable is a
   failed setup, not a passing alternative oracle.
@@ -102,3 +102,11 @@ python ../emuera_lazyloading_selfmodified_version/emuera-reference-cli/tests/smo
 Replace `inputs` with the directly affected group; repeat `--case` only for other affected groups.
 Rerun the affected Rust/C# differential cases separately. Report original full-smoke failures,
 targeted recovery, and any missing platform or semantic coverage independently for each oracle.
+
+## Skiav13 baseline migration (2026-09-11)
+
+The current wrapper is `851c40c9bec73bd3819177d5f107ab8b6502a14a`. This baseline update
+does not certify an existing binary or old smoke expectations. Historical captures and batch runners
+pinned to `fc4fb21416768c17256d0e82f997e5f99c9bba91` remain old-baseline evidence.
+Use their matching checkout or explicitly migrate and recapture affected observations.
+See [baseline scope](../../../../docs/runtime-reference-mapping.zh-CN.md#2026-09-11-蛇版参考基准升级).
