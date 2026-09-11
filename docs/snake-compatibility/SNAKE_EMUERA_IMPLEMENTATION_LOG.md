@@ -49,6 +49,7 @@ core SHA、库/bundle 路径及后续发布绑定变更，须在对应实施批�
 | [5](#batch-5) | 蛇版存档互操作与音频 | 已完成确认范围 | 2026-09-04 / Codex | 标准 1808、音频、存档页及整包导出修复完成；Browser/Tauri 蛇版 TW 导出文件一致，TUI 真实 TW 保留像素能力限制 |
 | [6](#batch-6) | 完整蛇版语言 | 待登记 | 待填写 | 待填写 |
 | [7](#batch-7) | 可选 extension 与渲染能力 | 待登记 | 待填写 | 待填写 |
+| [原版 upstream B](#upstream-b) | UTF-16 传统字符串语义 | 已完成 | 2026-09-11 / Codex | 四编码原版 8、蛇版 4 固定观察验收；最终客户端绑定由 C 推进 |
 | [原版 upstream A](#upstream-a) | 别名与普通存档版本检查 | 已完成 | 2026-09-11 / Codex | 原版 9、蛇版 5 固定差分通过；B/C 独立推进 |
 
 <a id="batch-0"></a>
@@ -1773,6 +1774,69 @@ profile、游戏 fixture 或两个参考引擎的正常游戏语义。
   性能或额外平台矩阵。已对两个任务 Wine prefix 执行清理，无用户会话操作。
   证据和工具产物保留供后续批次，整项普通任务结束后清理可再生产物。
 - 根 CHANGELOG_PENDING 的产品条目在整项交付时单独提交；发布版本及远端未改变。
+
+<a id="upstream-b"></a>
+
+## 原版 upstream B：传统字符串语义（2026-09-11 最终记录）
+
+状态：core 范围已完成；客户端绑定由 C 批单独验收。计划入口见
+[原版 upstream 跟进](SNAKE_EMUERA_MIGRATION_PLAN.md#upstream-7b69)。
+
+### 实际改动及提交绑定
+
+- 实现提交 `dc1f3bde207b1d196da46cdacd42fd60bc5ea379`。原版 semantic/policy 2→3；原版旧身份 1/2
+  字节码、编译缓存和 snapshot 按既有检查拒绝或失效，不迁移快照。蛇版身份仍为 12。
+- 数据层按兼容策略共享固定 UTF-16 单元宽度表：所选编码往返相等优先，否则 CP932
+  往返相等，仍不能还原则用所选编码回退长度。四张表共 32 KiB，无逐字符堆分配。
+  保留 ASCII 快速路径及蛇版旧 scalar 编码映射。
+- analyzer 常量求值和 VM 普通/动态 FORM 求值共享长度来源；截取和查找按 UTF-16
+  单元边界及上游 i32 索引转换处理，区分遗漏 length 与显式 i64::MIN。
+  输出保持合法 UTF-8；孤立代理项转为 U+FFFD，不制造查找中的替换字符匹配。
+- 固定 provider SHA256 为 `14061806bcc21b8656c27437bd2c6ec4d82b4f08ff4b593a1bd5f36d94289d48`，
+  .NET 10.0.9，MVID `092ee660-34c4-466c-a151-cc338733325f`。
+  `tools/legacy-encoding-map/` 记录生成及离线验证流程；来源清单位于
+  `crates/erabasic-data/src/legacy_encoding_maps/provenance.json`。
+
+### LangManager 调用点及兼容边界
+
+长度语句/函数、SUBSTRING、STRFIND 已接入；配置选择的四种编码均验证。
+StrForm padding 保留可移植显示列宽，U 系列不变。TOINT/ISNUMERIC 的既有 ASCII
+数字解析器不因宽度策略改变：ASCII 宽度仍为 1，非 ASCII 输入仍拒绝；不宣称已与
+.NET char.IsDigit 全面等价。用户标识符的前导数字宽度检查已审计，Rust 标识符解析
+未作无关扩展，非 ASCII 数字分类属于既有兼容边界。固定用例验证 ASCII 数字接受及
+选定非 ASCII 拒绝，不代表全部 Unicode 数字/标识符已差分。
+
+### 审查与验证
+
+- 测试前完成本批唯一一次独立重构审查：生产实现无需结构性重构；已补齐验收器真实
+  presence 字段、真实比较器负例、映射离线来源门禁及生成顺序说明。
+- 映射门禁逐条核对 262,144 个原始 tuple、重算四张表并检查哈希、provider、生成器
+  身份和 ASCII 假设。格式、workspace check、Clippy 与最小回归均通过。
+- **首次 workspace 全量：1,703 passed / 0 failed / 0 ignored，68 suites。**
+  独立 runtime-tester 首次全量串行：91 passed / 0 failed / 3 ignored；比较器 49 passed。
+- **定向复验：** 首个日语捕获的 42 项行为匹配，但 fixture 缺少标题入口，严格加载
+  检查因默认菜单输出失败。补齐四语言 base.erb 后，专门入口回归通过，首例重新捕获；
+  未重复 workspace 或 probe 全量，保留原失败证据。
+- **最终差分：** 原版四语言普通观察 4 例严格匹配，孤立代理项 4 例
+  `accepted_registered_difference`；蛇版四语言稳定案例 4 例严格匹配。
+  每例捕获后立即核对返回值、watches、空诊断和完成终态，才执行下一例。
+  有意差异原始 verdict 仍为 `different`，仅允许登记的 RESULT:10（Rust 1 / oracle 0）。
+- 同输入身份的 A 原版/蛇版 smoke 和参考构建直接复用。原版语义
+  `7b69ebd27378c03c32b6477b74901bfc3d33223c`、wrapper
+  `c94bf1de2c4ecc0f876a913f0c8ec1035d3f06b4`；蛇版语义
+  `fc4fb21416768c17256d0e82f997e5f99c9bba91`、wrapper
+  `acae8ab9125c9f4323716904491ecc21fac77f19`，schema 2。
+
+证据入口为本任务忽略目录 `.audit/upstream-7b69-20260911/b/`：`commands.ndjson`、
+`static-summary.json`、`final-artifacts.json`、各 `*-acceptance.json` 和原始 oracle evidence。
+生成原始 tuples/manifest 位于相邻 `encoding-map-data-win/`。源码、probe 和参考产物摘要
+分别保存；历史 A policy 2 fixture 与旧捕获未改写。两任务 Wine prefix 已发送退出命令。
+
+### 差异与未验证项
+
+仅四个孤立代理替换案例登记为本批有意差异；U/FORM 约定和蛇版既有映射不改变。
+蛇版固定案例覆盖稳定输入，不宣称全面 snake Unicode 差分。客户端 C、额外平台、
+自主游戏及性能不属于本批验收。发布版本未改动，未推送远端。
 
 <a id="batch-7"></a>
 
