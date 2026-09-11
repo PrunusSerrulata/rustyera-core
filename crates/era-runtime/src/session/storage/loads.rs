@@ -107,11 +107,15 @@ impl RuntimeSession {
                 value: VmValue::String(description.to_owned()),
             });
         }
-        // Only the updated original CHKDATA exposes the checked header version.
+        // Updated CHKDATA policies expose the checked header version.
         // Character checks share this completion path but retain their old side effects.
         if kind == era_runtime_save::SaveFileKind::Normal
-            && vm.vm().artifact().manifest.compatibility.profile
-                == erabasic_compat::CompatibilityProfileId::EmueraEm
+            && vm
+                .vm()
+                .artifact()
+                .manifest
+                .compatibility
+                .uses_save_check_version()
             && let Some(target) = global_place_at(vm, "RESULT", 1)
         {
             writes.push(HostWrite {

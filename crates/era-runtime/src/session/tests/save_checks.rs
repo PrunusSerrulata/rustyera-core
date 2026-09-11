@@ -193,7 +193,7 @@ fn encoded_check_header(
 }
 
 #[test]
-fn chkdata_versions_are_original_only_for_statements_and_expressions() {
+fn chkdata_versions_are_shared_for_statements_and_expressions() {
     for snake in [false, true] {
         for command in ["CHKDATA 0", "RESULT = CHKDATA(0)"] {
             for format in [
@@ -230,16 +230,7 @@ fn chkdata_versions_are_original_only_for_statements_and_expressions() {
                         if different_game { 2 } else { 0 },
                         if different_game { "" } else { "versioned slot" },
                     );
-                    assert_check_version(
-                        &session,
-                        if snake {
-                            777
-                        } else if different_game {
-                            0
-                        } else {
-                            2345
-                        },
-                    );
+                    assert_check_version(&session, if different_game { 0 } else { 2345 });
                 }
             }
         }
@@ -247,7 +238,7 @@ fn chkdata_versions_are_original_only_for_statements_and_expressions() {
 }
 
 #[test]
-fn chkdata_incompatible_versions_return_the_saved_version_only_in_original() {
+fn chkdata_incompatible_versions_return_the_saved_version_in_both_profiles() {
     for snake in [false, true] {
         for command in ["CHKDATA 0", "RESULT = CHKDATA(0)"] {
             for format in [
@@ -274,14 +265,14 @@ fn chkdata_incompatible_versions_return_the_saved_version_only_in_original() {
                     chunk(&bytes, 0, true, "v1"),
                 );
                 assert_check(&session, 3, "");
-                assert_check_version(&session, if snake { 777 } else { 1234 });
+                assert_check_version(&session, 1234);
             }
         }
     }
 }
 
 #[test]
-fn save_check_wrong_kinds_clear_only_original_chkdata_versions() {
+fn save_check_wrong_kinds_clear_only_chkdata_versions() {
     for snake in [false, true] {
         for (command, kind) in [
             ("CHKDATA 0", SaveFileKind::Character),
@@ -306,14 +297,7 @@ fn save_check_wrong_kinds_clear_only_original_chkdata_versions() {
                 chunk(&bytes, 0, true, "v1"),
             );
             assert_check(&session, 4, "different save kind");
-            assert_check_version(
-                &session,
-                if snake || kind == SaveFileKind::Normal {
-                    777
-                } else {
-                    0
-                },
-            );
+            assert_check_version(&session, if kind == SaveFileKind::Normal { 777 } else { 0 });
         }
     }
 }
@@ -349,7 +333,7 @@ fn chkdata_missing_slot_clears_the_previous_check_version() {
             .expect("second check request");
         assert_eq!(
             read_runtime_integer(session.vm.as_ref().unwrap(), "FLAG", &[0], None).unwrap(),
-            if snake { 777 } else { 2345 }
+            2345
         );
         respond(
             &mut session,
@@ -364,12 +348,12 @@ fn chkdata_missing_slot_clears_the_previous_check_version() {
             },
         );
         assert_check(&session, 1, "----");
-        assert_check_version(&session, if snake { 777 } else { 0 });
+        assert_check_version(&session, 0);
     }
 }
 
 #[test]
-fn corrupt_save_headers_clear_only_original_chkdata_versions() {
+fn corrupt_save_headers_clear_only_chkdata_versions() {
     for snake in [false, true] {
         for command in ["CHKDATA 0", "RESULT = CHKDATA(0)", "CHKCHARADATA \"slot\""] {
             let (mut session, request) = start_check(snake, command);
@@ -386,7 +370,7 @@ fn corrupt_save_headers_clear_only_original_chkdata_versions() {
             );
             assert_check_version(
                 &session,
-                if snake || command.starts_with("CHKCHARADATA") {
+                if command.starts_with("CHKCHARADATA") {
                     777
                 } else {
                     0
@@ -433,7 +417,7 @@ fn save_checks_distinguish_missing_slots_from_io_errors_in_both_profiles() {
                 assert_check(&session, status, expected);
                 assert_check_version(
                     &session,
-                    if snake || command.starts_with("CHKCHARADATA") {
+                    if command.starts_with("CHKCHARADATA") {
                         777
                     } else {
                         0
@@ -695,7 +679,7 @@ fn save_checks_finish_invalid_responses_and_ignore_duplicate_completions() {
         &mut session,
         4,
         request.request_id,
-        chunk(b"0\n0\n", 0, false, "v1"),
+        chunk(b"0\n2345\n", 0, false, "v1"),
     );
     let next = messages
         .into_iter()
@@ -708,7 +692,7 @@ fn save_checks_finish_invalid_responses_and_ignore_duplicate_completions() {
         &mut session,
         5,
         next.request_id,
-        chunk(b"x\n", 4, false, "v2"),
+        chunk(b"x\n", 7, false, "v2"),
     );
     assert_eq!(session.phase(), RuntimePhase::WaitingInput);
     assert_eq!(
@@ -798,45 +782,91 @@ fn invalid_chkdata_arguments_preserve_version_and_do_not_read_storage() {
 }
 
 #[test]
-fn original_chkdata_rejects_version_before_missing_or_invalid_description() {
-    for format in [SaveFormat::Text1808, SaveFormat::Binary1808] {
-        for malformed_description in [false, true] {
-            for complete in [false, true] {
-                let (mut session, request) = start_check(false, "CHKDATA 0");
-                let code = session
-                    .vm
-                    .as_ref()
-                    .unwrap()
-                    .vm()
-                    .artifact()
-                    .project_data
-                    .static_data
-                    .game_base
-                    .unique_code;
-                let mut bytes = if format == SaveFormat::Text1808 {
-                    format!("{code}\n1234\n").into_bytes()
-                } else {
-                    let mut bytes = encoded_check_header(format, SaveFileKind::Normal, code, 1234);
-                    bytes.truncate(33);
-                    bytes
-                };
-                if malformed_description {
-                    bytes.push(0xff);
+fn chkdata_rejects_version_before_missing_or_invalid_description_in_both_profiles() {
+    for snake in [false, true] {
+        for format in [SaveFormat::Text1808, SaveFormat::Binary1808] {
+            for malformed_description in [false, true] {
+                for complete in [false, true] {
+                    let (mut session, request) = start_check(snake, "CHKDATA 0");
+                    let code = session
+                        .vm
+                        .as_ref()
+                        .unwrap()
+                        .vm()
+                        .artifact()
+                        .project_data
+                        .static_data
+                        .game_base
+                        .unique_code;
+                    let mut bytes = if format == SaveFormat::Text1808 {
+                        format!("{code}\n1234\n").into_bytes()
+                    } else {
+                        let mut bytes =
+                            encoded_check_header(format, SaveFileKind::Normal, code, 1234);
+                        bytes.truncate(33);
+                        bytes
+                    };
+                    if malformed_description {
+                        bytes.push(0xff);
+                    }
+                    let messages = respond(
+                        &mut session,
+                        4,
+                        request.request_id,
+                        chunk(&bytes, 0, complete, "v1"),
+                    );
+                    assert!(
+                        !messages
+                            .iter()
+                            .any(|message| matches!(message, RuntimeMessage::StorageRequest(_)))
+                    );
+                    assert_check(&session, 3, "");
+                    assert_check_version(&session, 1234);
                 }
-                let messages = respond(
-                    &mut session,
-                    4,
-                    request.request_id,
-                    chunk(&bytes, 0, complete, "v1"),
-                );
-                assert!(
-                    !messages
-                        .iter()
-                        .any(|message| matches!(message, RuntimeMessage::StorageRequest(_)))
-                );
-                assert_check(&session, 3, "");
-                assert_check_version(&session, 1234);
             }
+        }
+    }
+}
+
+#[test]
+fn chkdata_compatible_versions_with_invalid_descriptions_clear_the_check_version() {
+    for snake in [false, true] {
+        for format in [SaveFormat::Text1808, SaveFormat::Binary1808] {
+            let (mut session, request) = start_check(snake, "CHKDATA 0");
+            let code = session
+                .vm
+                .as_ref()
+                .unwrap()
+                .vm()
+                .artifact()
+                .project_data
+                .static_data
+                .game_base
+                .unique_code;
+            let bytes = if format == SaveFormat::Text1808 {
+                format!("{code}\n2345\n").into_bytes()
+            } else {
+                let mut bytes = encoded_check_header(format, SaveFileKind::Normal, code, 2345);
+                bytes.truncate(33);
+                bytes
+            };
+            let messages = respond(
+                &mut session,
+                4,
+                request.request_id,
+                chunk(&bytes, 0, true, "v1"),
+            );
+            assert!(
+                !messages
+                    .iter()
+                    .any(|message| matches!(message, RuntimeMessage::StorageRequest(_)))
+            );
+            assert_eq!(session.phase(), RuntimePhase::WaitingInput);
+            assert_eq!(
+                read_runtime_integer(session.vm.as_ref().unwrap(), "RESULT", &[], None).unwrap(),
+                4
+            );
+            assert_check_version(&session, 0);
         }
     }
 }

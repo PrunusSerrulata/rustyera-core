@@ -82,8 +82,12 @@ impl RuntimeSession {
             .as_ref()
             .ok_or_else(|| RuntimeError::Internal("save check completion has no VM".into()))?;
         if kind == era_runtime_save::SaveFileKind::Normal
-            && vm.vm().artifact().manifest.compatibility.profile
-                == erabasic_compat::CompatibilityProfileId::EmueraEm
+            && vm
+                .vm()
+                .artifact()
+                .manifest
+                .compatibility
+                .uses_save_check_version()
             && let Ok(era_runtime_save::SaveMetadataInspection::Complete {
                 kind: actual_kind,
                 metadata,
