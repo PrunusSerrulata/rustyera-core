@@ -87,16 +87,6 @@ def identity(directory):
     return {"sha256": hashlib.sha256(encoded).hexdigest(), "files": files}
 
 
-def comparison_snapshot(snapshot):
-    """Ignore only the NDJSON envelope ID, never a script field named id."""
-    result = dict(snapshot)
-    for field in ("request", "lastAvailableResponse"):
-        value = result.get(field)
-        if isinstance(value, dict):
-            result[field] = {key: item for key, item in value.items() if key != "id"}
-    return result
-
-
 def prepare_case_game(template, output, ordinal, expected_identity):
     """Keep one case's saves and overlays out of every later case's initial state."""
     game = output / "case-games" / f"{ordinal:04d}"
@@ -140,7 +130,6 @@ class Oracle:
         self.watchdog_thread.start()
 
     def _watch(self):
-        previous = None
         next_sample = time.monotonic() + 5
         while not self.closed.wait(0.05):
             now = time.monotonic()
@@ -148,10 +137,10 @@ class Oracle:
                 continue
             current = self.snapshot(self.pending_request)
             print(json.dumps({"watchdog": current}, ensure_ascii=False), flush=True)
-            compared = comparison_snapshot(current)
-            failure = "oracle budget exhausted" if now >= self.deadline else (
-                "unchanged complete observations at consecutive 5s samples" if compared == previous else None
-            )
+            # Headless observations can stay unchanged during CLI startup or a request.
+            # The unchanged-screen rule belongs to Web/Tauri; request and batch deadlines
+            # still bound this process without treating a quiet interval as a hang.
+            failure = "oracle budget exhausted" if now >= self.deadline else None
             if failure:
                 self.watchdog_failure = failure
                 try:
@@ -160,7 +149,6 @@ class Oracle:
                     self.watchdog_failure += f"; process cleanup failed: {error}"
                 self.responses.put(TimeoutError(self.watchdog_failure))
                 return
-            previous = compared
             next_sample += 5
 
     def kill(self):

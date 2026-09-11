@@ -59,7 +59,7 @@ fn protocol_46_audio_targets_effects_and_observations_are_exact() {
     let current = erabasic_compat::CompatibilityIdentity::for_profile(
         erabasic_compat::CompatibilityProfileId::EmueraSkiaSnake,
     );
-    assert_eq!((current.semantic_version, current.policy_version), (12, 12));
+    assert_eq!((current.semantic_version, current.policy_version), (13, 13));
     assert_eq!(
         current.save_codec,
         erabasic_compat::SNAKE_INTEROP_SAVE_CODEC
@@ -828,22 +828,31 @@ fn safe_sql_v1_round_trips_every_operation_and_result_variant() {
 #[test]
 fn sprite_current_alias_is_optional_and_independent_of_revision_order() {
     let legacy = vec![
-        0xa5, 0x00, 0x61, b'S', 0x01, 0x82, 0x01, 0x01,
-        0x02, 0x82, 0x00, 0x00, 0x03, 0x80, 0x06, 0x01,
+        0xa5, 0x00, 0x61, b'S', 0x01, 0x82, 0x01, 0x01, 0x02, 0x82, 0x00, 0x00, 0x03, 0x80, 0x06,
+        0x01,
     ];
     let mut sprite: SpriteReplay = decode_canonical(&legacy).unwrap();
     assert_eq!(sprite.current_alias, None);
     let mut json = serde_json::to_value(&sprite).unwrap();
     json.as_object_mut().unwrap().remove("current_alias");
-    assert_eq!(serde_json::from_value::<SpriteReplay>(json).unwrap(), sprite);
+    assert_eq!(
+        serde_json::from_value::<SpriteReplay>(json).unwrap(),
+        sprite
+    );
     sprite.current_alias = Some(true);
     let encoded = encode_canonical(&sprite).unwrap();
     assert_eq!(encoded.last(), Some(&0xf5));
-    assert_eq!(decode_canonical::<SpriteReplay>(&encoded), Ok(sprite.clone()));
+    assert_eq!(
+        decode_canonical::<SpriteReplay>(&encoded),
+        Ok(sprite.clone())
+    );
     let mut historical = sprite.clone();
     historical.revision = u64::MAX;
     historical.current_alias = Some(false);
-    let mut replay = ResourceReplay { sprites: vec![historical, sprite], ..ResourceReplay::default() };
+    let mut replay = ResourceReplay {
+        sprites: vec![historical, sprite],
+        ..ResourceReplay::default()
+    };
     assert!(replay.validate_exact_references().is_ok());
     replay.sprites[0].current_alias = Some(true);
     assert!(replay.validate_exact_references().is_err());

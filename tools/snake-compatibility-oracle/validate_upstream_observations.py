@@ -44,7 +44,7 @@ def validate(evidence, manifest):
                 raise ValueError(f"recorded provider width differs: {key}")
     replacement = planned.get("intentionalUtf16Replacement")
     if replacement:
-        if oracle != "original" or replacement.get("rust") != 1 or replacement.get("oracle") != 0:
+        if oracle not in {"original", "snake"} or replacement.get("rust") != 1 or replacement.get("oracle") != 0:
             raise ValueError("unrecognized replacement contract")
         key = replacement["watch"]
         expected = [{"field": "watches", "rustPresent": True, "oraclePresent": True,

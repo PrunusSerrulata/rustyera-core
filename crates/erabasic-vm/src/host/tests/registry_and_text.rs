@@ -14,7 +14,6 @@ fn upstream_legacy_native_dispatch_selects_profile_and_preserves_u_and_numeric_r
             CompatibilityProfileId::EmueraSkiaSnake,
         ] {
             let identity = CompatibilityIdentity::for_profile(profile);
-            let original = profile == CompatibilityProfileId::EmueraEm;
             let call = |name: &str, arguments: Vec<VmValue>| {
                 CoreNative::new(name.into(), encoding)
                     .with_compatibility(&identity)
@@ -25,7 +24,7 @@ fn upstream_legacy_native_dispatch_selects_profile_and_preserves_u_and_numeric_r
             };
             assert_eq!(
                 call("strlens", vec![VmValue::String("A😀ｶ".into())]),
-                VmValue::Integer(if original { 4 } else { 3 })
+                VmValue::Integer(4)
             );
             assert_eq!(
                 call("strlensu", vec![VmValue::String("😀".into())]),
@@ -40,7 +39,7 @@ fn upstream_legacy_native_dispatch_selects_profile_and_preserves_u_and_numeric_r
                         VmValue::Integer(1)
                     ]
                 ),
-                VmValue::String(if original { "\u{fffd}" } else { "😀" }.into())
+                VmValue::String("\u{fffd}".into())
             );
             assert_eq!(
                 call(
@@ -51,7 +50,7 @@ fn upstream_legacy_native_dispatch_selects_profile_and_preserves_u_and_numeric_r
                         VmValue::Integer(-1)
                     ]
                 ),
-                VmValue::Integer(if original { 0 } else { -1 })
+                VmValue::Integer(0)
             );
             assert_eq!(
                 call(
@@ -62,7 +61,7 @@ fn upstream_legacy_native_dispatch_selects_profile_and_preserves_u_and_numeric_r
                         VmValue::Integer(i64::MIN)
                     ]
                 ),
-                VmValue::String(if original { "" } else { "abc" }.into())
+                VmValue::String(String::new())
             );
             let mut omitted = classified_native_request(
                 "substring",

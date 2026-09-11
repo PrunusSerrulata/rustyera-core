@@ -131,7 +131,7 @@ impl CompatibilityIdentity {
     pub fn for_profile(profile: CompatibilityProfileId) -> Self {
         let version = match profile {
             CompatibilityProfileId::EmueraEm => 3,
-            CompatibilityProfileId::EmueraSkiaSnake => 12,
+            CompatibilityProfileId::EmueraSkiaSnake => 13,
         };
         Self {
             profile,
@@ -198,10 +198,17 @@ impl CompatibilityIdentity {
         self.supports_snake_policy(3)
     }
 
-    /// Original policy v3 counts legacy strings by round-tripped UTF-16 units.
+    /// Original v3 and snake v13 count legacy strings by round-tripped UTF-16 units.
     #[must_use]
     pub const fn uses_utf16_legacy_counting(&self) -> bool {
-        matches!(self.profile, CompatibilityProfileId::EmueraEm) && self.policy_version >= 3
+        (matches!(self.profile, CompatibilityProfileId::EmueraEm) && self.policy_version >= 3)
+            || self.supports_snake_policy(13)
+    }
+
+    /// Snake v13 shares the original save-version check and result contract.
+    #[must_use]
+    pub const fn uses_save_check_version(&self) -> bool {
+        matches!(self.profile, CompatibilityProfileId::EmueraEm) || self.supports_snake_policy(13)
     }
 
     /// Complete call text and checked forms share the v4 execution contract.
@@ -334,9 +341,26 @@ mod tests {
             assert_ne!(previous.digest(), current.digest());
         }
         let snake = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
-        assert_eq!((snake.semantic_version, snake.policy_version), (12, 12));
+        assert_eq!((snake.semantic_version, snake.policy_version), (13, 13));
         assert!(snake.validate().is_ok());
-        assert!(!snake.uses_utf16_legacy_counting());
+        assert!(snake.uses_utf16_legacy_counting());
+    }
+
+    #[test]
+    fn snake_upstream_upgrade_rejects_previous_identity() {
+        let current = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
+        assert!(current.uses_utf16_legacy_counting());
+        assert!(current.uses_save_check_version());
+        assert!(CompatibilityIdentity::reference().uses_save_check_version());
+        for version in 1..13 {
+            let mut previous = current.clone();
+            previous.semantic_version = version;
+            previous.policy_version = version;
+            assert!(previous.validate().is_err());
+            assert!(!previous.uses_utf16_legacy_counting());
+            assert!(!previous.uses_save_check_version());
+            assert_ne!(previous.digest(), current.digest());
+        }
     }
 
     #[test]
@@ -348,8 +372,8 @@ mod tests {
         assert_ne!(reference.arithmetic, snake.arithmetic);
         assert_eq!(reference.rng_algorithm, snake.rng_algorithm);
         assert!(snake.is_experimental());
-        assert_eq!(snake.semantic_version, 12);
-        assert_eq!(snake.policy_version, 12);
+        assert_eq!(snake.semantic_version, 13);
+        assert_eq!(snake.policy_version, 13);
         assert_eq!(snake.save_codec, SNAKE_INTEROP_SAVE_CODEC);
         assert!(snake.uses_snake_alias_rules());
         assert!(snake.supports_safe_sql());

@@ -1,5 +1,68 @@
 use super::*;
 #[test]
+fn upstream_legacy_strings_share_vm_and_dynamic_form_policy() {
+    use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
+    use erabasic_data::LegacyEncoding;
+    for encoding in [
+        LegacyEncoding::Japanese,
+        LegacyEncoding::Korean,
+        LegacyEncoding::ChineseHans,
+        LegacyEncoding::ChineseHant,
+    ] {
+        for profile in [
+            CompatibilityProfileId::EmueraEm,
+            CompatibilityProfileId::EmueraSkiaSnake,
+        ] {
+            let mut data = project_data();
+            data.static_data.legacy_encoding = encoding;
+            let mut options = AnalyzerOptions::analysis_mode();
+            options.compatibility = CompatibilityIdentity::for_profile(profile);
+            let artifact = compile_source_with_data_and_options(
+                r#"@SYSTEM_TITLE
+#DIMS TEXT
+TEXT '= "A😀ｶ"
+RESULT:10 = STRLENS(TEXT)
+RESULT:1 = STRFIND(TEXT, "ｶ")
+RESULTS:0 '= SUBSTRING(TEXT, 1, 1)
+RESULTS:1 '= SUBSTRING(TEXT, 1, 2)
+RESULTS:2 '= STRFORM("{STRLENS(TEXT)}|{STRFIND(TEXT, \"ｶ\")}|%SUBSTRING(TEXT, 1, 1)%|%SUBSTRING(TEXT, 1, 2)%")
+RESULT:2 = STRLENSU(TEXT)
+RESULT:3 = STRFINDU(TEXT, "ｶ")
+RESULTS:3 '= SUBSTRINGU(TEXT, 1, 1)
+RETURN
+"#,
+                data,
+                &options,
+            );
+            let (vm, report) = run_entry(&artifact, VmConfig::default());
+            assert_eq!(report.stop, erabasic_vm::VmRunStop::Idle);
+            assert!(
+                !report
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, VmEvent::FiberFaulted { .. })),
+                "{encoding:?} {profile:?}: {:#?}",
+                report.events
+            );
+            let result = named_key(&artifact, "RESULT");
+            let results = named_key(&artifact, "RESULTS");
+            for (index, expected) in [(10, 4), (1, 3), (2, 4), (3, 2)] {
+                assert_eq!(
+                    vm.read_variable(result, &[index], None),
+                    Ok(VmValue::Integer(expected))
+                );
+            }
+            for (index, expected) in [(0, "�"), (1, "😀"), (2, "4|3|�|😀"), (3, "😀")] {
+                assert_eq!(
+                    vm.read_variable(results, &[index], None),
+                    Ok(VmValue::String(expected.into()))
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn runtime_form_covers_triples_escapes_interpolation_conditionals_and_calls() {
     let artifact = compile_source(
         r#"@SYSTEM_TITLE

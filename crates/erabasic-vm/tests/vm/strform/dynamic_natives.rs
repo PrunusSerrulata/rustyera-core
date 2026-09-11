@@ -386,7 +386,7 @@ fn dynamic_core_omission_is_not_a_literal_minimum_integer() {
         &artifact,
         "RESULTS",
         10,
-        VmValue::String("0|-1|97".into()),
+        VmValue::String("0|0|97".into()),
     );
 }
 

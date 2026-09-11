@@ -12,7 +12,7 @@ fn upstream_utf16_legacy_lengths_fold_under_the_selected_profile() {
     ] {
         for (profile, expected) in [
             (CompatibilityProfileId::EmueraEm, 4),
-            (CompatibilityProfileId::EmueraSkiaSnake, 3),
+            (CompatibilityProfileId::EmueraSkiaSnake, 4),
         ] {
             let mut project_data = empty_project();
             project_data.static_data.legacy_encoding = encoding;

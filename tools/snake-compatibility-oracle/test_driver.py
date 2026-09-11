@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
 from comparison import compare_case, output_after_load, split_setup_diagnostics, validate_rust_evidence
@@ -590,11 +590,19 @@ class DriverTests(unittest.TestCase):
                          ("rustyera.sql", "rustyera.sql.limits", "rustyera.scene", "rustyera.audio")]}}
         validate_rust_evidence(modern_snake, "snake", fixture, 1,
                                {"semantic_version": 12, "policy_version": 12})
-        for fields in ({"services": []}, {"save_codec": "rustyera_envelope_v1:emuera1808"},
-                       {"arithmetic": "wrapping_i64_v1"}, {"policy_version": 11}):
-            with self.subTest(fields=fields), self.assertRaises(ValueError):
-                validate_rust_evidence({**modern_snake, "profile": {**modern_snake["profile"], **fields}},
-                                       "snake", fixture, 1)
+        current_snake = {**modern_snake, "profile": {**modern_snake["profile"],
+                         "semantic_version": 13, "policy_version": 13}}
+        validate_rust_evidence(current_snake, "snake", fixture, 1,
+                               {"semantic_version": 13, "policy_version": 13})
+        with self.assertRaises(ValueError):
+            validate_rust_evidence(current_snake, "snake", fixture, 1,
+                                   {"semantic_version": 12, "policy_version": 12})
+        for candidate in (modern_snake, current_snake):
+            for fields in ({"services": []}, {"save_codec": "rustyera_envelope_v1:emuera1808"},
+                           {"arithmetic": "wrapping_i64_v1"}, {"policy_version": 11}):
+                with self.subTest(fields=fields), self.assertRaises(ValueError):
+                    validate_rust_evidence({**candidate, "profile": {**candidate["profile"], **fields}},
+                                           "snake", fixture, 1)
         with self.assertRaises(ValueError):
             validate_rust_evidence(evidence, "snake", fixture, 1)
         with self.assertRaises(ValueError):
@@ -654,12 +662,22 @@ class DriverTests(unittest.TestCase):
             validate_rust_evidence({**historical, "profile": {**historical["profile"],
                                    "arithmetic": "snake_saturating_i64_v1"}}, "snake", fixture, 1)
 
-    def test_watchdog_ignores_envelope_ids_but_keeps_script_state(self):
-        first = {"request": {"op": "observe", "id": 1}, "lastAvailableResponse": {"id": 1, "result": {"id": 7}}}
-        second = {"request": {"op": "observe", "id": 2}, "lastAvailableResponse": {"id": 2, "result": {"id": 7}}}
-        self.assertEqual(driver.comparison_snapshot(first), driver.comparison_snapshot(second))
-        second["lastAvailableResponse"]["result"]["id"] = 8
-        self.assertNotEqual(driver.comparison_snapshot(first), driver.comparison_snapshot(second))
+    def test_headless_watchdog_allows_quiet_samples_but_enforces_deadline(self):
+        oracle = driver.Oracle.__new__(driver.Oracle)
+        oracle.deadline = 15
+        oracle.closed = Mock()
+        oracle.closed.wait.return_value = False
+        oracle.pending_request = {"op": "capabilities"}
+        oracle.snapshot = Mock(return_value={"lastAvailableResponse": None})
+        oracle.kill = Mock()
+        oracle.responses = Mock()
+        oracle.watchdog_failure = None
+        with patch.object(driver.time, "monotonic", side_effect=[0, 5, 10, 15]), patch("builtins.print"):
+            oracle._watch()
+        self.assertEqual(oracle.snapshot.call_count, 3)
+        self.assertEqual(oracle.watchdog_failure, "oracle budget exhausted")
+        oracle.kill.assert_called_once_with()
+        self.assertIsInstance(oracle.responses.put.call_args.args[0], TimeoutError)
 
     def test_subset_keeps_numeric_and_diagnostic_differences(self):
         driver.subset(

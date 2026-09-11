@@ -1,0 +1,240 @@
+{
+  "version": 1,
+  "seed": 123456,
+  "font": {
+    "family": "BIZ UDGothic",
+    "sha256": "e267830408f04daf92858d89477f2df8539c05ee4fe597d13ffdcaa7565b519e",
+    "source": "emuera_lazyloading_selfmodified_version/Emuera/Properties/fonts/BIZUDGothic-Regular.ttf"
+  },
+  "semanticBaselines": {
+    "original": "7b69ebd27378c03c32b6477b74901bfc3d33223c",
+    "snake": "57170459b3d5ca175a1c57933058b569088bee0e"
+  },
+  "requiredRustPolicy": {
+    "original": {
+      "semantic_version": 3,
+      "policy_version": 3
+    },
+    "snake": {
+      "semantic_version": 13,
+      "policy_version": 13
+    }
+  },
+  "allowedOracles": [
+    "original",
+    "snake"
+  ],
+  "loadExpect": {
+    "ok": true,
+    "result": {
+      "termination": "waitingInput"
+    }
+  },
+  "language": "CHINESE_HANS",
+  "cases": [
+    {
+      "id": "upstream-strings-chinese-hans",
+      "group": "UPSTREAM_B",
+      "targetBatch": "snake-upstream-A",
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "snake_utf16_roundtrip_v13",
+      "snakeTargetStatus": "source_derived_candidate_not_executed",
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "UPSTREAM_STRINGS",
+            "watch": [
+              "RESULT:10",
+              "RESULT:11",
+              "RESULT:12",
+              "RESULT:13",
+              "RESULT:14",
+              "RESULT:15",
+              "RESULT:16",
+              "RESULT:17",
+              "RESULT:18",
+              "RESULT:19",
+              "RESULT:20",
+              "RESULT:21",
+              "RESULT:22",
+              "RESULT:23",
+              "RESULT:24",
+              "RESULT:25",
+              "RESULT:26",
+              "RESULT:27",
+              "RESULT:28",
+              "RESULT:29",
+              "RESULT:30",
+              "RESULT:31",
+              "RESULT:32",
+              "RESULT:33",
+              "RESULT:34",
+              "RESULT:35",
+              "RESULT:36",
+              "RESULT:37",
+              "RESULT:38",
+              "RESULT:39",
+              "RESULT:40",
+              "RESULT:41",
+              "RESULT:42",
+              "RESULT:43",
+              "RESULT:44",
+              "RESULT:45",
+              "RESULT:46",
+              "RESULT:47",
+              "RESULT:48",
+              "RESULT:49",
+              "RESULT:50",
+              "RESULT:51"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed"
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed"
+              }
+            }
+          }
+        }
+      ],
+      "watchMeaning": {
+        "RESULT:10": "ascii",
+        "RESULT:11": "common_cjk",
+        "RESULT:12": "cp932_fallback",
+        "RESULT:13": "unmappable",
+        "RESULT:14": "private_use",
+        "RESULT:15": "private_use_end",
+        "RESULT:16": "nonroundtrip_minus",
+        "RESULT:17": "yen",
+        "RESULT:18": "hkscs",
+        "RESULT:19": "emoji",
+        "RESULT:20": "constant_len",
+        "RESULT:21": "runtime_len",
+        "RESULT:22": "substring_negative",
+        "RESULT:23": "substring_zero",
+        "RESULT:24": "substring_outside",
+        "RESULT:25": "substring_multibyte_start",
+        "RESULT:26": "substring_multibyte_length",
+        "RESULT:27": "substring_wrap",
+        "RESULT:28": "substring_negative_length",
+        "RESULT:29": "find_ascii",
+        "RESULT:30": "find_cjk",
+        "RESULT:31": "find_negative",
+        "RESULT:32": "find_wrap",
+        "RESULT:33": "find_empty_needle",
+        "RESULT:34": "find_end",
+        "RESULT:35": "find_empty_haystack",
+        "RESULT:36": "find_inside_multibyte",
+        "RESULT:37": "unicode_length_bmp",
+        "RESULT:38": "unicode_substring_bmp",
+        "RESULT:39": "unicode_find_bmp",
+        "RESULT:40": "toint_fullwidth",
+        "RESULT:41": "isnumeric_fullwidth",
+        "RESULT:42": "toint_cp932_suffix",
+        "RESULT:43": "isnumeric_cp932_suffix",
+        "RESULT:44": "toint_ascii",
+        "RESULT:45": "isnumeric_ascii",
+        "RESULT:46": "overline",
+        "RESULT:47": "private_use_after_cp932",
+        "RESULT:48": "hkscs_unavailable",
+        "RESULT:49": "big5_extended_accent",
+        "RESULT:50": "halfwidth_katakana",
+        "RESULT:51": "runtime_dynamic_form_len"
+      },
+      "recordedProviderWidthExpectations": {
+        "original": {
+          "RESULT:14": 2,
+          "RESULT:15": 2,
+          "RESULT:16": 1,
+          "RESULT:17": 2,
+          "RESULT:18": 2,
+          "RESULT:46": 2,
+          "RESULT:47": 2,
+          "RESULT:48": 1,
+          "RESULT:49": 2,
+          "RESULT:50": 1,
+          "RESULT:20": 4,
+          "RESULT:21": 4,
+          "RESULT:51": 4
+        },
+        "source": "Fixed original-publish Windows CodePagesEncodingProvider raw tuples; provider provenance accompanies committed erabasic-data maps.",
+        "snake": {
+          "RESULT:14": 2,
+          "RESULT:15": 2,
+          "RESULT:16": 1,
+          "RESULT:17": 2,
+          "RESULT:18": 2,
+          "RESULT:46": 2,
+          "RESULT:47": 2,
+          "RESULT:48": 1,
+          "RESULT:49": 2,
+          "RESULT:50": 1,
+          "RESULT:20": 4,
+          "RESULT:21": 4,
+          "RESULT:51": 4
+        }
+      },
+      "allowedOracles": [
+        "original",
+        "snake"
+      ]
+    },
+    {
+      "id": "upstream-surrogate-chinese-hans",
+      "group": "UPSTREAM_B",
+      "targetBatch": "snake-upstream-A",
+      "requireSuccessfulLoad": true,
+      "rustCurrentPolicy": "snake_utf16_roundtrip_v13",
+      "snakeTargetStatus": "source_derived_candidate_not_executed",
+      "allowedOracles": [
+        "original",
+        "snake"
+      ],
+      "intentionalUtf16Replacement": {
+        "watch": "RESULT:10",
+        "oracle": 0,
+        "rust": 1,
+        "reason": "An isolated UTF-16 high surrogate becomes U+FFFD in the UTF-8 runtime string."
+      },
+      "requests": [
+        {
+          "request": {
+            "op": "run",
+            "entry": "UPSTREAM_SURROGATE_REPLACEMENT",
+            "watch": [
+              "RESULT:10"
+            ]
+          },
+          "expect": {
+            "original": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 0
+                }
+              }
+            },
+            "snake": {
+              "ok": true,
+              "result": {
+                "termination": "completed",
+                "watches": {
+                  "RESULT:10": 0
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

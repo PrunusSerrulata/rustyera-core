@@ -65,6 +65,16 @@ class UpstreamAcceptanceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate(evidence, manifest)
 
+    def test_snake_registered_surrogate_difference_is_checked_equally(self):
+        evidence, manifest = self.sample(True)
+        evidence["oracle"] = "snake"
+        manifest["semanticBaselines"] = {"snake": "baseline"}
+        manifest["cases"][0]["allowedOracles"] = ["snake"]
+        self.assertEqual(validate(evidence, manifest)["status"], "accepted_registered_difference")
+        evidence["rustComparison"]["cases"][0]["steps"][0]["rust"]["result"]["watches"]["RESULT:11"] = 7
+        with self.assertRaises(ValueError):
+            validate(evidence, manifest)
+
     def test_extra_output_or_watch_difference_is_never_registered(self):
         mutations = [
             lambda rust, response: response["result"]["output"].append("unexpected"),
