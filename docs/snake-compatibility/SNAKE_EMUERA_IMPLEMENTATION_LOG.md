@@ -49,6 +49,7 @@ core SHA、库/bundle 路径及后续发布绑定变更，须在对应实施批�
 | [5](#batch-5) | 蛇版存档互操作与音频 | 已完成确认范围 | 2026-09-04 / Codex | 标准 1808、音频、存档页及整包导出修复完成；Browser/Tauri 蛇版 TW 导出文件一致，TUI 真实 TW 保留像素能力限制 |
 | [6](#batch-6) | 完整蛇版语言 | 待登记 | 待填写 | 待填写 |
 | [7](#batch-7) | 可选 extension 与渲染能力 | 待登记 | 待填写 | 待填写 |
+| [原版 upstream A](#upstream-a) | 别名与普通存档版本检查 | 已完成 | 2026-09-11 / Codex | 原版 9、蛇版 5 固定差分通过；B/C 独立推进 |
 
 <a id="batch-0"></a>
 
@@ -1710,6 +1711,68 @@ profile、游戏 fixture 或两个参考引擎的正常游戏语义。
 - 各组件提交、分项对应关系、发布/迁移注意事项、CHANGELOG_PENDING 更新情况：待填写。
 - 当前轮次/起止时间、最近观察状态或指标、材料与复现命令、下一步恢复入口：待填写。
 - 临时材料保留/清理、相关进程停止与资源释放情况：待填写。
+
+<a id="upstream-a"></a>
+
+## 原版 upstream A：别名与存档检查（2026-09-11 最终记录）
+
+计划入口：[原版 upstream 跟进](SNAKE_EMUERA_MIGRATION_PLAN.md#upstream-7b69)。
+本批在 core master 完成，两个局部功能合并审查和验证、分别提交；不代表 B/C 完成。
+
+### 所作改动与提交
+
+| 项目 | 实际行为与范围 | 提交 / 依赖 |
+|---|---|---|
+| 探针基础 | 同步现有 core 锁条目、文本投影协议分支及既有格式，不升级产品版本 | `6ed0229` |
+| 兼容身份 | 原版 semantic/policy 1→2，旧缓存/快照拒绝；蛇版 12 不变 | `b72dea3` |
+| `.als` | 原版保留首次同名项并继续读取，数字索引 warning 与蛇版规则不变 | `95beb8b`，依赖身份基础 |
+| `CHKDATA` | 原版普通检查写 RESULT:1；成功/不兼容写版本，其余正常错误写 0；非法参数仍异常 | `d1667bf`，依赖身份基础 |
+| 固定观察入口 | 新 fixture、8 个无 payload 存档头、双 oracle 身份及诊断检查 | `ca736bd` |
+
+存档复用 metadata 和 HostWrite，显式携带检查种类；不兼容版本在读取 description
+前返回。`CHKCHARADATA` 与蛇版不增加副作用，传统存档格式和匹配规则保持不变。
+
+### 审查与验收
+
+本批仅一次独立重构审查，在所有测试前完成。结论无需结构性重构；已落实分阶段
+存档头读取、加载诊断校验、独立 probe 门禁、固定保存字节及队列停止/持久化要求。
+首条测试于 02:45:07 UTC 启动，预算截止 03:45:07 UTC；行为验证及首轮收尾检查
+用时约 37 分钟。使用 Rust 1.96.1、现有 .NET SDK 10.0.301 和 Whisky Wine，
+隔离 target、SQLite、Python 3.12、publish 与 Wine prefix，未下载工具。
+
+| 阶段 | 首次结果 | 定向复验与边界 |
+|---|---|---|
+| core 静态与最小回归 | fmt 通过；check 暴露 SQLite 环境与测试 helper 可见性问题 | 修复后定向 check、Clippy、别名矩阵、13 项存档检查及身份/缓存/snapshot 回归通过 |
+| workspace 全量 | **1,695 通过，0 失败，0 忽略；仅一次** | 未重跑全量 |
+| 独立 probe 静态 | 修复既有格式、过期锁及协议分支后 fmt/check/Clippy 通过 | build 通过 |
+| probe 首次全量 | **90 通过，1 失败，3 既有忽略** | 全局分配量测试受并行测试污染；仅该用例隔离复验通过，未重跑整套 |
+| 比较器首次 44 方法 | 缺依赖及旧 INPUT fixture 断言失败 | 14 个受影响方法定向通过；后续布局、实际诊断表示回归各定向通过 |
+| 原版与蛇版 oracle | 两套 smoke 与身份检查通过 | 原版 9 例、蛇版 5 例逐例严格 verdict 通过 |
+
+原版语义 `7b69ebd27378c03c32b6477b74901bfc3d33223c`，wrapper
+`c94bf1de2c4ecc0f876a913f0c8ec1035d3f06b4`；蛇版语义
+`fc4fb21416768c17256d0e82f997e5f99c9bba91`，wrapper
+`acae8ab9125c9f4323716904491ecc21fac77f19`。本批参考仓库源码修改：**无**。
+
+### 实际差异、证据与交付边界
+
+- 首次别名捕获因 fixture 与探针重复 SYSTEM_TITLE 而未执行目标函数；修正布局后
+  定向重采，原始失败记录保留。蛇版加载 warning 通过 console output 提供，Rust
+  通过结构化诊断提供，行号分别从 1 和 0 开始。分别检查真实 level/file/line/alias
+  与 code/context/source，保留原始表示，标记 `diagnosticEquivalence: false`。
+- 加载进度和耗时不是脚本输出。比较器修复后对已有 10 份观察离线重算，没有重跑
+  引擎，随后执行剩余 4 例。执行结果、RESULT 副作用与终态无未登记差异。
+- 证据位于 `.audit/upstream-7b69-20260911/a/`：`commands.ndjson`、首次及定向
+  日志、原始 evidence、独立 recompare、`artifacts.json`、`commits.json`。产物绑定
+  core 构建前父提交 `5ac4b5c` 加实际 patch、Rust probe 摘要、两个干净 reference
+  checkout 及 publish 全文件摘要；文档和提交没有触发重建。
+- `tools/runtime-tester/fixture-upstream-7b69-batch-a` 保留 policy 2 的固定输入和
+  采集前 README；当前验收状态以本记录为准。历史身份不改写成 policy 3。
+  Git 禁止归一化固定存档头字节，确保提交与实际捕获一致。
+- A 批完成；B 字符串、C 最终绑定及真实客户端消费尚未验收。本批没有自主游玩、
+  性能或额外平台矩阵。已对两个任务 Wine prefix 执行清理，无用户会话操作。
+  证据和工具产物保留供后续批次，整项普通任务结束后清理可再生产物。
+- 根 CHANGELOG_PENDING 的产品条目在整项交付时单独提交；发布版本及远端未改变。
 
 <a id="batch-7"></a>
 
