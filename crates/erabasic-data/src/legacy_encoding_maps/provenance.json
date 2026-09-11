@@ -1,0 +1,85 @@
+{
+  "schema": "upstream-7b69-utf16-codepage-tuples-v1",
+  "status": "generated_not_behaviorally_validated",
+  "upstreamSemanticSha": "7b69ebd27378c03c32b6477b74901bfc3d33223c",
+  "generatorSources": {
+    "LegacyEncodingMap.csproj": "966d23f9ecbafb3739ca0c1bee006b894989b72b73eeba63f5b36e2a563f3754",
+    "Program.cs": "6a1047c8bd33bb15302cdb29ffc5f0570ca1ff2131dc59a3f144acccaff31f34"
+  },
+  "codePages": [
+    932,
+    949,
+    936,
+    950
+  ],
+  "fallbackIdentity": {
+    "932": {
+      "encodingType": "System.Text.DBCSCodePageEncoding, System.Text.Encoding.CodePages, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a",
+      "encoderFallback": "System.Text.InternalEncoderBestFitFallback, System.Text.Encoding.CodePages, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a",
+      "decoderFallback": "System.Text.InternalDecoderBestFitFallback, System.Text.Encoding.CodePages, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a"
+    },
+    "936": {
+      "encodingType": "System.Text.DBCSCodePageEncoding, System.Text.Encoding.CodePages, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a",
+      "encoderFallback": "System.Text.InternalEncoderBestFitFallback, System.Text.Encoding.CodePages, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a",
+      "decoderFallback": "System.Text.InternalDecoderBestFitFallback, System.Text.Encoding.CodePages, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a"
+    },
+    "949": {
+      "encodingType": "System.Text.DBCSCodePageEncoding, System.Text.Encoding.CodePages, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a",
+      "encoderFallback": "System.Text.InternalEncoderBestFitFallback, System.Text.Encoding.CodePages, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a",
+      "decoderFallback": "System.Text.InternalDecoderBestFitFallback, System.Text.Encoding.CodePages, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a"
+    },
+    "950": {
+      "encodingType": "System.Text.DBCSCodePageEncoding, System.Text.Encoding.CodePages, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a",
+      "encoderFallback": "System.Text.InternalEncoderBestFitFallback, System.Text.Encoding.CodePages, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a",
+      "decoderFallback": "System.Text.InternalDecoderBestFitFallback, System.Text.Encoding.CodePages, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a"
+    }
+  },
+  "rawFormat": "Per code page: 65536 ascending records, each u16 UTF16 unit LE, u32 emitted byte length LE, u8 roundtrip (0/1); 7 bytes per record, no header",
+  "bitsetFormat": "8192 bytes per code page; bit (unit & 7) of byte (unit >> 3), LSB first; 0=width1, 1=width2; selected exact else CP932 exact else selected emitted length",
+  "outputs": {
+    "cp932.final-width.bits": {
+      "sha256": "dfc2eb9b41d3d3fb41c57bfe6cfd4debf10abc6951387132c7827613adf28865",
+      "bytes": 8192
+    },
+    "cp932.tuples.bin": {
+      "sha256": "af554ef724edb26df29a8b6e188ddcd8dd498ef6bb66df63786f676dd53a97bc",
+      "bytes": 458752
+    },
+    "cp936.final-width.bits": {
+      "sha256": "abb0524796bda81900cf15a518dc9e8e23c4b9c61b6f897de3c67119941e539e",
+      "bytes": 8192
+    },
+    "cp936.tuples.bin": {
+      "sha256": "5cd53e8a6784f2fdf44620bcc1e2ec4b2db3a196b78ea2f2e5c8158cf54ee0b5",
+      "bytes": 458752
+    },
+    "cp949.final-width.bits": {
+      "sha256": "8d160ec6329fba8d568a529918974f29c5e7c91a3664b31a89ffb3b2d89b3d43",
+      "bytes": 8192
+    },
+    "cp949.tuples.bin": {
+      "sha256": "15400b48636a27888815b89cc33a51bc577d66a783874a0e11eed1fb3711b2e2",
+      "bytes": 458752
+    },
+    "cp950.final-width.bits": {
+      "sha256": "c84dc1e8db8a37e9b1fd7021505a826ae17840e33ef4462c7cf802030434ea24",
+      "bytes": 8192
+    },
+    "cp950.tuples.bin": {
+      "sha256": "fdcfbe61201b891b3a4cb0ca88bda76115ac59bce10291264465a9b321fdd7df",
+      "bytes": 458752
+    }
+  },
+  "provider": {
+    "sha256": "14061806bcc21b8656c27437bd2c6ec4d82b4f08ff4b593a1bd5f36d94289d48",
+    "fullName": "System.Text.Encoding.CodePages, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a",
+    "assemblyVersion": "10.0.0.0",
+    "informationalVersion": "10.0.9+901ca941248413c79832d2fdbd709da0c4386353",
+    "mvid": "092ee660-34c4-466c-a151-cc338733325f"
+  },
+  "runtime": {
+    "framework": ".NET 10.0.9",
+    "os": "Microsoft Windows 10.0.19045",
+    "architecture": "X64"
+  }
+}

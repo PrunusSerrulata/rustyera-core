@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use erabasic_data::{LegacyEncoding, ProjectData};
+use erabasic_data::{LegacyEncoding, LegacyStringCounting, ProjectData};
 
 #[derive(Default)]
 pub(crate) struct IndexResolver {
@@ -11,10 +11,14 @@ pub(crate) struct IndexResolver {
     builtin_tables: BTreeMap<(String, usize), Arc<BTreeMap<String, i64>>>,
     rename: BTreeMap<String, i64>,
     legacy_encoding: LegacyEncoding,
+    legacy_counting: LegacyStringCounting,
 }
 
 impl IndexResolver {
-    pub fn new(project: &ProjectData) -> Self {
+    pub fn new(
+        project: &ProjectData,
+        compatibility: &erabasic_compat::CompatibilityIdentity,
+    ) -> Self {
         let mut result = Self::default();
         for (kind, table) in &project.static_data.name_tables {
             let dimension = kind.data_dimension();
@@ -53,6 +57,11 @@ impl IndexResolver {
             .filter_map(|(name, value)| value.parse().ok().map(|value| (name.clone(), value)))
             .collect();
         result.legacy_encoding = project.static_data.legacy_encoding;
+        result.legacy_counting = if compatibility.uses_utf16_legacy_counting() {
+            LegacyStringCounting::Utf16Roundtrip
+        } else {
+            LegacyStringCounting::Scalar
+        };
         result
     }
 
@@ -85,7 +94,8 @@ impl IndexResolver {
     }
 
     pub(crate) fn legacy_encoded_len(&self, value: &str) -> usize {
-        self.legacy_encoding.encoded_len(value)
+        self.legacy_encoding
+            .encoded_len_with_policy(value, self.legacy_counting)
     }
 }
 

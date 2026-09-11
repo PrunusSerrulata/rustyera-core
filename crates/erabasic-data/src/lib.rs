@@ -8,6 +8,7 @@
 mod catalog;
 mod deferred;
 mod initialization;
+mod legacy_encoding;
 mod schema;
 mod static_data;
 
@@ -19,6 +20,7 @@ pub use deferred::{
 pub use initialization::{
     CharacterSelection, NewGameSeed, RuntimeDefaults, SaveCompatibility, SaveLoadContext,
 };
+pub use legacy_encoding::LegacyStringCounting;
 pub use schema::{
     IndexSpaceSchema, Persistence, ProjectSchema, StorageScope, ValueType, VariableId,
     VariableSchema,

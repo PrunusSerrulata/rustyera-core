@@ -121,6 +121,7 @@ pub(super) fn wrapper(request: &Value) -> AuditResult<String> {
 fn load_fixture_files(root: &Path, group: &str) -> AuditResult<Vec<SubmittedFile>> {
     let group_file = match group {
         "UPSTREAM_A" => "upstream_a",
+        "UPSTREAM_B" => "upstream_b",
         "PRINTC" => "printc",
         "arithmetic" => "arithmetic",
         "RNG" => "rng",
@@ -161,7 +162,7 @@ fn load_fixture_files(root: &Path, group: &str) -> AuditResult<Vec<SubmittedFile
             ));
         }
     }
-    if matches!(group, "METHODS" | "COLUMNS") {
+    if matches!(group, "METHODS" | "COLUMNS" | "UPSTREAM_B") {
         let header = format!("erb/{group_file}.erh");
         files.push(submitted(
             &header,

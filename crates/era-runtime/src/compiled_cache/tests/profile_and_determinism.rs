@@ -230,14 +230,18 @@ fn original_upgrade_rejects_previous_full_project_identity() {
     )
     .unwrap();
     assert!(decode_project_file(&bytes, bytes.len()).is_ok());
-    let mut old = project.compatibility.clone();
-    old.semantic_version = 1;
-    old.policy_version = 1;
-    assert_historical_profile_rejected(&bytes, &old);
-    let mut old_project = project.clone();
-    old_project.compatibility = old;
-    assert_ne!(
-        project_key(&project_identity(&project), &[]),
-        project_key(&project_identity(&old_project), &[])
-    );
+    assert_eq!(project.compatibility.semantic_version, 3);
+    assert_eq!(project.compatibility.policy_version, 3);
+    for version in [1, 2] {
+        let mut old = project.compatibility.clone();
+        old.semantic_version = version;
+        old.policy_version = version;
+        assert_historical_profile_rejected(&bytes, &old);
+        let mut old_project = project.clone();
+        old_project.compatibility = old;
+        assert_ne!(
+            project_key(&project_identity(&project), &[]),
+            project_key(&project_identity(&old_project), &[])
+        );
+    }
 }

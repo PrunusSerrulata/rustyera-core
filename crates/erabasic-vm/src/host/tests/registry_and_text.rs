@@ -1,4 +1,97 @@
 use super::*;
+
+#[test]
+fn upstream_legacy_native_dispatch_selects_profile_and_preserves_u_and_numeric_rules() {
+    use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
+    for encoding in [
+        LegacyEncoding::Japanese,
+        LegacyEncoding::Korean,
+        LegacyEncoding::ChineseHans,
+        LegacyEncoding::ChineseHant,
+    ] {
+        for profile in [
+            CompatibilityProfileId::EmueraEm,
+            CompatibilityProfileId::EmueraSkiaSnake,
+        ] {
+            let identity = CompatibilityIdentity::for_profile(profile);
+            let original = profile == CompatibilityProfileId::EmueraEm;
+            let call = |name: &str, arguments: Vec<VmValue>| {
+                CoreNative::new(name.into(), encoding)
+                    .with_compatibility(&identity)
+                    .call(classified_native_request(name, arguments))
+                    .unwrap()
+                    .value
+                    .unwrap()
+            };
+            assert_eq!(
+                call("strlens", vec![VmValue::String("A😀ｶ".into())]),
+                VmValue::Integer(if original { 4 } else { 3 })
+            );
+            assert_eq!(
+                call("strlensu", vec![VmValue::String("😀".into())]),
+                VmValue::Integer(2)
+            );
+            assert_eq!(
+                call(
+                    "substring",
+                    vec![
+                        VmValue::String("😀X".into()),
+                        VmValue::Integer(0),
+                        VmValue::Integer(1)
+                    ]
+                ),
+                VmValue::String(if original { "\u{fffd}" } else { "😀" }.into())
+            );
+            assert_eq!(
+                call(
+                    "strfind",
+                    vec![
+                        VmValue::String("abc".into()),
+                        VmValue::String("a".into()),
+                        VmValue::Integer(-1)
+                    ]
+                ),
+                VmValue::Integer(if original { 0 } else { -1 })
+            );
+            assert_eq!(
+                call(
+                    "substring",
+                    vec![
+                        VmValue::String("abc".into()),
+                        VmValue::Integer(0),
+                        VmValue::Integer(i64::MIN)
+                    ]
+                ),
+                VmValue::String(if original { "" } else { "abc" }.into())
+            );
+            let mut omitted = classified_native_request(
+                "substring",
+                vec![
+                    VmValue::String("abc".into()),
+                    VmValue::Integer(0),
+                    VmValue::Integer(i64::MIN),
+                ],
+            );
+            omitted.omitted_arguments = vec![2];
+            assert_eq!(
+                CoreNative::new("substring".into(), encoding)
+                    .with_compatibility(&identity)
+                    .call(omitted)
+                    .unwrap()
+                    .value,
+                Some(VmValue::String("abc".into()))
+            );
+            for name in ["toint", "isnumeric"] {
+                for input in ["１２", "123髙", "9999999999999999999999999髙", "1.2髙"] {
+                    assert_eq!(
+                        call(name, vec![VmValue::String(input.into())]),
+                        VmValue::Integer(0)
+                    );
+                }
+            }
+        }
+    }
+}
 #[test]
 fn registered_override_is_not_path_memo_safe() {
     let key = SymbolKey([7; 16]);

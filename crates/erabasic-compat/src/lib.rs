@@ -130,7 +130,7 @@ impl CompatibilityIdentity {
     #[must_use]
     pub fn for_profile(profile: CompatibilityProfileId) -> Self {
         let version = match profile {
-            CompatibilityProfileId::EmueraEm => 2,
+            CompatibilityProfileId::EmueraEm => 3,
             CompatibilityProfileId::EmueraSkiaSnake => 12,
         };
         Self {
@@ -196,6 +196,12 @@ impl CompatibilityIdentity {
     #[must_use]
     pub const fn uses_snake_numeric_read_fallback(&self) -> bool {
         self.supports_snake_policy(3)
+    }
+
+    /// Original policy v3 counts legacy strings by round-tripped UTF-16 units.
+    #[must_use]
+    pub const fn uses_utf16_legacy_counting(&self) -> bool {
+        matches!(self.profile, CompatibilityProfileId::EmueraEm) && self.policy_version >= 3
     }
 
     /// Complete call text and checked forms share the v4 execution contract.
@@ -316,13 +322,21 @@ mod tests {
     #[test]
     fn original_upgrade_rejects_previous_identity() {
         let current = CompatibilityIdentity::reference();
-        assert_eq!((current.semantic_version, current.policy_version), (2, 2));
+        assert_eq!((current.semantic_version, current.policy_version), (3, 3));
         assert!(current.validate().is_ok());
-        let mut previous = current.clone();
-        previous.semantic_version = 1;
-        previous.policy_version = 1;
-        assert!(previous.validate().is_err());
-        assert_ne!(previous.digest(), current.digest());
+        assert!(current.uses_utf16_legacy_counting());
+        for version in [1, 2] {
+            let mut previous = current.clone();
+            previous.semantic_version = version;
+            previous.policy_version = version;
+            assert!(previous.validate().is_err());
+            assert!(!previous.uses_utf16_legacy_counting());
+            assert_ne!(previous.digest(), current.digest());
+        }
+        let snake = CompatibilityIdentity::for_profile(CompatibilityProfileId::EmueraSkiaSnake);
+        assert_eq!((snake.semantic_version, snake.policy_version), (12, 12));
+        assert!(snake.validate().is_ok());
+        assert!(!snake.uses_utf16_legacy_counting());
     }
 
     #[test]

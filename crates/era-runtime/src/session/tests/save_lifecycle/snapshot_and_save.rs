@@ -161,6 +161,11 @@ fn snapshot_identity_mismatches_preserve_the_live_vm_and_wait() {
         .expect("snapshot export")
         .bytes;
     drain(&mut session);
+    let current_payload =
+        runtime_snapshot::decode(&bytes.copy_range(0..bytes.len()), usize::MAX).unwrap();
+    assert_eq!(current_payload.compatibility.semantic_version, 3);
+    assert_eq!(current_payload.compatibility.policy_version, 3);
+    assert!(current_payload.compatibility.validate().is_ok());
     let before_vm = session.vm.as_ref().unwrap().snapshot().unwrap();
     let before_wait = session.operations.active_input().unwrap().wait.clone();
     let before_epoch = session.epoch;
@@ -171,7 +176,8 @@ fn snapshot_identity_mismatches_preserve_the_live_vm_and_wait() {
 
     for mismatch in [
         "outer_profile",
-        "old_original",
+        "original_v1",
+        "original_v2",
         "inner_profile",
         "outer_artifact",
         "inner_artifact",
@@ -180,9 +186,10 @@ fn snapshot_identity_mismatches_preserve_the_live_vm_and_wait() {
             runtime_snapshot::decode(&bytes.copy_range(0..bytes.len()), usize::MAX).unwrap();
         match mismatch {
             "outer_profile" => payload.compatibility = snake.clone(),
-            "old_original" => {
-                payload.compatibility.semantic_version = 1;
-                payload.compatibility.policy_version = 1;
+            "original_v1" | "original_v2" => {
+                let version = if mismatch == "original_v1" { 1 } else { 2 };
+                payload.compatibility.semantic_version = version;
+                payload.compatibility.policy_version = version;
             }
             "outer_artifact" => payload.artifact_id = erabasic_bytecode::Digest([7; 32]),
             "inner_profile" | "inner_artifact" => {

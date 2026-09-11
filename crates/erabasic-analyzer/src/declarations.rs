@@ -108,7 +108,7 @@ pub(crate) fn analyze_global_declarations(
 ) -> DeclarationOutput {
     let mut output = DeclarationOutput::default();
     let mut constants = BTreeMap::new();
-    let index_resolver = IndexResolver::new(project);
+    let index_resolver = IndexResolver::new(project, &options.compatibility);
     let mut variable_dimensions: BTreeMap<_, _> = project
         .schema
         .variables

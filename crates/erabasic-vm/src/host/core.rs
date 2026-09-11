@@ -1,11 +1,13 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
+use erabasic_data::LegacyStringCounting;
 
 pub(super) struct CoreNative {
     pub(super) name: String,
     pub(super) legacy_encoding: LegacyEncoding,
     regex_cache: RegexCache,
     numeric_read_fallback: bool,
+    legacy_counting: LegacyStringCounting,
 }
 
 const REGEX_CACHE_CAPACITY: usize = 16;
@@ -76,6 +78,7 @@ impl CoreNative {
             legacy_encoding,
             regex_cache: RegexCache::default(),
             numeric_read_fallback: false,
+            legacy_counting: LegacyStringCounting::Utf16Roundtrip,
         }
     }
 
@@ -84,6 +87,11 @@ impl CoreNative {
         compatibility: &erabasic_compat::CompatibilityIdentity,
     ) -> Self {
         self.numeric_read_fallback = compatibility.uses_snake_numeric_read_fallback();
+        self.legacy_counting = if compatibility.uses_utf16_legacy_counting() {
+            LegacyStringCounting::Utf16Roundtrip
+        } else {
+            LegacyStringCounting::Scalar
+        };
         self
     }
 }
@@ -591,6 +599,7 @@ mod regex_cache_tests {
 }
 
 mod dispatch;
+mod legacy_text;
 
 #[cfg(test)]
 mod literal_regex_tests;

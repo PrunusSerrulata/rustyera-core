@@ -78,7 +78,11 @@ impl NativeService for CoreNative {
             }
             "bitcount" => VmValue::Integer(i64::from(integer(0)?.count_ones())),
             "strlen" | "strlens" => VmValue::Integer(
-                i64::try_from(self.legacy_encoding.encoded_len(string(0)?)).unwrap_or(i64::MAX),
+                i64::try_from(
+                    self.legacy_encoding
+                        .encoded_len_with_policy(string(0)?, self.legacy_counting),
+                )
+                .unwrap_or(i64::MAX),
             ),
             "strlenu" | "strlensu" => {
                 // Emuera runs on .NET, so the U variants count UTF-16 code units rather than
@@ -230,19 +234,32 @@ impl NativeService for CoreNative {
             "tostr" => VmValue::String(integer(0)?.to_string()),
             "substring" => {
                 let start = match request.argument(1) {
-                    None | Some(VmValue::Integer(i64::MIN)) => 0,
+                    None => 0,
+                    Some(VmValue::Integer(i64::MIN))
+                        if self.legacy_counting == LegacyStringCounting::Scalar =>
+                    {
+                        0
+                    }
                     Some(_) => integer(1)?,
                 };
                 let length = match request.argument(2) {
-                    None | Some(VmValue::Integer(i64::MIN)) => None,
+                    None => None,
+                    Some(VmValue::Integer(i64::MIN))
+                        if self.legacy_counting == LegacyStringCounting::Scalar =>
+                    {
+                        None
+                    }
                     Some(_) => Some(integer(2)?),
                 };
-                VmValue::String(substring_legacy_bytes(
-                    string(0)?,
-                    start,
-                    length,
-                    self.legacy_encoding,
-                ))
+                let value = string(0)?;
+                VmValue::String(match self.legacy_counting {
+                    LegacyStringCounting::Scalar => {
+                        substring_legacy_bytes(value, start, length, self.legacy_encoding)
+                    }
+                    LegacyStringCounting::Utf16Roundtrip => {
+                        legacy_text::substring(value, start, length, self.legacy_encoding)
+                    }
+                })
             }
             "substringu" => {
                 let start = match request.argument(1) {
@@ -255,12 +272,19 @@ impl NativeService for CoreNative {
                 };
                 VmValue::String(substring_scalars(string(0)?, start, length))
             }
-            "strfind" => VmValue::Integer(strfind_legacy_bytes(
-                string(0)?,
-                string(1)?,
-                integer(2).unwrap_or(0),
-                self.legacy_encoding,
-            )),
+            "strfind" => {
+                let value = string(0)?;
+                let needle = string(1)?;
+                let start = integer(2).unwrap_or(0);
+                VmValue::Integer(match self.legacy_counting {
+                    LegacyStringCounting::Scalar => {
+                        strfind_legacy_bytes(value, needle, start, self.legacy_encoding)
+                    }
+                    LegacyStringCounting::Utf16Roundtrip => {
+                        legacy_text::find(value, needle, start, self.legacy_encoding)
+                    }
+                })
+            }
             "strfindu" => {
                 let haystack = string(0)?;
                 let start = integer(2).unwrap_or(0);

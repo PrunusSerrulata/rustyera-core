@@ -1,6 +1,59 @@
 use super::*;
 
 #[test]
+fn upstream_utf16_legacy_lengths_fold_under_the_selected_profile() {
+    use erabasic_compat::{CompatibilityIdentity, CompatibilityProfileId};
+    use erabasic_data::LegacyEncoding;
+    for encoding in [
+        LegacyEncoding::Japanese,
+        LegacyEncoding::Korean,
+        LegacyEncoding::ChineseHans,
+        LegacyEncoding::ChineseHant,
+    ] {
+        for (profile, expected) in [
+            (CompatibilityProfileId::EmueraEm, 4),
+            (CompatibilityProfileId::EmueraSkiaSnake, 3),
+        ] {
+            let mut project_data = empty_project();
+            project_data.static_data.legacy_encoding = encoding;
+            let mut options = AnalyzerOptions::analysis_mode();
+            options.compatibility = CompatibilityIdentity::for_profile(profile);
+            let report = analyze_project(
+                AnalysisInput {
+                    project_data,
+                    sources: vec![source(
+                        "width.erh",
+                        "#DIM CONST LEGACY_WIDTH = STRLENS(\"A😀ｶ\")\n#DIM CONST UTF16_WIDTH = STRLENSU(\"A😀ｶ\")\n",
+                    )],
+                },
+                &options,
+                &ExtensionRegistry::default(),
+            );
+            assert!(
+                !report
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.reference_level >= 2),
+                "{:#?}",
+                report.diagnostics
+            );
+            let variables = report.project.unwrap().program.variables;
+            for (name, width) in [("LEGACY_WIDTH", expected), ("UTF16_WIDTH", 4)] {
+                assert_eq!(
+                    variables
+                        .iter()
+                        .find(|variable| variable.name == name)
+                        .unwrap()
+                        .initial_values,
+                    [erabasic_hir::ConstantValue::Integer(width)],
+                    "{encoding:?} {profile:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn snake_constant_initializers_emit_warnings_without_losing_saturated_values() {
     let mut options = AnalyzerOptions::analysis_mode();
     options.compatibility = erabasic_compat::CompatibilityIdentity::for_profile(

@@ -576,6 +576,13 @@ class DriverTests(unittest.TestCase):
                     "semantic_version": 2, "policy_version": 2}}
         validate_rust_evidence(upstream, "original", fixture, 1,
                                {"semantic_version": 2, "policy_version": 2})
+        strings = {**evidence, "profile": {**evidence["profile"],
+                   "semantic_version": 3, "policy_version": 3}}
+        validate_rust_evidence(strings, "original", fixture, 1,
+                              {"semantic_version": 3, "policy_version": 3})
+        with self.assertRaises(ValueError):
+            validate_rust_evidence(upstream, "original", fixture, 1,
+                                  {"semantic_version": 3, "policy_version": 3})
         modern_snake = {**evidence, "profile": {**evidence["profile"],
             "profile": "emuera.skia.snake", "semantic_version": 12, "policy_version": 12,
             "arithmetic": "snake_saturating_i64_v1", "save_codec": "snake_emuera1808_interop_v1",
@@ -696,6 +703,14 @@ class DriverTests(unittest.TestCase):
         self.assertEqual((fixture / "erb/base.erb").read_text().strip(),
                          "@SYSTEM_TITLE\nINPUT\nRETURN")
         self.assertNotIn("@SYSTEM_TITLE", (fixture / "erb/upstream_a.erb").read_text())
+
+    def test_upstream_b_languages_have_a_separate_title_entry(self):
+        root = driver.FIXTURE.with_name("fixture-upstream-7b69-batch-b")
+        for language in ("japanese", "korean", "chinese-hans", "chinese-hant"):
+            fixture = root / language
+            self.assertEqual((fixture / "erb/base.erb").read_text().strip(),
+                             "@SYSTEM_TITLE\nINPUT\nRETURN")
+            self.assertNotIn("@SYSTEM_TITLE", (fixture / "erb/upstream_b.erb").read_text())
 
     def test_index_fixture_keeps_extension_rejections_separate_from_successful_loads(self):
         fixture = driver.FIXTURE.with_name("fixture-snake-index-inputs")

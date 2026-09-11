@@ -312,7 +312,7 @@ fn analyze_with_context(
     }
     drop(declarations);
 
-    let index_resolver = IndexResolver::new(&project_data);
+    let index_resolver = IndexResolver::new(&project_data, &options.compatibility);
     let mut symbols = Symbols::new(&project_data, &declaration_output.variables, options);
     drop(declaration_output);
     let mut definitions = Vec::new();

@@ -108,7 +108,7 @@ def validate_rust_evidence(evidence, oracle, fixture, seed, required_policy=None
         raise ValueError("Rust evidence belongs to a different compatibility profile")
     versions = (identity.get("semantic_version"), identity.get("policy_version"))
     supported = (
-        {(1, 1), (2, 2)}
+        {(1, 1), (2, 2), (3, 3)}
         if oracle == "original"
         else {(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8), (12, 12)}
     )
@@ -187,7 +187,7 @@ def split_setup_diagnostics(diagnostics, identity):
     return setup, script
 
 
-def validate_upstream_a_load_diagnostics(rust_case, load_response, identity):
+def validate_upstream_load_diagnostics(rust_case, load_response, identity, *, duplicate_alias):
     """Check each engine's load schema independently, preserving the raw evidence."""
     rust_raw = (rust_case.get("load") or {}).get("diagnostics")
     oracle_raw = (load_response or {}).get("diagnostics")
@@ -199,7 +199,8 @@ def validate_upstream_a_load_diagnostics(rust_case, load_response, identity):
     snake = profile == "emuera.skia.snake"
     if profile not in PROFILES.values():
         differences.append("missing_or_unknown_compatibility_profile")
-    rust_valid = rust_script == [] if not snake else (
+    expects_alias_warning = snake and duplicate_alias
+    rust_valid = rust_script == [] if not expects_alias_warning else (
         isinstance(rust_script, list) and len(rust_script) == 1
         and rust_script[0].get("code") == "csv.duplicatealias"
         and rust_script[0].get("level") == "warning"
@@ -224,7 +225,7 @@ def validate_upstream_a_load_diagnostics(rust_case, load_response, identity):
                                  "line": int(match[3]), "alias": match[4], "raw": line})
             else:
                 unknown.append(line)
-    expected_warnings = [{"level": 1, "file": "FLAG.als", "line": 2, "alias": "shared"}] if snake else []
+    expected_warnings = [{"level": 1, "file": "FLAG.als", "line": 2, "alias": "shared"}] if expects_alias_warning else []
     oracle_valid = (
         oracle_raw == [] and isinstance(oracle_output, list) and not unknown
         and [{key: value for key, value in warning.items() if key != "raw"}
@@ -448,8 +449,9 @@ def compare_case(case, oracle_steps, rust_case, load_response=None, identity=Non
         else "oracle_instrumentation_only"
     )
     load_diagnostics = None
-    if case.get("group") == "UPSTREAM_A":
-        load_diagnostics = validate_upstream_a_load_diagnostics(rust_case, load_response, identity)
+    if case.get("group") in {"UPSTREAM_A", "UPSTREAM_B"}:
+        load_diagnostics = validate_upstream_load_diagnostics(
+            rust_case, load_response, identity, duplicate_alias=case["group"] == "UPSTREAM_A")
         if load_diagnostics["differences"]:
             status = "different"
     return {
