@@ -1,8 +1,10 @@
 # RustyEra
 
 RustyEra 是用 Rust 重新实现的 EraBasic 语言工具链与运行环境，默认兼容基准固定为
-原版 `emuera.em` 提交 `26a35dc9334bb67590b96f7b8efbefbf199e391e`（Emuera 1.824
+原版 `emuera.em` 提交 `7b69ebd27378c03c32b6477b74901bfc3d33223c`（Emuera 1.824
 系列）；涉及蛇版 emuera 的功能使用其独立固定 oracle，具体选择见下文“验证与测试”。
+2026-09-11 升级后的上游行为增量与尚待跟进项见
+[原版基准升级](docs/runtime-reference-mapping.zh-CN.md#2026-09-11-原版基准升级)；旧基准测试结果不构成新基准验收。
 项目覆盖从 UTF-8 源码、静态数据、语义分析、字节码、虚拟机到可移植
 runtime 协议和 C ABI 的完整链路。独立的 Python/Textual TUI 与 Vue/WebAssembly/Tauri
 客户端通过公共边界集成 runtime。

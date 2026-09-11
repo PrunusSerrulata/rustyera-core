@@ -156,9 +156,13 @@ After all Rust gates pass for a Rust or C# reference CLI implementation change:
 Treat a passing platform smoke test only as proof that the oracle starts and responds; it is not
 a differential comparison. Ignore only explicit environment metadata such as request IDs and
 absolute paths. Validate and retain each oracle's `schemaVersion` and `referenceCommit` before
-normalizing responses: original baseline `26a35dc9334bb67590b96f7b8efbefbf199e391e`, snake baseline
+normalizing responses: original baseline `7b69ebd27378c03c32b6477b74901bfc3d33223c`, snake baseline
 `fc4fb21416768c17256d0e82f997e5f99c9bba91`. Also record the wrapper checkout commit. Do not hide
 semantic differences as metadata; record every intentional difference in tests and the report.
+Historical fixtures, captures, and batch-specific runners may retain the old original baseline
+`26a35dc9334bb67590b96f7b8efbefbf199e391e`. Do not relabel them as new-baseline evidence.
+Check their pinned identities before running; use the matching historical checkout or explicitly
+migrate the runner and recapture affected observations for the new baseline.
 
 When adding syntax or an execution path, extend the applicable fixtures, request set, and Rust
 tests so Rust and the selected oracle receive identical input. For dual-oracle work, distinguish

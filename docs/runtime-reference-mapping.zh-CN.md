@@ -1,6 +1,6 @@
 # Emuera runtime 参考映射
 
-本清单的兼容基准固定为原版 `emuera.em` 提交 `26a35dc9334bb67590b96f7b8efbefbf199e391e`，
+本清单的兼容基准固定为原版 `emuera.em` 提交 `7b69ebd27378c03c32b6477b74901bfc3d33223c`，
 不代表蛇版 emuera 的行为清单。涉及蛇版的改动须按
 [core 测试 skill](../.agents/skills/test-rustyera-core/SKILL.md) 选择蛇版或双 oracle 验证，
 不能直接把本文结论套用到蛇版。本清单记录
@@ -23,6 +23,28 @@
 | GDI/canvas/resource 类 | 图像解码、光栅修改、字体度量和动画调度使用 Windows 设备对象。 | 规范化 resource/canvas replay 加类型化前端服务。按内容寻址的源图像事实与依赖前端的文本/canvas 光栅观察分离；无法形成可移植契约的物理 GDI/CBG API 保持不支持。 |
 | `Process.CalledFunction.cs` | frame 保留函数身份、返回地址、event 状态、参数和 local scope。 | 带 generation/frame 的 VM debug descriptor 和源码映射 call stack。 |
 | `EmueraConsole.DebugCommand`、`UI/DebugDialog.cs` | watch 对当前表达式求值；debug command 会 clone/restore 控制状态，并拒绝 flow、wait、partial 和不安全指令。 | 独立 debug channel、一致 stop token 与参考安全 console 子集。 |
+
+## 2026-09-11 原版基准升级
+
+原版语义基准从 `26a35dc9334bb67590b96f7b8efbefbf199e391e` 升级到
+`7b69ebd27378c03c32b6477b74901bfc3d33223c`（upstream/master，2026-08-13）。
+参考仓库已将 upstream 合并到现有 master，保留 reference CLI/headless 接入。合并提交为
+`6e82d12a6ee65c03a9082a424280bffbfd15878b`，同步 CLI 身份后的 wrapper 提交为
+`c94bf1de2c4ecc0f876a913f0c8ec1035d3f06b4`。运行时须同时记录语义 SHA 和实际 wrapper checkout SHA。蛇版基准保持不变。
+
+此次升级确定新的兼容目标，不表示 RustyEra 已实现或验证以下上游增量：
+
+| 上游提交 | 新参考行为 | RustyEra 待跟进项 |
+| --- | --- | --- |
+| `72a1db2f` | `.als` 重复别名保留首次定义，继续读取后续行；重复数字索引警告保留。 | 原版 CSV 路径仍在重复别名处报错并中止；需同步加载及诊断语义，不套用蛇版的空白处理规则。 |
+| `7b69ebd2` | `CHKDATA` 在成功和版本不兼容时将存档内版本写入 `RESULT:1`，其他正常返回的错误路径写入 0。 | runtime 当前只更新描述；需补充版本副作用，覆盖文本/二进制存档与失败路径，不扩展到 `CHKCHARADATA`。 |
+| `250d6635` | 所选编码无法往返还原字符时尝试 CP932，以其编码宽度参与传统字符串计数。 | 需同步传统长度、截取、查找及编译期常量求值；专项核对 UTF-16 代理对与编码映射。UTF-8 输入和可移植 FORM 显示列宽约定保持不变。 |
+
+旧批次实施记录、原始捕获、fixture 中的 `referenceCommit`、历史基线采集器及其
+SHA 断言仍属于旧基准证据，不得仅替换 SHA 就宣称新基准通过。使用固定旧 SHA 的
+历史测试入口前，应显式选择对应旧 checkout；迁移到新 oracle 时需核对入口约束并重新
+取得受影响行为的证据。既有构建产物也不能因文档更新而视作新基准产物。
+本次只完成上游合并、身份与文档同步；未运行产品构建、oracle 或 Rust 差分测试。
 
 ## 有意的架构差异
 

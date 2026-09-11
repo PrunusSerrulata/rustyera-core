@@ -1,5 +1,8 @@
 # 蛇版 Emuera 兼容基线迁移：RustyEra 功能分类与实施方案
 
+> 2026-09-11：当前原版语义基准已升级为 `7b69ebd27378c03c32b6477b74901bfc3d33223c`。
+> 本文保留历史审计的旧 SHA 与结论；新基准增量及待跟进项见[参考映射](../runtime-reference-mapping.zh-CN.md#2026-09-11-原版基准升级)。
+
 > 调研日期：2026-08-26\
 > 性质：源码与游戏资源的只读静态审计；不是运行通过或行为等价证明\
 > 前置事实报告：[蛇版兼容性详查](SNAKE_EMUERA_TW_RUSTYERA_COMPATIBILITY_RESEARCH.md)\

@@ -158,7 +158,7 @@ WinForms/GDI 的实现细节引入 runtime。
   并在最终交付中按参考仓库另设清单报告。
   不得只用“修复了 reference CLI”概括参考目录改动。
 - 不要更新参考实现版本或 commit，除非用户明确要求。兼容基准固定为项目文档中
-  记录的 commit：原版为 `26a35dc9334bb67590b96f7b8efbefbf199e391e`，蛇版为
+  记录的 commit：原版为 `7b69ebd27378c03c32b6477b74901bfc3d33223c`，蛇版为
   `fc4fb21416768c17256d0e82f997e5f99c9bba91`；wrapper 当前 commit 与语义基准分别记录。
 
 ## 实现规范
