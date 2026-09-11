@@ -54,6 +54,7 @@ core SHA、库/bundle 路径及后续发布绑定变更，须在对应实施批�
 | [原版 upstream A](#upstream-a) | 别名与普通存档版本检查 | 已完成 | 2026-09-11 / Codex | 原版 9、蛇版 5 固定差分通过；B/C 独立推进 |
 | [蛇版 upstream A](#snake-upstream-a) | 复用 UTF-16 字符串与 CHKDATA 版本检查 | 已完成 | 2026-09-11 / Codex | 32 个双参考观察验收；8 个孤立代理项差异保留，客户端绑定属于 D |
 | [蛇版 upstream B](#snake-upstream-b) | 整数 RAND 钳制与会话警告 | 已完成 | 2026-09-11 / Codex | 6 个双参考观察验收；快照 21，客户端绑定属于 D |
+| [蛇版 upstream C](#snake-upstream-c) | 预设 ERD 名表与 ITEM 价格 | 已完成 | 2026-09-11 / Codex | 首次全量 1731 通过；13 个双参考观察验收，1 个 ICU72/NLS 差异保留；客户端绑定属于 D |
 
 <a id="batch-0"></a>
 
@@ -2015,6 +2016,57 @@ verdict、源码摘要、探针摘要及完整命令索引；收集时累计约 
 探针 SHA256 `7e49ca31321764355bbb9ff40fdf2a798f6065f26c77d6b24f261cdd0b4c7ec3`，
 捕获基于 `841a47e` 加最终产品内容，提交仅改变 Git 身份，不据此重建。本批范围完成；
 C/D 和完整蛇版 TW 可玩性不属于本批验收。未推送或更改发布版本。
+
+<a id="snake-upstream-c"></a>
+
+## 蛇版 Skiav13 C：预设 ERD 扩展
+
+2026-09-11 完成，产品提交 `b77d731`。计划入口：[Skiav13 跟进](SNAKE_EMUERA_MIGRATION_PLAN.md#snake-upstream-5717045)。
+
+### 实际改动与契约
+
+44 个预设 ERD stem 合并到已有 29 个名表槽位，位置在 CSV/ALS 加载后、反查与角色模板
+生成前。复用现有 ERD 摄取、名表、GETNUM、价格和编译缓存；CSV 正名及显式零价格优先，
+跨槽正名冲突整行跳过，后续 ERD 不能覆盖首次有效价格。UseERD 与 snake policy 15
+共同控制入口；原版 policy 3 不启用。普通用户 ERD 保持既有行为，无来源探针持久字段。
+
+VM 固定 .NET 8／ICU72 OrdinalCasing 与映射表移到公共兼容层共用，既有相等判断不变；
+路径一次生成固定 Windows 反斜线排序键。snake semantic/policy 14→15 使旧编译缓存失效；
+VM 快照格式保持 B 的 21，无新增公共 service、协议或发布版本变化。
+
+### 审查与验收
+
+唯一重构审查在首条测试前完成，要求的 Windows 路径分隔符排序和独立 policy 15
+边界回归已落实。静态格式、check、clippy、兼容层/CSV 最小测试通过；缓存测试先修正
+直接调用的序号，再绑定配置规范化后实际项目身份，冷加载、真实导出与无源码暖加载定向
+复验通过，产品缓存逻辑未因此更改。首次工作区全量 **1731 通过、0 失败、0 忽略**，
+未重复全量；独立 probe 构建、最小回归和比较器测试通过。
+
+13 个观察逐例按 Rust 捕获、adapter、参考执行、结构化验收推进：原版 6、蛇版 7。
+12 个 matched；最后一个蛇版 Unicode 路径用例保留 raw failed capture，离线比较为
+`different`，作为以下明确 provider 差异验收。验收器最小复验通过，未重跑引擎或构建。
+
+### 实际差异与证据
+
+固定 ICU72 对 Deseret U+10428 大写折叠为 U+10400，先于 U+10401；本次 Wine NLS
+不呈现相同排序。Rust `RESULTS:11/RESULT:12/RESULT:13` 为 `deseret_first/11/-1`，
+参考为 `deseret_later/-1/11`；TFLAG 冲突警告的胜者、被跳过路径及旧新名称相应互换。
+其余 6 个 watch、BMP 大小写与目录分隔符排序、终态和诊断数量严格验证。离线验收绑定
+实际命令 `DOTNET_SYSTEM_GLOBALIZATION_USENLS=1`、原始捕获路径及 Rust 输入，拒绝
+额外差异，不将原始失败改写为通过。统一跨平台 casing 保留，不宣称与所有 NLS 实现等价。
+.NET 的 [Ordinal 分流](https://github.com/dotnet/runtime/blob/v8.0.0/src/libraries/System.Private.CoreLib/src/System/Globalization/Ordinal.cs)
+及 [ICU 比较](https://github.com/dotnet/runtime/blob/v8.0.0/src/libraries/System.Private.CoreLib/src/System/Globalization/OrdinalCasing.Icu.cs)
+说明该 provider 边界；原版未启用预设 ERD，空结果不能证明其排序等价。
+
+参考基准原版 `7b69ebd2`／wrapper `c94bf1de`、蛇版 `5717045`／wrapper `851c40c9`，
+复用 A 已核验的参考程序和本任务独立 Wine prefix，seed 123456。fixture 位于
+`tools/runtime-tester/fixture-snake-upstream-c/`；严格验收入口为
+`tools/snake-compatibility-oracle/validate_preset_erd_observations.py`。
+`.audit/snake-upstream-5717045-20260911/c/final-evidence.json` 保存全部命令、源码摘要、
+13 份验收及首次全量统计；收集时扣除用户暂停约 27 分钟，未超 60 分钟。
+探针 SHA256 `23aa0ad91eba70bcfe22bfdc35eed5e2a8fe709c6ee9b15bbfa23d01e82e6141`；
+捕获基于 `d167ee5` 加最终产品输入，提交不改变产物内容，不因此重建。
+本批无未完成必需项；D 客户端绑定另行验收，未开展来源探针、Float、额外平台或自主游玩。
 
 <a id="batch-7"></a>
 
