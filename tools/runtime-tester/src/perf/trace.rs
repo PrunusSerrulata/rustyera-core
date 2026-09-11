@@ -111,7 +111,12 @@ pub(super) enum TraceAction {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "result", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    content = "result",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub(super) enum TraceResult {
     ServiceResponse(ServiceResult),
     StorageResponse(StorageResult),
@@ -178,7 +183,10 @@ fn validate_protocol_results(trace: &PerfTrace) -> AuditResult<()> {
         }
         let actual = canonical_digest(&value)?;
         if actual != *result_ref {
-            return Err(format!("protocol result digest mismatch: expected={result_ref} actual={actual}").into());
+            return Err(format!(
+                "protocol result digest mismatch: expected={result_ref} actual={actual}"
+            )
+            .into());
         }
     }
     for step in &trace.steps {
@@ -187,10 +195,9 @@ fn validate_protocol_results(trace: &PerfTrace) -> AuditResult<()> {
             TraceAction::StorageResponse { result_ref, .. } => (result_ref, "storage_response"),
             _ => continue,
         };
-        let result = trace
-            .protocol_results
-            .get(result_ref)
-            .ok_or_else(|| format!("trace action references missing protocol result {result_ref}"))?;
+        let result = trace.protocol_results.get(result_ref).ok_or_else(|| {
+            format!("trace action references missing protocol result {result_ref}")
+        })?;
         let actual_kind = match result {
             TraceResult::ServiceResponse(_) => "service_response",
             TraceResult::StorageResponse(_) => "storage_response",
@@ -223,19 +230,30 @@ fn validate_snake_client(client: &TraceClient) -> AuditResult<()> {
         || !client.capabilities.column_cells
         || !client.capabilities.separators
     {
-        return Err("snake trace requires keyboard, column-cell, and separator capabilities".into());
+        return Err(
+            "snake trace requires keyboard, column-cell, and separator capabilities".into(),
+        );
     }
     for name in [INPUT_DEVICE_LATCH_CAPABILITY, INPUT_DEVICE_PUMP_CAPABILITY] {
         if !client.capabilities.environment.iter().any(|capability| {
             capability.name == name
-                && capability.versions == era_protocol::VersionRange::exact(INPUT_ENVIRONMENT_VERSION)
+                && capability.versions
+                    == era_protocol::VersionRange::exact(INPUT_ENVIRONMENT_VERSION)
         }) {
             return Err(format!("snake trace is missing environment capability {name}").into());
         }
     }
     for (kind, operation, version) in [
-        (ServiceKind::InputState, GET_KEY_STATE_OPERATION, GET_KEY_STATE_OPERATION_VERSION),
-        (ServiceKind::InputState, DEVICE_PUMP_OPERATION, DEVICE_PUMP_OPERATION_VERSION),
+        (
+            ServiceKind::InputState,
+            GET_KEY_STATE_OPERATION,
+            GET_KEY_STATE_OPERATION_VERSION,
+        ),
+        (
+            ServiceKind::InputState,
+            DEVICE_PUMP_OPERATION,
+            DEVICE_PUMP_OPERATION_VERSION,
+        ),
         (ServiceKind::Sql, SQL_OPERATION, SQL_OPERATION_VERSION),
     ] {
         if !client.capabilities.services.iter().any(|capability| {
@@ -243,14 +261,19 @@ fn validate_snake_client(client: &TraceClient) -> AuditResult<()> {
                 && capability.operation == operation
                 && capability.versions == era_protocol::VersionRange::exact(version)
         }) {
-            return Err(format!("snake trace is missing service capability {kind:?}/{operation}").into());
+            return Err(
+                format!("snake trace is missing service capability {kind:?}/{operation}").into(),
+            );
         }
     }
     Ok(())
 }
 
 fn validate_final_action(steps: &[TraceStep]) -> AuditResult<()> {
-    if !matches!(steps.last().map(|step| &step.action), Some(TraceAction::None)) {
+    if !matches!(
+        steps.last().map(|step| &step.action),
+        Some(TraceAction::None)
+    ) {
         return Err("the final trace step must use action kind none".into());
     }
     Ok(())
@@ -339,9 +362,9 @@ fn require_lower_hex(name: &str, value: &str) -> AuditResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::num::NonZeroU32;
     use std::path::PathBuf;
-    use serde_json::json;
 
     #[test]
     fn canonical_digest_is_order_independent_and_lowercase() -> AuditResult<()> {
@@ -400,10 +423,13 @@ mod tests {
             action,
         };
         assert!(validate_final_action(&[step(TraceAction::None)]).is_ok());
-        assert!(validate_final_action(&[step(TraceAction::Input {
-            intent: InputIntent::Continue,
-            message_skip: false,
-        })]).is_err());
+        assert!(
+            validate_final_action(&[step(TraceAction::Input {
+                intent: InputIntent::Continue,
+                message_skip: false,
+            })])
+            .is_err()
+        );
     }
 
     #[test]

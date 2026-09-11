@@ -17,9 +17,8 @@ use era_runtime_protocol::{
     RUNTIME_PROTOCOL_VERSION, RuntimeFeature, RuntimeLogLevel, RuntimeMessage,
     SequenceAcknowledgement, ServiceCapability, ServiceKind, ServiceResponse, ServiceResult,
     ShutdownRequest, StartMode, StartRequest, StateExportKind, StateImportBegin, StateImportChunk,
-    StateImportCommit,
-    StorageCapabilities, StorageNamespace, StorageOperation, StorageResponse, StorageResult,
-    SubmittedFile, WaitChange,
+    StateImportCommit, StorageCapabilities, StorageNamespace, StorageOperation, StorageResponse,
+    StorageResult, SubmittedFile, WaitChange,
 };
 use erabasic_analyzer::{builtin_function_names, builtin_instruction_names};
 use erabasic_compiler::{ExecutionBinding, default_host_registry};
@@ -370,7 +369,9 @@ fn audit_minimal(keep_root_paths: bool) {
                     diagnostics_with_level(&report.diagnostics, RuntimeLogLevel::Warning).count();
                 println!(
                     "diagnostics={} errors={} warnings={}",
-                    report.diagnostics.len(), errors, warnings
+                    report.diagnostics.len(),
+                    errors,
+                    warnings
                 );
                 let mut by_code = std::collections::BTreeMap::<String, usize>::new();
                 let mut by_file = std::collections::BTreeMap::<String, usize>::new();
@@ -401,30 +402,30 @@ fn audit_minimal(keep_root_paths: bool) {
                     by_file.into_iter().take(20).collect::<Vec<_>>()
                 );
                 for diagnostic in report
-                        .diagnostics
-                        .iter()
-                        .filter(|diagnostic| {
-                            diagnostic_filter.as_ref().is_none_or(|filter| {
-                                diagnostic
-                                    .source
-                                    .as_ref()
-                                    .is_some_and(|source| source.relative_path.contains(filter))
-                                    || diagnostic.code.contains(filter)
-                            })
-                        })
-                        .take(200)
-                {
-                    println!(
-                            "{:?}\t{}\t{}:{}:{}\t{}",
-                            diagnostic.level,
-                            diagnostic.code,
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| {
+                        diagnostic_filter.as_ref().is_none_or(|filter| {
                             diagnostic
                                 .source
                                 .as_ref()
-                                .map_or("", |s| s.relative_path.as_str()),
-                            diagnostic.source.as_ref().and_then(|s| s.line).unwrap_or(0),
-                            diagnostic.source.as_ref().map_or(0, |s| s.byte_start),
-                            diagnostic.message.replace('\n', " ")
+                                .is_some_and(|source| source.relative_path.contains(filter))
+                                || diagnostic.code.contains(filter)
+                        })
+                    })
+                    .take(200)
+                {
+                    println!(
+                        "{:?}\t{}\t{}:{}:{}\t{}",
+                        diagnostic.level,
+                        diagnostic.code,
+                        diagnostic
+                            .source
+                            .as_ref()
+                            .map_or("", |s| s.relative_path.as_str()),
+                        diagnostic.source.as_ref().and_then(|s| s.line).unwrap_or(0),
+                        diagnostic.source.as_ref().map_or(0, |s| s.byte_start),
+                        diagnostic.message.replace('\n', " ")
                     );
                 }
             }
@@ -986,6 +987,7 @@ fn apply_presentation_delta(lines: &mut Vec<DisplayLine>, operations: &[Presenta
             | PresentationOperation::SetSettings { .. }
             | PresentationOperation::SetTooltip { .. }
             | PresentationOperation::SetResources { .. }
+            | PresentationOperation::ApplyResourceDelta { .. }
             | PresentationOperation::SetHtmlIsland { .. }
             | PresentationOperation::SetRedraw { .. }
             | PresentationOperation::SetButtonGeneration { .. } => {}

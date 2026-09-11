@@ -95,15 +95,13 @@ fn record_allocation(size: usize) {
     let signed = size_i64(size);
     ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
     ALLOCATED_BYTES.fetch_add(bytes, Ordering::Relaxed);
-    let net = NET_BYTES.fetch_add(signed, Ordering::Relaxed).saturating_add(signed);
+    let net = NET_BYTES
+        .fetch_add(signed, Ordering::Relaxed)
+        .saturating_add(signed);
     let mut peak = PEAK_NET_BYTES.load(Ordering::Relaxed);
     while net > peak {
-        match PEAK_NET_BYTES.compare_exchange_weak(
-            peak,
-            net,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        ) {
+        match PEAK_NET_BYTES.compare_exchange_weak(peak, net, Ordering::Relaxed, Ordering::Relaxed)
+        {
             Ok(_) => break,
             Err(actual) => peak = actual,
         }

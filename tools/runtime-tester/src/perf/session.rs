@@ -14,9 +14,9 @@ use era_runtime::{
     RuntimeDriveBudget, RuntimeDriveReport, RuntimeDriveState, RuntimeOptions, RuntimeSession,
 };
 use era_runtime_protocol::{
-    DisplayLine, DisplayRun, FrontendInput, InputWait, PresentationOperation, ResourceReplay,
-    RuntimeLimits, RuntimeMessage, RuntimePhase, SceneOperationV1, SceneStateV1, ServiceResponse,
-    StorageResponse, WaitChange, RUNTIME_PROTOCOL_VERSION,
+    DisplayLine, DisplayRun, FrontendInput, InputWait, PresentationOperation,
+    RUNTIME_PROTOCOL_VERSION, ResourceReplay, RuntimeLimits, RuntimeMessage, RuntimePhase,
+    SceneOperationV1, SceneStateV1, ServiceResponse, StorageResponse, WaitChange,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -215,9 +215,10 @@ impl PerfSession {
         if expected.phase.is_some_and(|phase| phase != self.phase) {
             return false;
         }
-        if expected.wait_kind.is_some_and(|kind| {
-            self.presentation.wait.as_ref().map(|wait| wait.kind) != Some(kind)
-        }) {
+        if expected
+            .wait_kind
+            .is_some_and(|kind| self.presentation.wait.as_ref().map(|wait| wait.kind) != Some(kind))
+        {
             return false;
         }
         if !expected.text_contains.is_empty() {
@@ -364,9 +365,8 @@ impl PerfSession {
         let (grant, stop) = self.debug_pause()?;
         let mut actual = BTreeMap::new();
         for (watch, expected_value) in expected {
-            let value = super::trace::normalize_checkpoint_json(
-                &self.read_watch(grant, stop, watch)?,
-            );
+            let value =
+                super::trace::normalize_checkpoint_json(&self.read_watch(grant, stop, watch)?);
             if &value != expected_value {
                 return Err(format!(
                     "variable {watch} mismatch: expected={expected_value} actual={value}"
@@ -400,7 +400,9 @@ impl PerfSession {
                 false
             }
             RuntimeMessage::PresentationSnapshot(snapshot) => {
-                self.presentation.lines.clone_from(&snapshot.history.logical_lines);
+                self.presentation
+                    .lines
+                    .clone_from(&snapshot.history.logical_lines);
                 self.presentation.wait.clone_from(&snapshot.input_wait);
                 self.presentation.resources.clone_from(&snapshot.resources);
                 self.presentation.scene.clone_from(&snapshot.scene);
@@ -472,7 +474,8 @@ impl PerfSession {
 
     fn presentation_text(&mut self) -> &str {
         if self.presentation.text.is_none() {
-            let text = self.presentation
+            let text = self
+                .presentation
                 .lines
                 .iter()
                 .map(|line| {
@@ -537,10 +540,8 @@ impl PerfSession {
             self.debug_sequence.saturating_add(1),
             None,
         )?;
-        self.runtime.submit_envelope(&encode_envelope(
-            &envelope,
-            self.wire_limits,
-        )?)?;
+        self.runtime
+            .submit_envelope(&encode_envelope(&envelope, self.wire_limits)?)?;
         self.debug_sequence = self.debug_sequence.saturating_add(1);
         for _ in 0..1_000 {
             self.runtime.drive(RuntimeDriveBudget {
@@ -612,9 +613,10 @@ impl PerfSession {
             descriptor.storage,
             VariableStorage::Global | VariableStorage::FunctionStatic
         ) {
-            return Err(
-                format!("watch {name} requires an unsupported frame or character selector").into(),
-            );
+            return Err(format!(
+                "watch {name} requires an unsupported frame or character selector"
+            )
+            .into());
         }
         let messages = self.debug_command(
             grant,
@@ -736,9 +738,7 @@ fn apply_scene_delta(scene: &mut SceneStateV1, delta: &era_runtime_protocol::Sce
 fn count_runs(run: &DisplayRun) -> usize {
     match run {
         DisplayRun::Button { runs, .. } => 1 + runs.iter().map(count_runs).sum::<usize>(),
-        DisplayRun::ColumnCell { content, .. } => {
-            1 + content.iter().map(count_runs).sum::<usize>()
-        }
+        DisplayRun::ColumnCell { content, .. } => 1 + content.iter().map(count_runs).sum::<usize>(),
         _ => 1,
     }
 }
@@ -756,7 +756,9 @@ mod tests {
             stop_message_skip: true,
             system_input: false,
             mouse_input: true,
-            default_value: Some(era_runtime_protocol::ProtocolValue::String("default".into())),
+            default_value: Some(era_runtime_protocol::ProtocolValue::String(
+                "default".into(),
+            )),
             deadline_ns: Some(10_000),
             display_time: true,
             timeout_message: Some("timeout".into()),
@@ -770,7 +772,10 @@ mod tests {
     fn drive_state_names_are_explicit_and_stable() {
         assert_eq!(drive_state_name(RuntimeDriveState::Idle), "idle");
         assert_eq!(drive_state_name(RuntimeDriveState::MoreWork), "more_work");
-        assert_eq!(drive_state_name(RuntimeDriveState::OutputReady), "output_ready");
+        assert_eq!(
+            drive_state_name(RuntimeDriveState::OutputReady),
+            "output_ready"
+        );
         assert_eq!(drive_state_name(RuntimeDriveState::Stopped), "stopped");
         assert_eq!(drive_state_name(RuntimeDriveState::Faulted), "faulted");
     }
@@ -786,10 +791,7 @@ mod tests {
         wait.deadline_ns = Some(50_000);
         wait.submission_token = era_runtime_protocol::InteractionToken { epoch: 9, id: 10 };
         wait.countdown_remaining_ms = Some(1);
-        assert_eq!(
-            session.normalized_state(&[], &BTreeMap::new())?,
-            baseline
-        );
+        assert_eq!(session.normalized_state(&[], &BTreeMap::new())?, baseline);
 
         session
             .presentation
@@ -797,10 +799,7 @@ mod tests {
             .as_mut()
             .expect("sample wait")
             .display_time = false;
-        assert_ne!(
-            session.normalized_state(&[], &BTreeMap::new())?,
-            baseline
-        );
+        assert_ne!(session.normalized_state(&[], &BTreeMap::new())?, baseline);
         Ok(())
     }
 

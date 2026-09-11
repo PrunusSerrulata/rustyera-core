@@ -52,7 +52,12 @@ pub(super) fn prepare(
         } else {
             let source = super::super::read_submitted_text(&path, category)?;
             let bytes = source.as_bytes();
-            update_record_header(&mut project_digest, relative_path, category, bytes.len() as u64)?;
+            update_record_header(
+                &mut project_digest,
+                relative_path,
+                category,
+                bytes.len() as u64,
+            )?;
             project_digest.update(bytes);
             let content_hash = blake3::hash(bytes);
             let byte_length = bytes.len() as u64;

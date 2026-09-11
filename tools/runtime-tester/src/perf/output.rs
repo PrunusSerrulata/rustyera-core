@@ -19,7 +19,10 @@ impl JsonlSink {
     pub(super) fn new(path: Option<&Path>) -> AuditResult<Self> {
         let writer: Box<dyn Write> = match path {
             Some(path) => {
-                if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+                if let Some(parent) = path
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                {
                     fs::create_dir_all(parent)?;
                 }
                 Box::new(BufWriter::new(fs::File::create(path)?))

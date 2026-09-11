@@ -15,8 +15,8 @@ use std::time::Instant;
 use era_protocol::{VersionRange, WireLimits};
 use era_runtime::{ProjectProgressReporter, RuntimeDriveState};
 use era_runtime_protocol::{
-    ClientHello, ConfigurationClientProfile, RuntimeLogLevel, RuntimeMessage,
-    StartMode, StartRequest, RUNTIME_PROTOCOL_VERSION,
+    ClientHello, ConfigurationClientProfile, RUNTIME_PROTOCOL_VERSION, RuntimeLogLevel,
+    RuntimeMessage, StartMode, StartRequest,
 };
 use erabasic_compat::CompatibilityProfileId;
 use serde::Serialize;
@@ -32,8 +32,7 @@ use trace::{PerfTrace, TraceStep};
 pub(super) type AuditResult<T> = Result<T, Box<dyn Error>>;
 pub(super) const OUTPUT_SCHEMA_VERSION: u32 = 2;
 pub(super) const TRACE_SCHEMA_VERSION: u32 = 2;
-pub(super) const SNAKE_PROFILE: CompatibilityProfileId =
-    CompatibilityProfileId::EmueraSkiaSnake;
+pub(super) const SNAKE_PROFILE: CompatibilityProfileId = CompatibilityProfileId::EmueraSkiaSnake;
 const MAX_ITERATIONS: u32 = 100;
 const DEFAULT_MAX_PUMPS: u64 = 200_000;
 const CALIBRATION_SAMPLES: u32 = 10_000;
@@ -67,18 +66,22 @@ struct PhaseTotals {
 
 impl PhaseTotals {
     fn observe(&mut self, observation: &PumpObservation) {
-        self.drive_elapsed_ns = self
-            .drive_elapsed_ns
-            .saturating_add(observation.elapsed_ns);
+        self.drive_elapsed_ns = self.drive_elapsed_ns.saturating_add(observation.elapsed_ns);
         self.vm_instructions = self
             .vm_instructions
             .saturating_add(observation.report.vm_instructions);
         self.runtime_transitions = self
             .runtime_transitions
             .saturating_add(u64::from(observation.report.runtime_transitions));
-        self.envelope_count = self.envelope_count.saturating_add(observation.envelope_count);
-        self.envelope_bytes = self.envelope_bytes.saturating_add(observation.envelope_bytes);
-        self.snapshot_count = self.snapshot_count.saturating_add(observation.snapshot_count);
+        self.envelope_count = self
+            .envelope_count
+            .saturating_add(observation.envelope_count);
+        self.envelope_bytes = self
+            .envelope_bytes
+            .saturating_add(observation.envelope_bytes);
+        self.snapshot_count = self
+            .snapshot_count
+            .saturating_add(observation.snapshot_count);
         self.delta_count = self.delta_count.saturating_add(observation.delta_count);
         self.observe_allocator(observation.allocations);
     }
@@ -94,9 +97,7 @@ impl PhaseTotals {
             aggregate.deallocated_bytes = aggregate
                 .deallocated_bytes
                 .saturating_add(window.deallocated_bytes);
-            aggregate.peak_net_bytes = aggregate
-                .peak_net_bytes
-                .max(window.peak_net_bytes);
+            aggregate.peak_net_bytes = aggregate.peak_net_bytes.max(window.peak_net_bytes);
             aggregate.net_bytes = aggregate.net_bytes.saturating_add(window.net_bytes);
         }
     }
@@ -138,7 +139,10 @@ pub(super) fn run_cli() -> AuditResult<()> {
                 json!({"scenario": cli.scenario, "error": error.to_string()}),
             );
             if let Err(write_error) = terminal {
-                return Err(format!("{error}; additionally failed to flush terminal event: {write_error}").into());
+                return Err(format!(
+                    "{error}; additionally failed to flush terminal event: {write_error}"
+                )
+                .into());
             }
             Err(error)
         }
@@ -178,12 +182,15 @@ fn run(cli: &Cli, sink: &mut JsonlSink) -> AuditResult<()> {
         })
     });
     let prepared = prepared?;
-    sink.emit("phase", json!({
-        "period": "loading", "stage": "input_preparation",
-        "wallElapsedNs": input_started.elapsed().as_nanos(),
-        "allocator": input_allocations, "files": prepared.input_count,
-        "sourceBytes": prepared.source_bytes, "resourceBytes": prepared.resource_bytes
-    }))?;
+    sink.emit(
+        "phase",
+        json!({
+            "period": "loading", "stage": "input_preparation",
+            "wallElapsedNs": input_started.elapsed().as_nanos(),
+            "allocator": input_allocations, "files": prepared.input_count,
+            "sourceBytes": prepared.source_bytes, "resourceBytes": prepared.resource_bytes
+        }),
+    )?;
     if prepared.digest != trace.project_digest {
         return Err(format!(
             "project digest mismatch: trace={} actual={}",
@@ -233,15 +240,15 @@ fn run_iteration(
     let started = Instant::now();
     let mut session = PerfSession::new();
     let scenario = cli.scenario.clone();
-    session.runtime.set_project_progress_reporter(Some(ProjectProgressReporter::new(
-        move |progress| {
+    session
+        .runtime
+        .set_project_progress_reporter(Some(ProjectProgressReporter::new(move |progress| {
             super::watchdog::publish_or_exit(json!({
                 "phase": {"projectStage": progress.stage}, "scenario": scenario,
                 "iteration": iteration, "projectProgress": progress,
                 "lastFullResponse": null
             }));
-        },
-    )));
+        })));
     session.send(RuntimeMessage::ClientHello(ClientHello {
         runtime_versions: VersionRange::exact(RUNTIME_PROTOCOL_VERSION),
         client_name: "runtime-perf-audit".into(),
@@ -251,25 +258,43 @@ fn run_iteration(
         capabilities: trace.client.capabilities.clone(),
         preferred_locales: vec!["ja".into()],
     }))?;
-    let mut drive = DriveContext { cli, iteration, sink, watchdog };
-    drive_until(&mut session, "handshake", DriveTarget::ServerHello, &mut drive)?;
+    let mut drive = DriveContext {
+        cli,
+        iteration,
+        sink,
+        watchdog,
+    };
+    drive_until(
+        &mut session,
+        "handshake",
+        DriveTarget::ServerHello,
+        &mut drive,
+    )?;
     for setup in &trace.setup_messages {
         session.send(setup.clone())?;
         drive_until(&mut session, "setup", DriveTarget::AnyOutput, &mut drive)?;
     }
     session.send(RuntimeMessage::ProjectManifest(prepared.manifest.clone()))?;
     let load_messages = drive_until(
-        &mut session, "project_load", DriveTarget::ProjectLoad, &mut drive,
+        &mut session,
+        "project_load",
+        DriveTarget::ProjectLoad,
+        &mut drive,
     )?;
     validate_load(&load_messages)?;
     session.send(RuntimeMessage::Start(StartRequest {
-        mode: StartMode::NewGame { seed: Some(trace.seed) },
+        mode: StartMode::NewGame {
+            seed: Some(trace.seed),
+        },
     }))?;
 
     for (step_index, step) in trace.steps.iter().enumerate() {
         let stage = format!("step:{step_index}:{}", step.id);
         let messages = drive_until(
-            &mut session, &stage, DriveTarget::Checkpoint(step), &mut drive,
+            &mut session,
+            &stage,
+            DriveTarget::Checkpoint(step),
+            &mut drive,
         )?;
         let variables = session.validate_variables(&step.expect.variables)?;
         let normalized = session.normalized_state(&messages, &variables)?;
@@ -281,17 +306,23 @@ fn run_iteration(
             )
             .into());
         }
-        drive.sink.emit("checkpoint", json!({
-            "iteration": iteration, "step": step_index, "id": step.id,
-            "checkpoint": step.checkpoint, "stateSignature": signature,
-            "normalizedState": normalized, "presentation": session.metrics(),
-            "rssBytes": rss_bytes()
-        }))?;
-        drive.watchdog.publish(json!({
-            "phase": "checkpoint", "scenario": cli.scenario, "iteration": iteration,
-            "completed": step_index + 1, "total": trace.steps.len(),
-            "checkpoint": step.checkpoint, "normalizedState": normalized
-        }), true)?;
+        drive.sink.emit(
+            "checkpoint",
+            json!({
+                "iteration": iteration, "step": step_index, "id": step.id,
+                "checkpoint": step.checkpoint, "stateSignature": signature,
+                "normalizedState": normalized, "presentation": session.metrics(),
+                "rssBytes": rss_bytes()
+            }),
+        )?;
+        drive.watchdog.publish(
+            json!({
+                "phase": "checkpoint", "scenario": cli.scenario, "iteration": iteration,
+                "completed": step_index + 1, "total": trace.steps.len(),
+                "checkpoint": step.checkpoint, "normalizedState": normalized
+            }),
+            true,
+        )?;
         if should_pause(cli, iteration, &step.checkpoint) {
             pause_for_profiler(cli, iteration, step, drive.sink)?;
         }
@@ -302,11 +333,14 @@ fn run_iteration(
             step_index as u64,
         )?;
     }
-    drive.sink.emit("iterationEnd", json!({
-        "iteration": iteration, "elapsedNs": started.elapsed().as_nanos(),
-        "phase": session.phase(), "presentation": session.metrics(),
-        "rssBytes": rss_bytes(), "status": "passed"
-    }))?;
+    drive.sink.emit(
+        "iterationEnd",
+        json!({
+            "iteration": iteration, "elapsedNs": started.elapsed().as_nanos(),
+            "phase": session.phase(), "presentation": session.metrics(),
+            "rssBytes": rss_bytes(), "status": "passed"
+        }),
+    )?;
     Ok(())
 }
 
@@ -322,7 +356,14 @@ fn drive_until(
     for pump in 0..context.cli.maximum_pumps {
         let observation = session.pump(context.cli.allocator)?;
         totals.observe(&observation);
-        emit_pump(context.sink, context.iteration, stage, pump, session, &observation)?;
+        emit_pump(
+            context.sink,
+            context.iteration,
+            stage,
+            pump,
+            session,
+            &observation,
+        )?;
         messages.extend(observation.messages);
         let reached = target_reached(session, &messages, &target);
         context.watchdog.publish_with(reached, || {
@@ -334,18 +375,22 @@ fn drive_until(
             }))
         })?;
         if reached {
-            context.sink.emit("phase", json!({
-                "iteration": context.iteration, "stage": stage, "totals": totals,
-                "period": stage_period(stage),
-                "wallElapsedNs": started.elapsed().as_nanos(),
-                "phase": session.phase(), "rssBytes": rss_bytes()
-            }))?;
+            context.sink.emit(
+                "phase",
+                json!({
+                    "iteration": context.iteration, "stage": stage, "totals": totals,
+                    "period": stage_period(stage),
+                    "wallElapsedNs": started.elapsed().as_nanos(),
+                    "phase": session.phase(), "rssBytes": rss_bytes()
+                }),
+            )?;
             return Ok(messages);
         }
         if is_terminal_drift(observation.report.state) {
             return Err(format!(
                 "{stage} drifted before its target: driveState={} phase={:?}",
-                drive_state_name(observation.report.state), session.phase()
+                drive_state_name(observation.report.state),
+                session.phase()
             )
             .into());
         }
@@ -361,10 +406,18 @@ fn stage_period(stage: &str) -> &'static str {
     }
 }
 
-fn target_reached(session: &mut PerfSession, messages: &[RuntimeMessage], target: &DriveTarget<'_>) -> bool {
+fn target_reached(
+    session: &mut PerfSession,
+    messages: &[RuntimeMessage],
+    target: &DriveTarget<'_>,
+) -> bool {
     match target {
-        DriveTarget::ServerHello => session.has_session()
-            && messages.iter().any(|message| matches!(message, RuntimeMessage::ServerHello(_))),
+        DriveTarget::ServerHello => {
+            session.has_session()
+                && messages
+                    .iter()
+                    .any(|message| matches!(message, RuntimeMessage::ServerHello(_)))
+        }
         DriveTarget::AnyOutput => !messages.is_empty(),
         DriveTarget::ProjectLoad => messages
             .iter()
@@ -374,7 +427,10 @@ fn target_reached(session: &mut PerfSession, messages: &[RuntimeMessage], target
 }
 
 const fn is_terminal_drift(state: RuntimeDriveState) -> bool {
-    matches!(state, RuntimeDriveState::Idle | RuntimeDriveState::Stopped | RuntimeDriveState::Faulted)
+    matches!(
+        state,
+        RuntimeDriveState::Idle | RuntimeDriveState::Stopped | RuntimeDriveState::Faulted
+    )
 }
 
 fn emit_pump(
@@ -401,30 +457,50 @@ fn emit_pump(
 }
 
 fn validate_load(messages: &[RuntimeMessage]) -> AuditResult<()> {
-    let report = messages.iter().find_map(|message| match message {
-        RuntimeMessage::ProjectLoadReport(report) => Some(report),
-        _ => None,
-    }).ok_or("project load report is absent")?;
+    let report = messages
+        .iter()
+        .find_map(|message| match message {
+            RuntimeMessage::ProjectLoadReport(report) => Some(report),
+            _ => None,
+        })
+        .ok_or("project load report is absent")?;
     if !report.success
         || report.compatibility.as_ref()
-            != Some(&erabasic_compat::CompatibilityIdentity::for_profile(SNAKE_PROFILE))
-        || report.diagnostics.iter().any(|diagnostic| diagnostic.level == RuntimeLogLevel::Error)
+            != Some(&erabasic_compat::CompatibilityIdentity::for_profile(
+                SNAKE_PROFILE,
+            ))
+        || report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.level == RuntimeLogLevel::Error)
     {
-        return Err(format!("snake project load failed or resolved wrong identity: {report:?}").into());
+        return Err(
+            format!("snake project load failed or resolved wrong identity: {report:?}").into(),
+        );
     }
     Ok(())
 }
 
 fn should_pause(cli: &Cli, iteration: u32, checkpoint: &str) -> bool {
     cli.pause_at.as_deref() == Some(checkpoint)
-        && cli.pause_iteration.is_none_or(|selected| selected == iteration)
+        && cli
+            .pause_iteration
+            .is_none_or(|selected| selected == iteration)
 }
 
-fn pause_for_profiler(cli: &Cli, iteration: u32, step: &TraceStep, sink: &mut JsonlSink) -> AuditResult<()> {
-    sink.emit("profilerPause", json!({
-        "iteration": iteration, "scenario": cli.scenario, "checkpoint": step.checkpoint,
-        "pid": std::process::id(), "resume": "write one line to stdin"
-    }))?;
+fn pause_for_profiler(
+    cli: &Cli,
+    iteration: u32,
+    step: &TraceStep,
+    sink: &mut JsonlSink,
+) -> AuditResult<()> {
+    sink.emit(
+        "profilerPause",
+        json!({
+            "iteration": iteration, "scenario": cli.scenario, "checkpoint": step.checkpoint,
+            "pid": std::process::id(), "resume": "write one line to stdin"
+        }),
+    )?;
     sink.flush()?;
     super::watchdog::publish(json!({
         "phase": "profiler_pause", "scenario": cli.scenario, "iteration": iteration,
@@ -473,7 +549,9 @@ fn parse_cli(arguments: impl IntoIterator<Item = String>) -> AuditResult<Cli> {
         ) {
             return Err(format!("unknown perf-run option {option}").into());
         }
-        let value = arguments.next().ok_or_else(|| format!("{option} requires a value"))?;
+        let value = arguments
+            .next()
+            .ok_or_else(|| format!("{option} requires a value"))?;
         if value.starts_with("--") {
             return Err(format!("{option} requires a value, got option {value}").into());
         }
@@ -487,11 +565,13 @@ fn parse_cli(arguments: impl IntoIterator<Item = String>) -> AuditResult<Cli> {
             "--pause-at" => pause_at = Some(value),
             "--pause-iteration" => pause_iteration = Some(value.parse()?),
             "--maximum-pumps" => maximum_pumps = value.parse()?,
-            "--allocator" => allocator = Some(match value.as_str() {
-                "counting" => MeasurementMode::Counting,
-                "off" => MeasurementMode::Off,
-                _ => return Err("--allocator must be counting or off".into()),
-            }),
+            "--allocator" => {
+                allocator = Some(match value.as_str() {
+                    "counting" => MeasurementMode::Counting,
+                    "off" => MeasurementMode::Off,
+                    _ => return Err("--allocator must be counting or off".into()),
+                })
+            }
             _ => unreachable!("known options were checked before consuming the value"),
         }
     }
@@ -504,9 +584,12 @@ fn parse_cli(arguments: impl IntoIterator<Item = String>) -> AuditResult<Cli> {
         return Err(format!("--iterations must not exceed {MAX_ITERATIONS}").into());
     }
     let scenario = scenario.ok_or("perf-run requires --scenario")?;
-    if scenario.is_empty() || scenario.len() > 128 || !scenario.bytes().all(|byte| {
-        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
-    }) {
+    if scenario.is_empty()
+        || scenario.len() > 128
+        || !scenario
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
         return Err("--scenario must be a non-empty ASCII identifier".into());
     }
     if maximum_pumps == 0 {
@@ -523,8 +606,14 @@ fn parse_cli(arguments: impl IntoIterator<Item = String>) -> AuditResult<Cli> {
     }
     Ok(Cli {
         project: project.ok_or("perf-run requires --project with an isolated project copy")?,
-        profile, scenario, trace: trace.ok_or("perf-run requires --trace")?, iterations,
-        output, pause_at, pause_iteration, maximum_pumps,
+        profile,
+        scenario,
+        trace: trace.ok_or("perf-run requires --trace")?,
+        iterations,
+        output,
+        pause_at,
+        pause_iteration,
+        maximum_pumps,
         allocator: allocator.ok_or("perf-run requires --allocator counting|off")?,
     })
 }
@@ -546,8 +635,13 @@ fn wire_limits_json(limits: WireLimits) -> serde_json::Value {
 fn rss_bytes() -> Option<u64> {
     let output = std::process::Command::new("/bin/ps")
         .args(["-o", "rss=", "-p", &std::process::id().to_string()])
-        .output().ok()?;
-    String::from_utf8(output.stdout).ok()?.trim().parse::<u64>().ok()
+        .output()
+        .ok()?;
+    String::from_utf8(output.stdout)
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
         .map(|kib| kib.saturating_mul(1024))
 }
 
@@ -561,8 +655,20 @@ mod tests {
 
     #[test]
     fn cli_requires_explicit_snake_identity_and_allocator() -> AuditResult<()> {
-        let valid = ["--project", "copy", "--profile", "emuera.skia.snake", "--scenario",
-            "fixture", "--trace", "trace.json", "--iterations", "1", "--allocator", "off"];
+        let valid = [
+            "--project",
+            "copy",
+            "--profile",
+            "emuera.skia.snake",
+            "--scenario",
+            "fixture",
+            "--trace",
+            "trace.json",
+            "--iterations",
+            "1",
+            "--allocator",
+            "off",
+        ];
         assert_eq!(parse(&valid)?.allocator, MeasurementMode::Off);
         let mut wrong = valid;
         wrong[3] = "emuera.em";
@@ -573,9 +679,22 @@ mod tests {
 
     #[test]
     fn pause_is_bounded_to_one_iteration() {
-        let base = ["--project", "copy", "--profile", "emuera.skia.snake", "--scenario",
-            "fixture", "--trace", "trace.json", "--iterations", "2", "--allocator", "off",
-            "--pause-at", "ready"];
+        let base = [
+            "--project",
+            "copy",
+            "--profile",
+            "emuera.skia.snake",
+            "--scenario",
+            "fixture",
+            "--trace",
+            "trace.json",
+            "--iterations",
+            "2",
+            "--allocator",
+            "off",
+            "--pause-at",
+            "ready",
+        ];
         assert!(parse(&base).is_err());
         let mut selected = base.to_vec();
         selected.extend(["--pause-iteration", "1"]);
@@ -584,9 +703,22 @@ mod tests {
 
     #[test]
     fn cli_rejects_duplicate_options_and_option_tokens_as_values() {
-        let duplicate = ["--project", "copy", "--project", "other", "--profile",
-            "emuera.skia.snake", "--scenario", "fixture", "--trace", "trace.json",
-            "--iterations", "1", "--allocator", "off"];
+        let duplicate = [
+            "--project",
+            "copy",
+            "--project",
+            "other",
+            "--profile",
+            "emuera.skia.snake",
+            "--scenario",
+            "fixture",
+            "--trace",
+            "trace.json",
+            "--iterations",
+            "1",
+            "--allocator",
+            "off",
+        ];
         assert!(parse(&duplicate).is_err());
         let missing = ["--project", "--profile", "emuera.skia.snake"];
         assert!(parse(&missing).is_err());
